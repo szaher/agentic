@@ -1,0 +1,334 @@
+---
+title: "Framework Comparison and Selection"
+quiz:
+  - question: "When is using a raw API (Anthropic or OpenAI) directly the best choice for building an agent?"
+    options:
+      - "When you need multi-agent orchestration with role-based delegation"
+      - "When you have a simple, single-agent task and want full control with zero abstraction overhead"
+      - "When you require built-in checkpointing and human-in-the-loop workflows"
+      - "When your team is large and needs opinionated structure to stay consistent"
+    correctIndex: 1
+  - question: "Which framework is the strongest choice when you need durable, long-running agent workflows with built-in checkpointing and conditional routing?"
+    options:
+      - "CrewAI"
+      - "OpenAI Agents SDK"
+      - "LangGraph"
+      - "Raw Anthropic SDK"
+    correctIndex: 2
+  - question: "What is the primary risk of choosing a high-level multi-agent framework like CrewAI for a task that only requires a single agent with two tools?"
+    options:
+      - "CrewAI cannot handle tool use at all"
+      - "You introduce unnecessary abstraction, dependencies, and debugging complexity for a problem that a simple agent loop solves in 30 lines"
+      - "CrewAI requires a paid license for single-agent use"
+      - "High-level frameworks always produce slower inference than raw APIs"
+    correctIndex: 1
+  - question: "A team needs to support both Claude and GPT models, requires graph-based workflows with state persistence, and plans to deploy to production with observability. Which framework best fits?"
+    options:
+      - "Raw OpenAI SDK, since it supports GPT natively"
+      - "Anthropic Claude SDK, since Claude is the best model for agents"
+      - "LangGraph, since it offers model-agnostic graphs, checkpointing, and LangSmith integration"
+      - "AutoGen, since it supports multi-model conversations"
+    correctIndex: 2
+---
+
+## Overview
+
+Over the past five lessons, you explored the agent framework landscape and built hands-on familiarity with the OpenAI Agents SDK, the Anthropic Claude SDK, LangGraph, CrewAI, and AutoGen. Each framework made different tradeoffs -- simplicity versus power, flexibility versus convention, single-agent focus versus multi-agent orchestration.
+
+This lesson puts them side by side. You will compare every framework across the dimensions that matter for real projects: features, learning curve, production readiness, model flexibility, community support, and lock-in risk. By the end, you will have a concrete decision framework for choosing the right tool for your next agent project.
+
+## The Decision Landscape
+
+Choosing a framework is not about finding the "best" one. It is about finding the best **fit** for your specific constraints: task complexity, team size, production requirements, and how much control you want over the agent's behavior.
+
+The frameworks we covered sit on a spectrum from low-level SDKs to high-level orchestrators. Here is how they relate:
+
+<MermaidDiagram chart={`graph LR
+    subgraph Low["Low-Level SDKs"]
+        RAW["Raw API Calls"]
+        ANTH["Anthropic SDK"]
+        OAI["OpenAI Agents SDK"]
+    end
+    subgraph Mid["Graph-Based Orchestration"]
+        LG["LangGraph"]
+    end
+    subgraph High["High-Level Multi-Agent"]
+        CREW["CrewAI"]
+        AUTO["AutoGen"]
+    end
+    RAW -->|"+ agent primitives"| ANTH
+    RAW -->|"+ agent primitives"| OAI
+    ANTH -->|"+ graph workflows"| LG
+    OAI -->|"+ graph workflows"| LG
+    LG -->|"+ role abstraction"| CREW
+    LG -->|"+ conversation patterns"| AUTO
+    style Low fill:#ebf8ff,stroke:#3182ce
+    style Mid fill:#fefcbf,stroke:#d69e2e
+    style High fill:#fed7d7,stroke:#e53e3e
+    style RAW fill:#bee3f8,stroke:#3182ce
+    style ANTH fill:#bee3f8,stroke:#3182ce
+    style OAI fill:#bee3f8,stroke:#3182ce
+    style LG fill:#fefcbf,stroke:#d69e2e
+    style CREW fill:#fed7d7,stroke:#e53e3e
+    style AUTO fill:#fed7d7,stroke:#e53e3e
+`} />
+
+Moving left to right, you gain more built-in structure but lose fine-grained control. Moving right to left, you gain full control but take on more implementation work. Neither direction is inherently better -- it depends on where your project sits.
+
+## Feature Comparison
+
+Let's start with a detailed comparison of what each framework provides out of the box.
+
+### Core Capabilities
+
+| Capability | Raw API | Anthropic SDK | OpenAI SDK | LangGraph | CrewAI | AutoGen |
+|---|---|---|---|---|---|---|
+| **Tool calling** | Manual | Built-in loop | Built-in | Built-in | Built-in | Built-in |
+| **Multi-step reasoning** | Manual loop | Agent loop | Agent loop | Graph nodes | Task pipeline | Conversation |
+| **Streaming** | Yes | Yes | Yes | Yes | Limited | Limited |
+| **Structured output** | Manual | JSON mode | JSON mode | Via nodes | Via tools | Via prompts |
+| **Memory/state** | Manual | Manual | Manual | Checkpointed state | Shared memory | Chat history |
+| **Human-in-the-loop** | Manual | Manual | Manual | Interrupt nodes | Delegation | Termination |
+| **Multi-agent** | Manual | Manual | Handoffs | Subgraphs | Crews/teams | GroupChat |
+
+The table reveals a clear pattern. Raw APIs give you everything but require you to build it yourself. SDKs add agent loops and tool management. LangGraph adds workflow structure and state. CrewAI and AutoGen add multi-agent coordination.
+
+### Production Readiness
+
+| Dimension | Raw API | Anthropic SDK | OpenAI SDK | LangGraph | CrewAI | AutoGen |
+|---|---|---|---|---|---|---|
+| **Error handling** | Full control | Built-in retries | Built-in retries | Retry policies | Basic | Basic |
+| **Observability** | Custom | Custom | OpenAI traces | LangSmith | Basic logging | Basic logging |
+| **Checkpointing** | Build it | Build it | Build it | Built-in | Not built-in | Not built-in |
+| **Rate limiting** | Custom | Custom | Custom | Custom | Custom | Custom |
+| **Testing** | Unit test | Unit test | Unit test | Graph testing | Task testing | Chat testing |
+| **Deployment** | Any platform | Any platform | Any platform | LangServe option | Any platform | Any platform |
+
+**Production readiness** is where LangGraph stands out. Its built-in checkpointing means a long-running workflow can crash and resume exactly where it left off -- a feature you would have to build from scratch with raw SDKs. LangSmith integration provides tracing and monitoring without custom instrumentation.
+
+### Learning Curve and Flexibility
+
+| Dimension | Raw API | Anthropic SDK | OpenAI SDK | LangGraph | CrewAI | AutoGen |
+|---|---|---|---|---|---|---|
+| **Learning curve** | Low | Low | Low | Medium-High | Medium | Medium |
+| **Lines to first agent** | ~30 | ~20 | ~15 | ~50 | ~25 | ~30 |
+| **Model flexibility** | Any model | Claude only | OpenAI only | Any model | Any model | Any model |
+| **Customization depth** | Unlimited | High | Moderate | High | Moderate | Moderate |
+| **Lock-in risk** | None | Model lock-in | Model lock-in | Ecosystem | Framework | Framework |
+| **Community size** | Massive | Growing | Large | Large | Medium | Medium |
+
+Notice the **lock-in risk** column carefully. The Anthropic and OpenAI SDKs lock you into a specific model provider -- if you later want to switch models, you rewrite your agent code. LangGraph locks you into the LangChain ecosystem but lets you swap models freely. CrewAI and AutoGen lock you into their abstractions but are model-agnostic.
+
+## When to Use Each Framework
+
+The comparison tables give you the data. Now let's turn that data into actionable guidance. The following decision tree captures the key branching points:
+
+<MermaidDiagram chart={`graph TD
+    START["What are you building?"] --> Q1{"Single agent or<br/>multi-agent?"}
+    Q1 -->|"Single agent"| Q2{"Need complex<br/>workflows?"}
+    Q1 -->|"Multi-agent"| Q5{"Coordination<br/>style?"}
+    Q2 -->|"No — simple loop"| Q3{"Model<br/>preference?"}
+    Q2 -->|"Yes — branching,<br/>loops, checkpoints"| LG_SINGLE["LangGraph"]
+    Q3 -->|"Claude"| ANTH["Anthropic SDK"]
+    Q3 -->|"GPT"| OAI["OpenAI Agents SDK"]
+    Q3 -->|"Multiple / flexible"| Q4{"Want zero<br/>dependencies?"}
+    Q4 -->|"Yes"| RAW["Raw API"]
+    Q4 -->|"No"| LG_FLEX["LangGraph"]
+    Q5 -->|"Sequential tasks<br/>with roles"| CREW["CrewAI"]
+    Q5 -->|"Conversation-based<br/>collaboration"| AUTO["AutoGen"]
+    Q5 -->|"Custom graph<br/>orchestration"| LG_MULTI["LangGraph<br/>Subgraphs"]
+    style START fill:#f5f0ff,stroke:#9f7aea
+    style Q1 fill:#ebf8ff,stroke:#3182ce
+    style Q2 fill:#ebf8ff,stroke:#3182ce
+    style Q3 fill:#ebf8ff,stroke:#3182ce
+    style Q4 fill:#ebf8ff,stroke:#3182ce
+    style Q5 fill:#ebf8ff,stroke:#3182ce
+    style ANTH fill:#c6f6d5,stroke:#48bb78
+    style OAI fill:#c6f6d5,stroke:#48bb78
+    style RAW fill:#c6f6d5,stroke:#48bb78
+    style LG_SINGLE fill:#fefcbf,stroke:#d69e2e
+    style LG_FLEX fill:#fefcbf,stroke:#d69e2e
+    style LG_MULTI fill:#fefcbf,stroke:#d69e2e
+    style CREW fill:#fed7d7,stroke:#e53e3e
+    style AUTO fill:#fed7d7,stroke:#e53e3e
+`} />
+
+Let's walk through each path in detail.
+
+### Raw API: Maximum Control, Zero Abstractions
+
+**Choose raw API calls when:**
+
+- You need a simple agent with one or two tools and a basic loop
+- You want **zero external dependencies** beyond the HTTP client
+- You need full control over every request, retry, and response
+- You are building a framework or library yourself
+- You want to understand exactly what happens at every step
+
+**Avoid when:** Your workflow has branching logic, multiple agents, or needs state persistence. You will end up rebuilding what frameworks provide for free.
+
+The raw API approach is also the best **learning tool**. Every framework ultimately wraps these same API calls. Understanding the raw loop from Module 3 makes every framework easier to learn.
+
+### Anthropic SDK: Claude-Native Power
+
+**Choose the Anthropic SDK when:**
+
+- You are committed to Claude as your model
+- You want **extended thinking** -- Claude's ability to reason before responding, giving you visibility into the model's chain of thought
+- You need the **agent loop** abstraction without heavier framework overhead
+- Your agent is single-purpose with clear tool boundaries
+- You value a clean, minimal API surface
+
+**Avoid when:** You need model flexibility (switching between Claude and GPT) or complex multi-agent workflows. The SDK is designed for Claude and does not abstract across providers.
+
+The Anthropic SDK's unique strength is extended thinking. No other framework exposes the model's internal reasoning process as a first-class feature. For tasks that require auditable decision-making -- compliance, medical reasoning, financial analysis -- this is a significant advantage.
+
+### OpenAI Agents SDK: The OpenAI Ecosystem
+
+**Choose the OpenAI Agents SDK when:**
+
+- You are working within the OpenAI ecosystem (GPT-4o, o3, etc.)
+- You want **handoffs** between specialized agents without building routing yourself
+- You need built-in **guardrails** for input/output validation
+- You want the fastest path from zero to a working agent
+- Your team already knows the OpenAI API
+
+**Avoid when:** You need to use non-OpenAI models or require deep workflow customization beyond the handoff pattern. The SDK is tightly coupled to OpenAI's model lineup.
+
+The handoff pattern is the OpenAI SDK's signature feature. Defining `handoffs=[triage_agent, specialist_agent]` gives you multi-agent routing in one line -- something that requires explicit graph construction in LangGraph or role definition in CrewAI.
+
+### LangGraph: Workflows as Graphs
+
+**Choose LangGraph when:**
+
+- Your agent has **complex control flow** -- conditional branches, loops, parallel execution
+- You need **checkpointing** so workflows survive crashes and restarts
+- You want **human-in-the-loop** approval at specific steps
+- You need to support **multiple model providers** within the same workflow
+- You want **LangSmith** observability for debugging and monitoring
+- You are building production workflows that must be reliable
+
+**Avoid when:** Your agent is a simple loop with no branching. LangGraph's graph abstraction adds conceptual overhead that is not justified for straightforward tasks. Also avoid if your team finds graph-based thinking unintuitive -- the learning curve is real.
+
+LangGraph occupies a unique position: it is the only framework in this comparison that treats **workflow topology** as a first-class concept. You define nodes, edges, and conditional routing explicitly. This makes complex workflows easier to reason about, test, and modify -- but it requires thinking in graphs rather than in sequential code.
+
+### CrewAI: Role-Based Teams
+
+**Choose CrewAI when:**
+
+- Your problem naturally decomposes into **distinct roles** -- researcher, writer, reviewer
+- You want to define agents by their **role, goal, and backstory** rather than by code
+- You need **sequential or hierarchical task pipelines** with delegation
+- Your team prefers a **declarative, high-level** approach over imperative code
+- You are prototyping a multi-agent system quickly
+
+**Avoid when:** You need fine-grained control over agent-to-agent communication, custom routing logic, or workflows that do not fit the role/task model. CrewAI's abstractions are opinionated -- if your problem does not map to crews and tasks, you will fight the framework.
+
+### AutoGen: Conversation-Driven Collaboration
+
+**Choose AutoGen when:**
+
+- Your agents need to **debate, critique, and refine** each other's output
+- You are building **research or analysis** pipelines where iterative conversation improves results
+- You want agents that interact through **natural language conversation** rather than structured handoffs
+- You are exploring multi-agent patterns in a **research or experimental** setting
+
+**Avoid when:** You need deterministic workflows, production reliability, or structured task pipelines. AutoGen's conversation-based approach can be unpredictable -- agents may take more or fewer turns than expected, and controlling termination requires careful prompt engineering.
+
+## Selection Criteria Checklist
+
+Beyond the decision tree, consider these five criteria when making your final choice:
+
+**1. Task Complexity**
+
+- Simple (single agent, few tools, linear flow) -- Raw API or provider SDK
+- Moderate (branching, state, retries) -- LangGraph
+- Complex (multiple agents, delegation, shared goals) -- CrewAI, AutoGen, or LangGraph subgraphs
+
+**2. Team Size and Experience**
+
+- Solo developer or small team -- provider SDK or CrewAI for speed
+- Large team needing consistency -- LangGraph for its explicit structure, or CrewAI for its opinionated patterns
+- Research team exploring -- AutoGen for its flexibility in conversation patterns
+
+**3. Production Requirements**
+
+- Prototype or demo -- any framework works; optimize for speed
+- Production with reliability needs -- LangGraph (checkpointing, observability) or raw API (full control)
+- Production with compliance needs -- Anthropic SDK (extended thinking for auditability) or raw API
+
+**4. Model Flexibility**
+
+- Single provider committed -- use that provider's SDK
+- Multi-provider or future-proofing -- LangGraph, CrewAI, or AutoGen (all model-agnostic)
+- Cost optimization across providers -- LangGraph or raw API (you control model selection per step)
+
+**5. Lock-in Tolerance**
+
+- Zero lock-in required -- raw API
+- Model lock-in acceptable -- provider SDKs (Anthropic, OpenAI)
+- Ecosystem lock-in acceptable -- LangGraph (LangChain ecosystem)
+- Framework lock-in acceptable -- CrewAI or AutoGen
+
+## The Hybrid Approach
+
+In practice, many production systems use **more than one framework**. A common pattern is to use a provider SDK for simple, latency-sensitive agent tasks and LangGraph for complex, stateful workflows -- within the same application.
+
+<MermaidDiagram chart={`graph TD
+    subgraph App["Production Application"]
+        ROUTER["Request Router"]
+        subgraph Simple["Simple Tasks"]
+            SDK["Anthropic / OpenAI SDK<br/>Single agent, fast response"]
+        end
+        subgraph Complex["Complex Workflows"]
+            GRAPH["LangGraph<br/>Multi-step, checkpointed"]
+        end
+        subgraph MultiAgent["Team Tasks"]
+            MULTI["CrewAI / Custom<br/>Role-based delegation"]
+        end
+    end
+    ROUTER -->|"Quick Q&A,<br/>simple tool use"| SDK
+    ROUTER -->|"Multi-step analysis,<br/>approval flows"| GRAPH
+    ROUTER -->|"Research reports,<br/>content pipelines"| MULTI
+    style App fill:#f7fafc,stroke:#a0aec0
+    style Simple fill:#c6f6d5,stroke:#48bb78
+    style Complex fill:#fefcbf,stroke:#d69e2e
+    style MultiAgent fill:#fed7d7,stroke:#e53e3e
+    style ROUTER fill:#e9d8fd,stroke:#9f7aea
+    style SDK fill:#c6f6d5,stroke:#48bb78
+    style GRAPH fill:#fefcbf,stroke:#d69e2e
+    style MULTI fill:#fed7d7,stroke:#e53e3e
+`} />
+
+This is not over-engineering. It is applying the right tool to each sub-problem. A customer support system might use the Anthropic SDK for quick question-answering, LangGraph for multi-step troubleshooting workflows with human approval, and CrewAI for generating comprehensive knowledge base articles that require research, writing, and review.
+
+> **Key insight:** The frameworks are not mutually exclusive. Start with the simplest option that solves your immediate problem. Add complexity only when the problem demands it. You can always introduce a more powerful framework for specific workflows without rewriting everything.
+
+## Common Mistakes in Framework Selection
+
+Before you make your choice, be aware of these pitfalls:
+
+**Over-engineering.** The most common mistake is reaching for a multi-agent framework when a simple agent loop would suffice. If your task is "call an API, process the result, return a response," you do not need LangGraph's graph abstraction or CrewAI's role system. A 30-line agent loop with the provider SDK is correct.
+
+**Resume-driven development.** Choosing a framework because it looks impressive rather than because it fits the problem. LangGraph is powerful, but if your team spends more time debugging graph state than building features, you chose wrong.
+
+**Ignoring lock-in until it hurts.** Model lock-in feels harmless when you start -- until your provider raises prices, changes rate limits, or deprecates your preferred model. If model flexibility matters for your business, choose a model-agnostic framework from the start.
+
+**Premature multi-agent.** Not every problem needs multiple agents. A single agent with good tools and clear instructions often outperforms a crew of specialized agents that spend tokens coordinating with each other. Start with one agent. Split into multiple only when you have evidence that a single agent cannot handle the task.
+
+## Looking Ahead
+
+In the next lesson, you will put this decision framework into practice. The **Framework Lab** challenges you to build the same agent -- a research assistant that searches, analyzes, and summarizes -- in three different frameworks. You will experience firsthand how the same problem feels different in each framework, and you will develop your own intuition for which approach fits which situation.
+
+## Summary
+
+Choosing an agent framework is a **tradeoff decision**, not a ranking. Each framework occupies a distinct position on the spectrum from low-level control to high-level abstraction:
+
+- **Raw API** gives you maximum control and zero lock-in, but you build everything yourself -- best for simple agents and learning
+- **Anthropic SDK** provides a clean agent loop with unique **extended thinking** capabilities -- best for Claude-committed projects that need auditable reasoning
+- **OpenAI Agents SDK** offers the fastest path to working agents with built-in **handoffs** and **guardrails** -- best for teams in the OpenAI ecosystem
+- **LangGraph** treats workflows as explicit graphs with **checkpointing**, conditional routing, and LangSmith observability -- best for complex, production-grade workflows
+- **CrewAI** organizes agents into **role-based teams** with sequential or hierarchical task pipelines -- best for problems that decompose into distinct roles
+- **AutoGen** enables **conversation-driven** multi-agent collaboration -- best for research and iterative refinement tasks
+
+The five selection criteria -- task complexity, team size, production requirements, model flexibility, and lock-in tolerance -- will guide you to the right choice. And remember: you can always combine frameworks, using the simplest tool for each sub-problem in your system.

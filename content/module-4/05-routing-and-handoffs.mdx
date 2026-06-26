@@ -1,0 +1,443 @@
+---
+title: "Routing and Handoffs"
+quiz:
+  - question: "What is the primary purpose of a routing agent in a multi-agent system?"
+    options:
+      - "To execute every task itself using a single large prompt"
+      - "To classify the incoming request and delegate it to the most appropriate specialized handler"
+      - "To store conversation history across all agents"
+      - "To retry failed tool calls until they succeed"
+    correctIndex: 1
+  - question: "Which routing strategy uses vector embeddings to match user queries to predefined intent categories?"
+    options:
+      - "Keyword/regex matching"
+      - "LLM-based classification"
+      - "Embedding similarity routing"
+      - "Round-robin routing"
+    correctIndex: 2
+  - question: "What is the biggest risk when handing off a conversation from one agent to another?"
+    options:
+      - "The handoff takes too long to execute"
+      - "The receiving agent uses a different LLM provider"
+      - "Context loss — the receiving agent lacks the conversation history, memory, or tool state needed to continue effectively"
+      - "The receiving agent has more tools available than necessary"
+    correctIndex: 2
+  - question: "How does routing relate to multi-agent systems covered in Module 9?"
+    options:
+      - "Routing replaces the need for multi-agent coordination entirely"
+      - "The router evolves into a supervisor agent that orchestrates specialized agents, making routing the gateway pattern for multi-agent architectures"
+      - "Multi-agent systems never use routing because each agent handles all tasks"
+      - "Routing is only used in single-agent systems"
+    correctIndex: 1
+---
+
+## Overview
+
+In the previous lessons, we explored agent architectures where a single agent handles the entire task -- ReAct loops through reasoning and acting, Plan-and-Execute decomposes problems into steps, and Self-Reflection critiques its own output. But what happens when a single agent cannot be an expert at everything? A customer sends a billing question, a developer asks for a code review, and a researcher requests a literature summary -- all through the same interface. No single system prompt, tool set, or reasoning strategy handles all three optimally.
+
+**Routing** solves this by classifying the incoming request and sending it to the right handler. Instead of one agent that does everything adequately, you build several agents that each do one thing exceptionally well, with a **router** at the front that decides which specialist to invoke. This is the same principle behind microservices in software engineering: decompose a monolith into focused services behind a dispatcher.
+
+**Handoffs** are the mechanism by which the router transfers control -- and critically, transfers *context* -- from one agent to another. A handoff is not just a function call. It involves passing conversation history, relevant memory, tool state, and enough context for the receiving agent to continue seamlessly, as if it had been in the conversation all along.
+
+Together, routing and handoffs form the foundation for building systems where multiple agents collaborate. By the time you reach Module 9 (Multi-Agent Systems), the router will have evolved into a full supervisor agent -- but the core pattern starts here.
+
+## The Routing Architecture
+
+At the center of every routing system is a **router agent** -- a lightweight classifier whose sole job is to understand the user's intent and dispatch the request to a specialized handler. The router itself does not solve the problem. It answers one question: *Who should handle this?*
+
+<MermaidDiagram chart={`graph TD
+    USER[User Input] --> ROUTER
+
+    subgraph ROUTER_BOX["Router Agent"]
+        ROUTER[Classify Intent]
+    end
+
+    ROUTER -->|Research query| RA["Research Agent<br/>Tools: search, summarize<br/>Prompt: analytical, thorough"]
+    ROUTER -->|Code task| CA["Code Agent<br/>Tools: execute, lint, test<br/>Prompt: precise, technical"]
+    ROUTER -->|Support issue| SA["Customer Support Agent<br/>Tools: ticket, refund, FAQ<br/>Prompt: empathetic, policy-aware"]
+    ROUTER -->|General question| GA["General Agent<br/>Tools: basic search<br/>Prompt: conversational"]
+
+    RA --> RESP[Response to User]
+    CA --> RESP
+    SA --> RESP
+    GA --> RESP
+
+    style ROUTER_BOX fill:#e9d8fd,stroke:#805ad5,color:#1a202c
+    style ROUTER fill:#e9d8fd,stroke:#805ad5,color:#1a202c
+    style RA fill:#ebf8ff,stroke:#3182ce,color:#1a202c
+    style CA fill:#c6f6d5,stroke:#38a169,color:#1a202c
+    style SA fill:#fefcbf,stroke:#d69e2e,color:#1a202c
+    style GA fill:#fed7d7,stroke:#e53e3e,color:#1a202c
+    style USER fill:#f7fafc,stroke:#718096,color:#1a202c
+    style RESP fill:#f7fafc,stroke:#718096,color:#1a202c
+`} />
+
+Each specialized agent has its own **system prompt** tailored to its domain, its own **tool set** (a research agent does not need a refund tool), and potentially its own **model** (a simple FAQ agent can use a smaller, faster model while a code agent needs the most capable one). This specialization is what makes routing powerful -- each agent operates in its area of strength.
+
+## The Routing Flow
+
+Let's trace the complete lifecycle of a routed request, from the user's input through classification, delegation, and response:
+
+<MermaidDiagram chart={`flowchart TD
+    INPUT[User sends message] --> PREPROCESS[Preprocess input]
+    PREPROCESS --> CLASSIFY{Classify intent}
+
+    CLASSIFY -->|High confidence| ROUTE[Route to specialist agent]
+    CLASSIFY -->|Low confidence| FALLBACK[Route to general agent<br/>or ask for clarification]
+
+    ROUTE --> CONTEXT[Prepare handoff context]
+    CONTEXT --> EXEC[Specialist agent executes]
+    EXEC --> QUALITY{Quality check}
+
+    QUALITY -->|Meets threshold| RESPOND[Return response to user]
+    QUALITY -->|Below threshold| ESCALATE[Escalate to human<br/>or try alternate agent]
+
+    FALLBACK --> RESPOND
+
+    style INPUT fill:#f7fafc,stroke:#718096,color:#1a202c
+    style PREPROCESS fill:#ebf8ff,stroke:#3182ce,color:#1a202c
+    style CLASSIFY fill:#e9d8fd,stroke:#805ad5,color:#1a202c
+    style ROUTE fill:#c6f6d5,stroke:#38a169,color:#1a202c
+    style FALLBACK fill:#fefcbf,stroke:#d69e2e,color:#1a202c
+    style CONTEXT fill:#ebf8ff,stroke:#3182ce,color:#1a202c
+    style EXEC fill:#c6f6d5,stroke:#38a169,color:#1a202c
+    style QUALITY fill:#e9d8fd,stroke:#805ad5,color:#1a202c
+    style RESPOND fill:#c6f6d5,stroke:#38a169,color:#1a202c
+    style ESCALATE fill:#fed7d7,stroke:#e53e3e,color:#1a202c
+`} />
+
+Two details in this flow are worth highlighting. First, the **confidence threshold** on classification -- when the router is unsure, it should not guess. A misrouted request is worse than a slightly slower correct routing. Falling back to a general agent or asking the user to clarify is a better strategy. Second, the **quality check** after execution -- the router can inspect the specialist's output and decide whether to escalate, retry with a different agent, or accept the result.
+
+## Three Strategies for Routing
+
+Not every router needs an LLM. The right strategy depends on the complexity of your intents, the latency budget, and the cost per request.
+
+### LLM-Based Classification
+
+The most flexible approach uses the LLM itself as the classifier. You provide a system prompt listing the available routes with descriptions, and the model returns a structured classification.
+
+**Strengths:** Handles ambiguous, nuanced, or novel inputs. Can reason about edge cases. No training data required -- just descriptions of each route.
+
+**Weaknesses:** Adds latency (one LLM call before the specialist even starts). Costs money per classification. Can be inconsistent -- the same input might route differently on repeated calls.
+
+### Keyword and Regex Matching
+
+The simplest and fastest approach. You define patterns -- if the input contains "refund" or "cancel subscription," route to customer support; if it contains "def " or "function" or "```", route to the code agent.
+
+**Strengths:** Near-zero latency, zero cost, fully deterministic. Easy to debug and audit.
+
+**Weaknesses:** Brittle. Users rarely phrase things the way you expect. "My code isn't working and I want my money back" matches both code and support patterns. Cannot handle intent that is expressed indirectly.
+
+### Embedding Similarity
+
+A middle ground. You pre-compute **embedding vectors** for a set of representative queries per route, then at runtime compute the embedding of the user's input and find the closest match using cosine similarity.
+
+**Strengths:** Handles paraphrasing and indirect phrasing well. Fast at inference (one embedding call plus a vector search). More robust than keywords.
+
+**Weaknesses:** Requires curating representative examples for each route. Does not handle truly novel intents that fall outside all clusters. The embedding model's quality matters -- a poor embedding model means poor routing.
+
+> **In practice:** Production systems often combine strategies. A fast keyword check handles obvious cases (90% of traffic), an embedding classifier catches the subtler ones (9%), and an LLM-based classifier handles the remaining ambiguous 1%. This tiered approach minimizes latency and cost while maximizing accuracy.
+
+## Implementing a Router Agent
+
+Let's build a practical router that classifies user intent and delegates to specialized agents, each with its own system prompt and tool set. The router uses structured output to ensure consistent classification:
+
+<CodeBlock code={`import anthropic
+import json
+from typing import Literal
+
+client = anthropic.Anthropic()
+
+# --- Define the specialized agents ---
+
+AGENT_CONFIGS = {
+    "research": {
+        "system_prompt": (
+            "You are a research analyst. Provide thorough, well-structured "
+            "answers backed by evidence. Cite sources when possible. "
+            "Use the search tool to find current information."
+        ),
+        "tools": [
+            {
+                "name": "web_search",
+                "description": "Search the web for current information",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "description": "Search query"}
+                    },
+                    "required": ["query"],
+                },
+            }
+        ],
+    },
+    "code": {
+        "system_prompt": (
+            "You are a senior software engineer. Write clean, well-documented "
+            "code. Explain your design decisions. Include error handling "
+            "and type hints. Run code to verify correctness."
+        ),
+        "tools": [
+            {
+                "name": "execute_code",
+                "description": "Execute Python code and return the output",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "code": {"type": "string", "description": "Python code"}
+                    },
+                    "required": ["code"],
+                },
+            }
+        ],
+    },
+    "support": {
+        "system_prompt": (
+            "You are a customer support specialist. Be empathetic and helpful. "
+            "Follow company policies strictly. Offer concrete solutions. "
+            "Escalate to a human agent when you cannot resolve the issue."
+        ),
+        "tools": [
+            {
+                "name": "lookup_order",
+                "description": "Look up a customer order by ID",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "order_id": {"type": "string", "description": "Order ID"}
+                    },
+                    "required": ["order_id"],
+                },
+            },
+            {
+                "name": "create_ticket",
+                "description": "Create a support ticket for escalation",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "subject": {"type": "string"},
+                        "description": {"type": "string"},
+                        "priority": {
+                            "type": "string",
+                            "enum": ["low", "medium", "high"],
+                        },
+                    },
+                    "required": ["subject", "description", "priority"],
+                },
+            },
+        ],
+    },
+}
+
+
+def classify_intent(user_message: str) -> dict:
+    """Use the LLM to classify the user's intent and select a route."""
+    response = client.messages.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=256,
+        system=(
+            "You are a routing classifier. Analyze the user's message and "
+            "determine which specialist agent should handle it.\\n\\n"
+            "Available routes:\\n"
+            '- "research": Factual questions, analysis, comparisons, explanations\\n'
+            '- "code": Programming tasks, debugging, code review, technical implementation\\n'
+            '- "support": Billing, orders, account issues, complaints, refunds\\n\\n'
+            "Respond with JSON only: "
+            '{"route": "<route_name>", "confidence": <0.0-1.0>, "reasoning": "<brief explanation>"}'
+        ),
+        messages=[{"role": "user", "content": user_message}],
+    )
+
+    return json.loads(response.content[0].text)
+
+
+def handoff_to_agent(
+    route: str,
+    user_message: str,
+    conversation_history: list[dict] | None = None,
+) -> str:
+    """Hand off the request to a specialized agent with full context."""
+    config = AGENT_CONFIGS[route]
+
+    # Build the handoff context -- this is the critical part.
+    # The specialist agent needs enough history to continue seamlessly.
+    messages = []
+    if conversation_history:
+        messages.extend(conversation_history)
+    messages.append({"role": "user", "content": user_message})
+
+    response = client.messages.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=2048,
+        system=config["system_prompt"],
+        tools=config["tools"],
+        messages=messages,
+    )
+
+    return response.content[0].text
+
+
+def route_request(
+    user_message: str,
+    conversation_history: list[dict] | None = None,
+    confidence_threshold: float = 0.7,
+) -> str:
+    """Full routing pipeline: classify, then delegate."""
+
+    # Step 1: Classify intent
+    classification = classify_intent(user_message)
+    route = classification["route"]
+    confidence = classification["confidence"]
+    reasoning = classification["reasoning"]
+
+    print(f"Route: {route} (confidence: {confidence:.0%})")
+    print(f"Reasoning: {reasoning}")
+
+    # Step 2: Check confidence threshold
+    if confidence < confidence_threshold:
+        print(f"Low confidence ({confidence:.0%}). Asking for clarification.")
+        return (
+            "I want to make sure I help you in the best way. "
+            "Could you tell me more about what you need? For example:\\n"
+            "- A factual question or research topic?\\n"
+            "- Help with code or a technical task?\\n"
+            "- A support issue with your account or order?"
+        )
+
+    # Step 3: Hand off to the specialist agent
+    return handoff_to_agent(route, user_message, conversation_history)
+
+
+# --- Try it out ---
+queries = [
+    "What are the main differences between TCP and UDP?",
+    "Write a Python function that finds all prime numbers up to N",
+    "I was charged twice for order #12345, please help",
+    "Tell me something interesting",  # Ambiguous -- may trigger fallback
+]
+
+for query in queries:
+    print(f"\\n{'='*60}")
+    print(f"User: {query}")
+    print(f"{'='*60}")
+    result = route_request(query)
+    print(f"Response: {result[:200]}...")
+`} language="python" filename="router_agent.py" />
+
+Several design decisions in this implementation are worth noting. The **confidence threshold** at 0.7 means the router will fall back to asking for clarification rather than guessing when it is unsure -- this prevents cascading errors from misclassification. The **handoff function** accepts a `conversation_history` parameter, ensuring the specialist agent receives prior context rather than seeing the request in isolation. And each agent configuration bundles both the system prompt and the tools, so the router can set up the specialist with everything it needs in a single call.
+
+## Handoff Context: What to Transfer
+
+The difference between a good routing system and a great one lies in the **handoff**. When one agent passes control to another, what exactly gets transferred?
+
+A **minimal handoff** sends only the current user message. This is simple but fragile -- the receiving agent has no idea what came before. If the user said "Can you also check my billing?" after a long research conversation, the support agent receives just that one sentence with no context about who the user is or what was discussed.
+
+A **full-context handoff** transfers:
+
+- **Conversation history** -- the full message log so the receiving agent can read what happened before
+- **Extracted entities** -- user ID, order numbers, relevant facts the previous agent identified
+- **Tool state** -- results from tools the previous agent already called (so the new agent does not repeat work)
+- **Routing metadata** -- why the handoff happened, what the previous agent's confidence was, any partial results
+
+<CodeBlock code={`from dataclasses import dataclass, field
+
+
+@dataclass
+class HandoffContext:
+    """Everything a specialist agent needs to continue seamlessly."""
+
+    # The current request
+    user_message: str
+
+    # Full conversation history (list of {"role": ..., "content": ...})
+    conversation_history: list[dict] = field(default_factory=list)
+
+    # Entities extracted by the router or previous agent
+    extracted_entities: dict = field(default_factory=dict)
+    # e.g., {"user_id": "u_123", "order_id": "12345", "product": "Widget Pro"}
+
+    # Results from tools already called (avoid redundant calls)
+    tool_results: list[dict] = field(default_factory=list)
+    # e.g., [{"tool": "lookup_order", "result": {"status": "shipped"}}]
+
+    # Why the handoff happened
+    routing_metadata: dict = field(default_factory=dict)
+    # e.g., {"from_route": "research", "reason": "user asked about billing",
+    #         "confidence": 0.92}
+
+
+def build_specialist_prompt(
+    base_system_prompt: str, context: HandoffContext
+) -> str:
+    """Inject handoff context into the specialist's system prompt."""
+    parts = [base_system_prompt]
+
+    if context.extracted_entities:
+        entities_str = ", ".join(
+            f"{k}: {v}" for k, v in context.extracted_entities.items()
+        )
+        parts.append(
+            f"\\nKnown context about this user: {entities_str}"
+        )
+
+    if context.tool_results:
+        results_str = "\\n".join(
+            f"- {r['tool']}: {r['result']}" for r in context.tool_results
+        )
+        parts.append(
+            f"\\nPrevious tool results (do not re-call these):\\n{results_str}"
+        )
+
+    if context.routing_metadata:
+        parts.append(
+            f"\\nThis conversation was routed to you from "
+            f"'{context.routing_metadata.get('from_route', 'unknown')}' "
+            f"because: {context.routing_metadata.get('reason', 'unspecified')}"
+        )
+
+    return "\\n".join(parts)
+`} language="python" filename="handoff_context.py" />
+
+The `HandoffContext` dataclass makes the transfer explicit and structured. Rather than ad hoc string concatenation, every piece of context has a well-defined field. The `build_specialist_prompt` function injects this context into the specialist's system prompt, so the receiving agent can immediately see extracted entities, prior tool results, and the reason for the handoff.
+
+## Strengths and Weaknesses
+
+Routing and handoffs offer clear advantages but come with real trade-offs:
+
+**Strengths:**
+
+- **Specialization** -- each agent can be optimized for its domain with a tailored system prompt, specific tools, and even a different model. A billing agent does not need a code execution tool, and a code agent does not need empathy training.
+- **Efficiency** -- simple queries (like FAQ lookups) can be handled by a lightweight agent with a small model, reserving expensive models and complex tool sets for the requests that need them. This reduces both latency and cost.
+- **Modularity** -- adding a new capability means adding a new specialist agent and updating the router's classification list. Existing agents remain untouched. This mirrors the open/closed principle from software engineering.
+- **Scalability** -- each specialist can be scaled, monitored, and updated independently. A bug in the support agent does not affect the code agent.
+
+**Weaknesses:**
+
+- **Classification errors cascade** -- if the router sends a billing complaint to the code agent, the specialist will produce a confident but completely wrong response. Unlike other agent failures where the agent might self-correct, a misroute often produces plausible-looking output that the user must catch.
+- **Context loss during handoffs** -- even with careful context transfer, some information is inevitably lost or degraded. The receiving agent may miss subtle cues from earlier in the conversation. Multi-hop handoffs (A to B to C) amplify this problem.
+- **Added latency** -- the classification step adds at least one LLM call before any work begins. For latency-sensitive applications, this overhead may be unacceptable.
+- **Routing boundary ambiguity** -- real user requests often span multiple domains. "Debug my billing API code" involves both code and billing. Rigid routing categories struggle with these cross-cutting requests.
+
+> **Mitigation strategy:** For cross-cutting requests, consider a **fan-out** approach -- route to multiple specialists in parallel and combine their responses. Or use a hierarchical router where the first level splits "code" from "support" and a second level handles the overlap.
+
+## Connecting to the Bigger Picture
+
+Routing is not just another architecture pattern -- it is the **gateway to multi-agent systems**. Consider the progression:
+
+1. **Single agent** -- one prompt, one tool set, handles everything (Modules 1-4 so far)
+2. **Router + specialists** -- one classifier delegates to focused agents (this lesson)
+3. **Supervisor + workers** -- the router gains the ability to coordinate, retry, and synthesize across agents (Module 9: Multi-Agent Systems)
+
+The router you built in this lesson is already a simple supervisor. It classifies, delegates, and returns results. In Module 9, you will extend this pattern with agents that can communicate with each other, share intermediate results, and collaborate on tasks that no single specialist can solve alone.
+
+## Summary
+
+**Routing** is the pattern of classifying an incoming request and dispatching it to the most appropriate specialized handler. A **router agent** sits at the center of the architecture, analyzing user intent and selecting from a set of specialist agents, each equipped with its own system prompt, tool set, and optionally its own model.
+
+Three main routing strategies exist: **LLM-based classification** (flexible but adds latency), **keyword/regex matching** (fast and deterministic but brittle), and **embedding similarity** (robust to paraphrasing but requires curated examples). Production systems often tier these strategies, using fast methods for clear-cut cases and reserving LLM classification for ambiguous inputs.
+
+**Handoffs** are how context transfers between agents. Effective handoffs carry not just the current message but the full conversation history, extracted entities, prior tool results, and routing metadata. The quality of the handoff determines whether the transition feels seamless or jarring to the user.
+
+The key trade-offs are specialization and efficiency versus classification errors and context loss. Routing shines when your problem space has clearly distinct domains, and struggles when user requests span multiple categories. As systems grow more complex, the router naturally evolves into a supervisor -- making routing the foundational pattern for the multi-agent architectures you will explore in Module 9.
+
+In the next lesson, we will explore **Workflow and State Machine Agents** -- architectures that combine routing with deterministic control flow, giving you explicit state transitions and predictable execution paths rather than relying on LLM classification at every step.

@@ -1,0 +1,347 @@
+---
+title: "Workflow and State Machine Agents"
+quiz:
+  - question: "What distinguishes a workflow agent from a fully autonomous agent like ReAct?"
+    options:
+      - "Workflow agents cannot use LLMs at all -- they are purely rule-based systems"
+      - "Workflow agents have a fixed control flow structure, but use LLMs to make intelligent decisions within specific nodes"
+      - "Workflow agents are slower because they must wait for human approval at every step"
+      - "Workflow agents can only handle one type of task, while autonomous agents handle many"
+    correctIndex: 1
+  - question: "In a state machine agent, what determines which state the agent transitions to next?"
+    options:
+      - "The LLM always decides the next state autonomously"
+      - "States are visited in a random order until the task is complete"
+      - "A transition function evaluates the current state and context to select the next state from a predefined set of valid transitions"
+      - "The user must manually select each next state"
+    correctIndex: 2
+  - question: "Why are workflow agents particularly well-suited for regulated industries like healthcare or finance?"
+    options:
+      - "They are cheaper to run because they never call an LLM"
+      - "Their deterministic structure makes every path auditable and guarantees that required steps are never skipped"
+      - "They produce more creative outputs than autonomous agents"
+      - "Regulators require all software to use state machines"
+    correctIndex: 1
+  - question: "Which of the following is a hybrid workflow pattern?"
+    options:
+      - "An agent that uses ReAct for every single decision"
+      - "A pipeline where deterministic nodes handle validation and routing while LLM nodes handle classification and generation"
+      - "A system that runs the same prompt in a loop until the output is correct"
+      - "A chatbot that answers questions without any predefined structure"
+    correctIndex: 1
+---
+
+## Overview
+
+In the previous lessons, you explored agent architectures that give the LLM significant autonomy: ReAct lets the model decide what to do at every step, Plan-and-Execute lets it write its own plan, Self-Reflection lets it critique and revise its own output, and Routing lets it classify and delegate. These patterns are powerful, but they share a common trait -- the LLM is in the driver's seat.
+
+Now consider a different scenario. A customer contacts your support system. The process should always follow the same steps: greet the customer, classify their issue, look up relevant information, draft a response, and close the ticket. The *structure* is fixed and known in advance. But within each step, you need intelligence -- classifying whether the issue is a billing question or a technical problem, generating a personalized response, deciding whether to escalate. You do not need autonomy. You need **structured intelligence**.
+
+This is the domain of **workflow agents** and **state machine agents**. They combine the predictability of deterministic control flow with the flexibility of LLM-powered decision-making at specific nodes. The structure is yours. The intelligence is the model's.
+
+## The Key Insight: Not Everything Needs Autonomy
+
+Most real-world business processes are not open-ended explorations. They are sequences of known steps with known branching points. An insurance claim follows a defined process. A data pipeline has fixed stages. An employee onboarding flow has mandatory checkpoints. The steps are documented, regulated, and auditable.
+
+Fully autonomous agents are a poor fit for these processes. When a ReAct agent decides what to do at every turn, you lose guarantees. Did it skip the compliance check? Did it forget to log the decision? Did it take a path that no one anticipated? In regulated environments, "the AI decided to skip that step" is not an acceptable answer.
+
+**Workflow agents** solve this by inverting the relationship between structure and intelligence. Instead of an LLM deciding the structure, you define the structure and let the LLM provide intelligence *within* that structure. The workflow is deterministic. The decisions within it are intelligent.
+
+> **The analogy:** Think of a workflow agent like an assembly line in a factory. The line itself is fixed -- stations in a specific order, conveyor belts connecting them. But at certain stations, a skilled worker (the LLM) makes judgment calls: is this part defective? Which color should we paint it? Does this need a custom adjustment? The line provides predictability. The workers provide intelligence.
+
+## State Machines: The Foundation
+
+A **state machine** is a model of computation where the system is always in exactly one of a finite number of states. At each state, the system evaluates its context and transitions to the next state based on defined rules. State machines are everywhere in software engineering -- network protocols, game logic, UI flows, and now, agent architectures.
+
+Here is a customer support workflow modeled as a state machine:
+
+<MermaidDiagram chart={`stateDiagram-v2
+    [*] --> Greeting
+    Greeting --> Classification: customer message received
+    Classification --> OrderLookup: issue = order problem
+    Classification --> FAQ: issue = general question
+    Classification --> Escalation: issue = complaint
+    OrderLookup --> ResponseDraft: order data retrieved
+    FAQ --> ResponseDraft: answer found
+    Escalation --> HumanHandoff: severity high
+    Escalation --> ResponseDraft: severity low
+    ResponseDraft --> Review: draft ready
+    Review --> Delivery: approved
+    Review --> ResponseDraft: revision needed
+    Delivery --> Closed
+    HumanHandoff --> Closed
+    Closed --> [*]
+    style Greeting fill:#c6f6d5,color:#000
+    style Classification fill:#bee3f8,color:#000
+    style OrderLookup fill:#fefcbf,color:#000
+    style FAQ fill:#fefcbf,color:#000
+    style Escalation fill:#fed7d7,color:#000
+    style ResponseDraft fill:#e9d8fd,color:#000
+    style Review fill:#e9d8fd,color:#000
+    style Delivery fill:#c6f6d5,color:#000
+    style HumanHandoff fill:#fed7d7,color:#000
+    style Closed fill:#e2e8f0,color:#000
+`} />
+
+Every path through this diagram is known and auditable. The customer will always be greeted. Their issue will always be classified. The response will always be reviewed before delivery. No step can be skipped, and no unexpected path can emerge. But notice that several nodes require intelligence -- **Classification** must understand the customer's message, **ResponseDraft** must generate a natural language reply, and **Review** must evaluate whether the draft is adequate. These are the LLM-powered decision nodes.
+
+## Hybrid Workflows: Deterministic + Intelligent Nodes
+
+The real power of workflow agents comes from mixing deterministic nodes and LLM-powered nodes in the same graph. Not every node needs an LLM. Not every node should be hardcoded. The art is choosing which nodes get intelligence and which stay deterministic.
+
+<MermaidDiagram chart={`graph TD
+    A["Receive Request"] --> B{"Validate Input"}
+    B -->|"valid"| C{"Classify Intent<br/><b>LLM Node</b>"}
+    B -->|"invalid"| D["Return Error"]
+    C -->|"order_status"| E["Query Order DB"]
+    C -->|"product_question"| F{"Answer Question<br/><b>LLM Node</b>"}
+    C -->|"complaint"| G{"Assess Severity<br/><b>LLM Node</b>"}
+    E --> H{"Generate Response<br/><b>LLM Node</b>"}
+    F --> H
+    G -->|"low"| H
+    G -->|"high"| I["Escalate to Human"]
+    H --> J["Log Interaction"]
+    J --> K["Send Response"]
+    I --> J
+    style A fill:#e2e8f0,stroke:#4a5568,color:#000
+    style B fill:#e2e8f0,stroke:#4a5568,color:#000
+    style D fill:#fed7d7,stroke:#fc8181,color:#000
+    style E fill:#e2e8f0,stroke:#4a5568,color:#000
+    style J fill:#e2e8f0,stroke:#4a5568,color:#000
+    style K fill:#c6f6d5,stroke:#68d391,color:#000
+    style I fill:#fefcbf,stroke:#d69e2e,color:#000
+    style C fill:#bee3f8,stroke:#3182ce,color:#000
+    style F fill:#bee3f8,stroke:#3182ce,color:#000
+    style G fill:#bee3f8,stroke:#3182ce,color:#000
+    style H fill:#bee3f8,stroke:#3182ce,color:#000
+`} />
+
+In this diagram, gray nodes are **deterministic** -- they run fixed code with no LLM involvement. Blue nodes are **LLM-powered** -- they call a model to make a decision or generate content. The workflow structure ensures that validation always happens before classification, that every interaction is logged, and that responses are always sent through the same channel. The LLM nodes provide the intelligence that makes each interaction feel personalized and contextual.
+
+This hybrid approach gives you the best of both worlds. Deterministic nodes handle validation, data retrieval, logging, and routing -- things that should never be creative or unpredictable. LLM nodes handle classification, generation, and judgment -- things that require understanding natural language and making nuanced decisions.
+
+## Implementing a State Machine Agent
+
+Let's build a workflow agent in Python. The implementation has three core components: a set of states, a transition function, and node handlers (some of which call an LLM).
+
+<CodeBlock code={`import anthropic
+from dataclasses import dataclass, field
+from enum import Enum
+
+
+class State(Enum):
+    GREETING = "greeting"
+    CLASSIFICATION = "classification"
+    ORDER_LOOKUP = "order_lookup"
+    FAQ_ANSWER = "faq_answer"
+    RESPONSE_DRAFT = "response_draft"
+    CLOSED = "closed"
+
+
+# Valid transitions: current_state -> list of possible next states
+TRANSITIONS: dict[State, list[State]] = {
+    State.GREETING: [State.CLASSIFICATION],
+    State.CLASSIFICATION: [State.ORDER_LOOKUP, State.FAQ_ANSWER],
+    State.ORDER_LOOKUP: [State.RESPONSE_DRAFT],
+    State.FAQ_ANSWER: [State.RESPONSE_DRAFT],
+    State.RESPONSE_DRAFT: [State.CLOSED],
+}
+
+
+@dataclass
+class WorkflowContext:
+    """Shared context that flows through the workflow."""
+    customer_message: str = ""
+    issue_type: str = ""
+    retrieved_data: str = ""
+    draft_response: str = ""
+    history: list[str] = field(default_factory=list)
+
+    def log(self, entry: str):
+        self.history.append(entry)
+
+
+client = anthropic.Anthropic()
+
+
+def llm_call(prompt: str, system: str = "") -> str:
+    """Make a single LLM call and return the text response."""
+    response = client.messages.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=512,
+        system=system,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    return response.content[0].text
+
+
+# --- Node Handlers ---
+
+def handle_greeting(ctx: WorkflowContext) -> State:
+    """Deterministic node: always transitions to classification."""
+    ctx.log(f"Greeted customer. Message: {ctx.customer_message[:50]}...")
+    return State.CLASSIFICATION
+
+
+def handle_classification(ctx: WorkflowContext) -> State:
+    """LLM node: classifies the customer's issue."""
+    result = llm_call(
+        prompt=f"Classify this customer message into exactly one category.\\n"
+               f"Categories: order_issue, general_question\\n"
+               f"Message: {ctx.customer_message}\\n"
+               f"Respond with only the category name.",
+        system="You are a customer support classifier. Respond with only the category.",
+    )
+    ctx.issue_type = result.strip().lower()
+    ctx.log(f"Classified as: {ctx.issue_type}")
+
+    if "order" in ctx.issue_type:
+        return State.ORDER_LOOKUP
+    return State.FAQ_ANSWER
+
+
+def handle_order_lookup(ctx: WorkflowContext) -> State:
+    """Deterministic node: queries the order database."""
+    # In production, this queries a real database
+    ctx.retrieved_data = "Order #12345: Shipped on June 5, arriving June 9."
+    ctx.log(f"Retrieved order data: {ctx.retrieved_data}")
+    return State.RESPONSE_DRAFT
+
+
+def handle_faq_answer(ctx: WorkflowContext) -> State:
+    """Deterministic node: retrieves FAQ content."""
+    ctx.retrieved_data = "Return policy: 30-day returns for unused items."
+    ctx.log(f"Retrieved FAQ: {ctx.retrieved_data}")
+    return State.RESPONSE_DRAFT
+
+
+def handle_response_draft(ctx: WorkflowContext) -> State:
+    """LLM node: generates a personalized response."""
+    ctx.draft_response = llm_call(
+        prompt=f"Write a helpful customer support response.\\n"
+               f"Customer message: {ctx.customer_message}\\n"
+               f"Issue type: {ctx.issue_type}\\n"
+               f"Relevant information: {ctx.retrieved_data}",
+        system="You are a friendly customer support agent. Be concise and helpful.",
+    )
+    ctx.log(f"Drafted response ({len(ctx.draft_response)} chars)")
+    return State.CLOSED
+
+
+# --- State Machine Engine ---
+
+NODE_HANDLERS = {
+    State.GREETING: handle_greeting,
+    State.CLASSIFICATION: handle_classification,
+    State.ORDER_LOOKUP: handle_order_lookup,
+    State.FAQ_ANSWER: handle_faq_answer,
+    State.RESPONSE_DRAFT: handle_response_draft,
+}
+
+
+def run_workflow(customer_message: str, max_steps: int = 10) -> WorkflowContext:
+    """Execute the workflow state machine."""
+    ctx = WorkflowContext(customer_message=customer_message)
+    current_state = State.GREETING
+
+    for step in range(max_steps):
+        print(f"Step {step + 1}: {current_state.value}")
+
+        handler = NODE_HANDLERS.get(current_state)
+        if handler is None:
+            ctx.log(f"Terminal state: {current_state.value}")
+            break
+
+        next_state = handler(ctx)
+
+        # Validate the transition
+        valid_next = TRANSITIONS.get(current_state, [])
+        if next_state not in valid_next:
+            raise ValueError(
+                f"Invalid transition: {current_state.value} -> {next_state.value}. "
+                f"Valid: {[s.value for s in valid_next]}"
+            )
+
+        current_state = next_state
+
+    return ctx
+
+
+# Run it
+result = run_workflow("Where is my order #12345? I placed it last week.")
+print(f"\\nResponse: {result.draft_response}")
+print(f"\\nWorkflow log:")
+for entry in result.history:
+    print(f"  - {entry}")
+`} language="python" filename="workflow_agent.py" />
+
+Let's walk through the key design decisions in this implementation:
+
+**States as an enum.** Each state is explicitly defined. There are no surprise states -- the system can only be in one of the declared states at any time. This makes the workflow self-documenting and easy to audit.
+
+**Explicit transition table.** The `TRANSITIONS` dictionary declares which states can follow which. This is the structural guarantee: the workflow *cannot* jump from greeting to response drafting without going through classification first. If a node handler returns an invalid next state, the engine raises an error immediately.
+
+**Node handlers return the next state.** Each handler takes the shared context, does its work (deterministic or LLM-powered), and returns the next state. This keeps the decision about *where to go next* close to the logic that informs it.
+
+**Shared context object.** The `WorkflowContext` carries data between nodes. The classification result informs the data lookup. The lookup result informs the response draft. Every node reads from and writes to this shared context, creating a clean data flow through the workflow.
+
+**Audit trail built in.** The `history` list on the context records what happened at every step. In production, this becomes your observability layer -- you can reconstruct exactly what path the workflow took, what the LLM decided at each node, and what data it used.
+
+## How Workflow Agents Differ from Autonomous Agents
+
+It helps to be precise about where workflow agents sit relative to the other architectures you have studied. The fundamental axis is **who controls the structure** of execution.
+
+| Dimension | Autonomous (ReAct) | Workflow Agent |
+|-----------|-------------------|----------------|
+| Control flow | LLM decides next step each iteration | Predefined graph of states and transitions |
+| Predictability | Low -- paths emerge at runtime | High -- all paths are known at design time |
+| Auditability | Requires tracing the full reasoning chain | Built in -- every path is in the transition table |
+| Flexibility | Handles novel situations well | Handles known processes well |
+| Failure modes | May loop, hallucinate actions, or wander | Constrained -- invalid transitions are caught |
+| LLM usage | Every step requires LLM reasoning | Only specific decision nodes use the LLM |
+| Cost | Higher -- many LLM calls per task | Lower -- LLM called only where needed |
+
+Neither approach is universally better. Autonomous agents excel at open-ended tasks where the path cannot be predicted in advance. Workflow agents excel at structured processes where the path is known but the decisions along it require intelligence.
+
+Most production systems use both. A routing agent (Lesson 05) might classify an incoming request and hand it off to a workflow agent that processes it through a defined set of steps. The outer layer is autonomous. The inner layer is structured. This is the layered architecture pattern you will see in real-world deployments.
+
+## When to Use Workflow Agents
+
+Workflow agents are the right choice when the process is more important than the individual decisions within it. Here are the clearest signals:
+
+**Regulated processes.** Healthcare, finance, legal, and compliance workflows have mandatory steps that cannot be skipped. A loan approval workflow must always run a credit check, verify identity, and log the decision. A workflow agent guarantees these steps happen in the right order every time.
+
+**Customer support flows.** Support interactions follow predictable patterns -- greet, classify, retrieve information, respond, close. The LLM provides natural language understanding and generation, but the process structure ensures consistency and enables quality monitoring.
+
+**Data pipelines with judgment.** Extract-transform-load pipelines that need human-like judgment at certain stages -- is this data entry anomalous? How should this edge case be classified? -- benefit from the workflow pattern. Most stages are deterministic data processing. A few stages need LLM intelligence.
+
+**Approval workflows.** Any process that requires sign-off at specific checkpoints -- code review, document approval, expense authorization -- maps naturally to a state machine with human-in-the-loop gates.
+
+**Multi-step content generation.** Generating a report that requires research, outlining, drafting, fact-checking, and formatting is a workflow. Each stage has a clear input, output, and success criterion. The LLM handles the creative work. The workflow handles the process.
+
+## Connecting to Frameworks and Production
+
+The workflow agent pattern is so fundamental that it has become the basis for major agent frameworks. **LangGraph**, which you will explore in Module 7, is built entirely around this idea -- you define a graph of nodes and edges, some nodes call LLMs, and the framework manages state, transitions, and persistence. If you understand the state machine pattern from this lesson, LangGraph will feel immediately familiar.
+
+Workflow agents are also the easiest architecture to deploy and monitor in production, which you will cover in Module 11. Because every path is predefined, you can:
+
+- **Set up alerts** on specific transitions (e.g., "notify me when escalation rate exceeds 10%")
+- **Measure latency** per node to identify bottlenecks
+- **A/B test** individual nodes without changing the overall flow
+- **Roll back** a single LLM prompt without redeploying the entire system
+- **Guarantee SLAs** because the maximum number of steps is bounded
+
+Compare this to monitoring a ReAct agent, where the number of steps is variable, the path is different every time, and a single prompt change can alter the entire execution flow. Workflow agents give operations teams the predictability they need.
+
+## Summary
+
+**Workflow agents** and **state machine agents** bring deterministic structure to LLM-powered systems. Instead of giving the model full autonomy, you define the control flow and let the LLM provide intelligence at specific decision points.
+
+- **The core insight:** Most business processes have a known structure. The workflow should be deterministic; only the *decisions within it* need to be intelligent.
+- **State machines** model workflows as a finite set of states with explicit transitions. Every valid path is declared at design time, making the system auditable and predictable.
+- **Hybrid workflows** combine deterministic nodes (validation, data retrieval, logging) with LLM-powered nodes (classification, generation, judgment) in the same graph.
+- **Implementation** centers on three components: an enum of states, a transition table, and node handlers that return the next state. A shared context object carries data between nodes.
+- **The key advantage** over autonomous agents is predictability: all paths are known, invalid transitions are caught, and every step is logged. The key tradeoff is flexibility -- workflow agents handle known processes well but cannot improvise when the process itself is unknown.
+- **Frameworks like LangGraph** (Module 7) are built on this pattern, and workflow agents are the easiest architecture to deploy and monitor in production (Module 11).
+
+In the next lesson, we bring everything together. You have now studied five distinct architectures -- ReAct, Plan-and-Execute, Self-Reflection, Routing, and Workflow agents. The final lesson in this module provides a **decision framework for choosing the right architecture** based on your problem's characteristics.

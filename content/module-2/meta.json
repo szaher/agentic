@@ -1,0 +1,62 @@
+{
+  "id": 2,
+  "title": "Prompting & Reasoning",
+  "description": "Prompt engineering techniques that unlock reliable agent behavior and structured reasoning",
+  "color": "#4fd1c5",
+  "lessons": [
+    {
+      "slug": "01-prompt-engineering-for-agents",
+      "title": "Prompt Engineering for Agents",
+      "description": "Why agent prompting is different from chatbot prompting",
+      "estimatedMinutes": 10,
+      "diagramTypes": ["comparison"],
+      "hasCode": true,
+      "hasQuiz": true
+    },
+    {
+      "slug": "02-chain-of-thought-reasoning",
+      "title": "Chain-of-Thought Reasoning",
+      "description": "CoT, zero-shot CoT, and step-by-step reasoning for complex tasks",
+      "estimatedMinutes": 12,
+      "diagramTypes": ["flowchart", "sequence"],
+      "hasCode": true,
+      "hasQuiz": true
+    },
+    {
+      "slug": "03-structured-outputs",
+      "title": "Structured Outputs",
+      "description": "Getting reliable JSON, function calls, and typed responses from LLMs",
+      "estimatedMinutes": 12,
+      "diagramTypes": ["flowchart"],
+      "hasCode": true,
+      "hasQuiz": true
+    },
+    {
+      "slug": "04-system-prompt-design",
+      "title": "System Prompt Design",
+      "description": "Crafting system prompts that define agent identity, boundaries, and behavior",
+      "estimatedMinutes": 12,
+      "diagramTypes": ["architecture"],
+      "hasCode": true,
+      "hasQuiz": true
+    },
+    {
+      "slug": "05-reasoning-models",
+      "title": "Reasoning Models and Extended Thinking",
+      "description": "How models like o1, o3, and Claude with extended thinking change agent design",
+      "estimatedMinutes": 10,
+      "diagramTypes": ["comparison", "sequence"],
+      "hasCode": true,
+      "hasQuiz": true
+    },
+    {
+      "slug": "06-prompt-patterns-lab",
+      "title": "Prompt Patterns Lab",
+      "description": "Hands-on: build a reasoning agent with progressively better prompts",
+      "estimatedMinutes": 15,
+      "diagramTypes": ["flowchart"],
+      "hasCode": true,
+      "hasQuiz": false
+    }
+  ]
+}

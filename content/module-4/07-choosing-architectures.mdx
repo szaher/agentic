@@ -1,0 +1,243 @@
+---
+title: "Choosing the Right Architecture"
+quiz:
+  - question: "A startup needs an agent to handle customer emails that fall into clear categories (billing, shipping, returns), each with well-defined resolution steps. Which architecture is the best fit?"
+    options:
+      - "ReAct, because it needs to reason about each email"
+      - "Plan-and-Execute, because it needs to create a plan for each response"
+      - "Routing with Workflow sub-agents, because inputs are classifiable and resolution steps are deterministic"
+      - "Self-Reflection, because response quality is critical"
+    correctIndex: 2
+  - question: "What is the most common mistake teams make when choosing an agent architecture?"
+    options:
+      - "Using too many tools"
+      - "Over-engineering: applying a complex architecture to a simple, well-defined task"
+      - "Writing too many tests"
+      - "Choosing an architecture before defining the problem"
+    correctIndex: 1
+  - question: "When should you add Self-Reflection to an existing architecture?"
+    options:
+      - "Always, since it improves every agent"
+      - "When the agent needs to run as fast as possible"
+      - "When output quality matters more than latency and cost, and errors are expensive"
+      - "Only when using Plan-and-Execute agents"
+    correctIndex: 2
+  - question: "What makes hybrid architectures powerful?"
+    options:
+      - "They eliminate the need for tool use"
+      - "They combine the strengths of multiple patterns, using different architectures for different branches of the problem"
+      - "They are simpler to build than single-pattern architectures"
+      - "They remove the need for human oversight"
+    correctIndex: 1
+---
+
+## Overview
+
+You have now studied six agent architectures: ReAct, Plan-and-Execute, Self-Reflection, Routing, and Workflow agents. Each one has distinct strengths. ReAct is flexible and adaptive. Plan-and-Execute handles complex multi-step problems. Self-Reflection improves output quality. Routing distributes work efficiently. Workflows provide deterministic control.
+
+But knowing what each architecture *does* is not the same as knowing *when to use it*. In practice, the hardest part of building an agent is not implementing the architecture -- it is choosing the right one in the first place. Pick too simple an architecture, and your agent will fail on complex tasks. Pick too complex an architecture, and you will waste tokens, add latency, and create debugging nightmares for a problem that did not need that sophistication.
+
+This lesson gives you a **decision framework** -- a systematic way to match problem characteristics to architecture patterns. We will also cover **hybrid architectures** that combine multiple patterns, and the **common mistakes** that teams make when choosing.
+
+## The Decision Framework
+
+Choosing an architecture starts with understanding your task. Ask a series of questions about the problem, and each answer narrows the set of architectures that fit.
+
+<MermaidDiagram chart={`flowchart TD
+    Start["What does your task look like?"] --> Q1{"Is the task well-defined<br/>with predictable steps?"}
+    Q1 -->|Yes| Workflow["Workflow Agent<br/>Deterministic control flow"]
+    Q1 -->|No| Q2{"Are there distinct<br/>input categories?"}
+    Q2 -->|Yes| Routing["Routing Agent<br/>Classify → delegate"]
+    Q2 -->|No| Q3{"Does it require<br/>multi-step planning?"}
+    Q3 -->|Yes| PlanExec["Plan-and-Execute<br/>Plan upfront, execute steps"]
+    Q3 -->|No| ReAct["ReAct Agent<br/>Reason-act loop"]
+    Workflow --> Q4{"Does quality justify<br/>extra latency + cost?"}
+    Routing --> Q4
+    PlanExec --> Q4
+    ReAct --> Q4
+    Q4 -->|Yes| AddReflect["Add Self-Reflection<br/>layer on top"]
+    Q4 -->|No| Done["Deploy chosen<br/>architecture"]
+    AddReflect --> Done
+    style Start fill:#ebf8ff,stroke:#3182ce
+    style Workflow fill:#c6f6d5,stroke:#38a169
+    style Routing fill:#fefcbf,stroke:#d69e2e
+    style PlanExec fill:#fed7d7,stroke:#e53e3e
+    style ReAct fill:#e9d8fd,stroke:#805ad5
+    style AddReflect fill:#feebc8,stroke:#dd6b20
+    style Done fill:#e2e8f0,stroke:#718096
+`} />
+
+Let's walk through each decision point.
+
+**Is the task well-defined with predictable steps?** If you can write out the exact steps the agent should follow before you start building, you have a workflow problem. Order processing, form validation, data pipeline orchestration -- these are tasks where the path is known. A Workflow agent gives you deterministic control flow, which means predictable behavior, easy debugging, and low cost. Do not add autonomy where you do not need it.
+
+**Are there distinct input categories?** If inputs naturally cluster into types that need different handling, Routing is your answer. Customer support (billing vs. shipping vs. returns), content moderation (text vs. image vs. video), or multi-language processing all have this shape. The router classifies the input, then delegates to a specialized sub-agent -- which itself might use any of the other patterns.
+
+**Does it require multi-step planning?** If the task is complex enough that the agent needs to create a plan before acting, Plan-and-Execute is the right fit. Research tasks, multi-file code changes, complex data analysis -- anything where the steps are not obvious upfront but need to be reasoned about, and where completing one step informs the next.
+
+**If none of the above, use ReAct.** For tasks that need flexibility and tool use but are not complex enough to warrant full planning, the ReAct loop is the right default. It is the most general-purpose architecture: reason, act, observe, repeat.
+
+**Should you add Self-Reflection?** This is not a standalone choice but a layer you add on top. If your domain has high stakes (legal, medical, financial), if errors are expensive to fix, or if quality matters more than speed, add a reflection step that critiques and refines the output before returning it.
+
+## Comparing Architectures
+
+Each architecture makes different tradeoffs. The following diagram rates all six patterns across five dimensions: **autonomy** (how much freedom the agent has), **predictability** (how consistent the behavior is), **implementation complexity** (how hard it is to build), **debugging ease** (how easy it is to find and fix problems), and **cost per task** (token usage and API calls).
+
+<MermaidDiagram chart={`graph LR
+    subgraph Legend["Rating Scale"]
+        L1["Low ●○○○○"]
+        L2["Medium ●●●○○"]
+        L3["High ●●●●●"]
+    end
+    subgraph WF["Workflow"]
+        WF1["Autonomy: Low"]
+        WF2["Predictability: High"]
+        WF3["Complexity: Low"]
+        WF4["Debug Ease: High"]
+        WF5["Cost: Low"]
+    end
+    subgraph RT["Routing"]
+        RT1["Autonomy: Low-Med"]
+        RT2["Predictability: Med-High"]
+        RT3["Complexity: Medium"]
+        RT4["Debug Ease: Medium"]
+        RT5["Cost: Low-Med"]
+    end
+    subgraph RA["ReAct"]
+        RA1["Autonomy: High"]
+        RA2["Predictability: Medium"]
+        RA3["Complexity: Low-Med"]
+        RA4["Debug Ease: Medium"]
+        RA5["Cost: Medium"]
+    end
+    subgraph PE["Plan-and-Execute"]
+        PE1["Autonomy: High"]
+        PE2["Predictability: Low-Med"]
+        PE3["Complexity: High"]
+        PE4["Debug Ease: Low-Med"]
+        PE5["Cost: High"]
+    end
+    subgraph SR["Self-Reflection"]
+        SR1["Autonomy: Medium"]
+        SR2["Predictability: Medium"]
+        SR3["Complexity: Medium"]
+        SR4["Debug Ease: Medium"]
+        SR5["Cost: Med-High"]
+    end
+    style Legend fill:#f7fafc,stroke:#a0aec0
+    style WF fill:#c6f6d5,stroke:#38a169
+    style RT fill:#fefcbf,stroke:#d69e2e
+    style RA fill:#e9d8fd,stroke:#805ad5
+    style PE fill:#fed7d7,stroke:#e53e3e
+    style SR fill:#feebc8,stroke:#dd6b20
+`} />
+
+The pattern is clear: **simpler architectures trade autonomy for predictability**, while **complex architectures trade predictability for flexibility**. There is no universally best choice -- only the best fit for your problem.
+
+## Architecture-to-Use-Case Matrix
+
+The decision framework gives you a process. The matrix below gives you a reference -- a quick lookup for common use cases and the architectures that fit them.
+
+| Use Case | Primary Architecture | Enhancement | Why |
+|---|---|---|---|
+| Customer support | Routing + Workflow | -- | Classifiable inputs, deterministic resolution |
+| Research assistant | Plan-and-Execute | Self-Reflection | Complex, multi-step, quality-sensitive |
+| Code generation | ReAct | Self-Reflection | Iterative tool use, needs self-correction |
+| Data pipeline orchestration | Workflow | -- | Fully deterministic, well-defined steps |
+| Content moderation | Routing | -- | Distinct categories, specialized handling |
+| Document summarization | ReAct | Self-Reflection | Straightforward tool use, quality matters |
+| Travel planning | Plan-and-Execute | Routing | Complex planning, multiple booking categories |
+| FAQ / Q&A bot | Workflow | -- | Simple retrieval, predictable flow |
+| Competitive analysis | Plan-and-Execute | Self-Reflection | Multi-source research, synthesis required |
+| DevOps incident response | Routing + ReAct | -- | Triage by type, then flexible investigation |
+
+Notice that the simplest use cases (FAQ bots, data pipelines) map to the simplest architecture (Workflow), while the most complex tasks (research, competitive analysis) require Plan-and-Execute with Self-Reflection. This is not a coincidence -- it reflects a fundamental principle: **match your architecture's complexity to your problem's complexity**.
+
+## Hybrid Architectures
+
+Real-world agents rarely use a single architecture in isolation. The most effective agents combine patterns, using each one where it fits best. This is the idea behind **hybrid architectures**.
+
+The most common hybrid pattern uses Routing as the top layer. The router classifies incoming tasks, then delegates each type to an agent built with a different architecture.
+
+<MermaidDiagram chart={`flowchart TD
+    Input["Incoming Request"] --> Router["Router Agent<br/>Classify task type"]
+    Router -->|Simple query| WF["Workflow Agent<br/>Look up → format → respond"]
+    Router -->|Complex research| PE["Plan-and-Execute Agent<br/>Plan → research → synthesize"]
+    Router -->|Code task| RA["ReAct Agent<br/>+ Self-Reflection<br/>Write → test → refine"]
+    Router -->|Unknown / edge case| Human["Escalate to Human"]
+    WF --> Output["Response"]
+    PE --> Output
+    RA --> Output
+    Human --> Output
+    style Input fill:#ebf8ff,stroke:#3182ce
+    style Router fill:#fefcbf,stroke:#d69e2e
+    style WF fill:#c6f6d5,stroke:#38a169
+    style PE fill:#fed7d7,stroke:#e53e3e
+    style RA fill:#e9d8fd,stroke:#805ad5
+    style Human fill:#f7fafc,stroke:#a0aec0
+    style Output fill:#e2e8f0,stroke:#718096
+`} />
+
+In this design, simple queries hit a fast, cheap Workflow agent. Complex research tasks go to a Plan-and-Execute agent that takes more time and tokens but produces thorough results. Code tasks get a ReAct agent with Self-Reflection for iterative refinement. And edge cases that do not fit any category are escalated to a human. Each branch uses the architecture that best matches its problem characteristics.
+
+Other common hybrid combinations include:
+
+- **Plan-and-Execute with ReAct steps** -- the planner creates a high-level plan, but each step is executed by a ReAct agent that can adapt and use tools flexibly
+- **Workflow with LLM decision nodes** -- a mostly deterministic pipeline where certain branch points use LLM reasoning instead of hardcoded rules
+- **ReAct with Routing sub-calls** -- a general-purpose ReAct agent that can delegate specialized sub-tasks to purpose-built agents
+
+The key insight is that architectures are composable. You are not locked into one pattern for your entire system. Use the simplest pattern that works for each part of the problem, and compose them together.
+
+## Common Mistakes
+
+Teams building their first agents consistently fall into two traps. Recognizing them will save you weeks of wasted effort.
+
+### Over-Engineering
+
+**Over-engineering** means applying a complex architecture to a problem that does not need it. The symptom: you build a Plan-and-Execute agent with Self-Reflection for a task that could be handled by a three-step Workflow.
+
+This happens because complex architectures feel more impressive, and because teams worry about edge cases before they have evidence that edge cases are a real problem. The cost is significant: more tokens per request, higher latency, harder debugging, and more failure modes. A Plan-and-Execute agent can fail at the planning stage, at any execution step, and at the replanning stage. A Workflow agent can only fail at predefined points.
+
+> **Rule of thumb:** Start with the simplest architecture that could work. If a Workflow handles 90% of your cases, ship the Workflow. Add complexity only when you have evidence -- from real usage data -- that the simpler approach is failing.
+
+### Under-Engineering
+
+**Under-engineering** is the opposite trap: using a simple loop for a task that genuinely requires planning and coordination. The symptom: your ReAct agent spins in circles on complex tasks, repeatedly trying the same approach, burning through tokens without making progress.
+
+This happens when teams prototype with ReAct (because it is the easiest to build) and then never upgrade, even as the task complexity grows. A ReAct agent working on a problem that requires coordinating ten steps in a specific order will waste enormous amounts of time rediscovering the order through trial and error -- time that a Plan-and-Execute agent would spend on a single planning step.
+
+> **Rule of thumb:** If your ReAct agent frequently takes more than 5-7 steps to complete a task, or if it often circles back to retry earlier steps, the task has outgrown the ReAct pattern. Consider Plan-and-Execute.
+
+### Ignoring the Escape Hatch
+
+A third mistake is building an agent without an **escalation path**. No architecture handles every input gracefully. When an agent encounters a task outside its competence, it should recognize that and escalate -- to a more capable agent, to a human, or to an error handler. Agents that try to handle everything end up handling nothing well.
+
+## Putting It All Together
+
+Here is a practical process for choosing an architecture for a new agent project:
+
+1. **Characterize the task.** Write down twenty example inputs. How varied are they? How many steps does each take? Are the steps predictable or emergent?
+
+2. **Walk the decision tree.** Use the framework from earlier in this lesson. Follow the questions and note which architecture the tree suggests.
+
+3. **Check the matrix.** Look up your use case in the architecture-to-use-case matrix. Does the suggestion match the decision tree? If they disagree, dig deeper into why.
+
+4. **Start simple.** Build the simplest architecture the decision tree suggests. Do not add Self-Reflection, Routing, or planning until you have evidence that you need it.
+
+5. **Measure and evolve.** Track success rate, token usage, latency, and failure modes. Let the data tell you when to upgrade. If your simple agent fails on 30% of tasks, that is evidence. If it fails on 2%, the complexity is not worth it.
+
+6. **Compose when needed.** When different input types need different architectures, use Routing to compose them into a hybrid. Do not force one architecture to handle everything.
+
+## Summary
+
+Choosing the right architecture is a design decision, not a technical one. The best architecture is not the most powerful -- it is the one that matches your problem's actual complexity.
+
+Here are the key ideas from this lesson:
+
+- Use the **decision framework**: well-defined tasks get Workflows, classifiable inputs get Routing, complex multi-step tasks get Plan-and-Execute, and general-purpose tasks get ReAct. Self-Reflection is an optional quality layer on top.
+- Architectures trade off along five dimensions: **autonomy, predictability, complexity, debugging ease, and cost**. Simpler architectures are more predictable and cheaper; complex ones are more flexible but harder to debug.
+- **Hybrid architectures** combine patterns using Routing as a top layer, delegating different task types to different agent architectures. This is how most production agents are built.
+- The two most common mistakes are **over-engineering** (complex architecture for a simple problem) and **under-engineering** (simple architecture for a complex problem). Start simple, measure, and evolve.
+- Always build an **escalation path** so the agent can hand off tasks it cannot handle.
+
+You have now completed Module 4. You understand the major agent architectures, when each one shines, and how to choose between them. But knowing which architecture to use is only half the challenge. Building it for production requires a different set of skills entirely. In **Module 5: Agent Design Patterns**, you will learn the software engineering patterns that make these architectures robust, maintainable, and production-ready: **tool registries** for managing growing tool sets, **middleware** for cross-cutting concerns like logging and auth, **context management** for keeping prompts under token limits, and **checkpointing** for recovering from failures mid-execution. These are the patterns that separate a prototype from a system you can deploy with confidence.

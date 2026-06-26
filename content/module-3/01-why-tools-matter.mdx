@@ -1,0 +1,210 @@
+---
+title: "Why Tools Matter"
+quiz:
+  - question: "Why couldn't the fact-checker agent from Module 2 verify claims, despite having strong reasoning abilities?"
+    options:
+      - "Its system prompt was poorly designed"
+      - "It lacked access to tools that could retrieve external information"
+      - "The model was too small to handle fact-checking tasks"
+      - "It did not use Chain-of-Thought reasoning"
+    correctIndex: 1
+  - question: "What is the correct relationship between an LLM and the tools it uses?"
+    options:
+      - "The LLM directly executes tool code inside its inference process"
+      - "The LLM sends raw API requests to external services on its own"
+      - "The LLM generates a structured tool request, and the host application executes it"
+      - "The tools run autonomously and feed results back to the LLM without any request"
+    correctIndex: 2
+  - question: "Which category of tools introduces permanent changes to external systems?"
+    options:
+      - "Information retrieval tools"
+      - "Computation tools"
+      - "Side-effect tools"
+      - "Formatting tools"
+    correctIndex: 2
+  - question: "What is the primary benefit of giving an LLM access to tools?"
+    options:
+      - "It makes the model's internal knowledge more accurate"
+      - "It transforms the model from a knowledge engine into an agent that can act on the world"
+      - "It reduces the cost of API calls by caching responses"
+      - "It eliminates the need for prompt engineering"
+    correctIndex: 1
+---
+
+## Overview
+
+In Module 2, we built a fact-checker agent that could reason brilliantly. It could break claims into verifiable components, identify logical fallacies, and weigh evidence with nuance. There was just one problem: it could not actually check any facts. Every "verification" was the model reasoning from its training data -- it had no way to search the web, query a database, or access any information beyond what it already knew. It was a fact-checker that could never look anything up.
+
+**Tools** fix that. They are the bridge between what an LLM knows and what it can do. This lesson explains why tools matter, what categories of tools exist, and -- critically -- how the boundary between the model and the tools actually works. Understanding this boundary is essential before we dive into the mechanics of function calling in the next lesson.
+
+## The Knowledge-Action Gap
+
+Large language models are extraordinary knowledge engines. They have absorbed vast amounts of text and can reason, summarize, translate, and generate with remarkable skill. But knowledge alone is not enough to be useful in the real world.
+
+Consider what an LLM **cannot do** without tools:
+
+- It cannot look up today's weather, stock prices, or breaking news
+- It cannot run a calculation and guarantee the answer is correct
+- It cannot read a file from your computer or query your database
+- It cannot send an email, create a calendar event, or post a message
+- It cannot call an external API to check inventory, book a flight, or process a payment
+
+Without tools, an LLM is a brilliant mind locked in a room with no phone, no computer, and no way to interact with the outside world. It can think about anything, but it cannot *do* anything.
+
+**Tool use** is what transforms an LLM from a passive knowledge engine into an active agent. Tools give the model hands -- the ability to reach out, gather fresh information, perform precise computations, and make changes in external systems.
+
+<MermaidDiagram chart={`graph LR
+    subgraph Without["LLM Without Tools"]
+        A["Training Data<br/>(static, may be outdated)"] --> B["Reasoning<br/>(can think)"]
+        B --> C["Text Response<br/>(can only talk)"]
+    end
+    subgraph With["LLM With Tools"]
+        D["Training Data"] --> E["Reasoning"]
+        E --> F["Tool Calls<br/>(can act)"]
+        F --> G["Real-World Results<br/>(search, compute, write, send)"]
+        G --> E
+    end
+    style Without fill:#fff5f5,stroke:#fc8181
+    style With fill:#f0fff4,stroke:#68d391
+`} />
+
+The diagram on the left shows an LLM operating alone: it reads from static training data, reasons about the input, and produces text. That is all it can do. The diagram on the right shows an LLM with tools: it still reasons, but now it can also call tools that interact with the real world -- and feed the results back into its reasoning. That feedback loop is what makes it an agent.
+
+## What Tools Unlock
+
+Let's make the gap concrete. Here is what changes when you give an LLM access to tools:
+
+<MermaidDiagram chart={`graph TD
+    subgraph NoTools["Without Tools"]
+        N1["'The weather in Paris is usually<br/>mild in spring' -- from training data"]
+        N2["'42 * 17 = 714' -- plausible<br/>but actually correct by luck"]
+        N3["'I cannot access your files<br/>or send emails'"]
+        N4["'Based on what I was trained on,<br/>the API might work like this...'"]
+    end
+    subgraph HasTools["With Tools"]
+        T1["web_search → 'Paris is 18°C<br/>and partly cloudy right now'"]
+        T2["calculator → '42 * 17 = 714'<br/>verified, guaranteed correct"]
+        T3["read_file, send_email →<br/>reads report.csv and emails summary"]
+        T4["call_api → live response<br/>with current data"]
+    end
+    NoTools -. "tools bridge<br/>the gap" .-> HasTools
+    style NoTools fill:#fff5f5,stroke:#fc8181
+    style HasTools fill:#f0fff4,stroke:#68d391
+`} />
+
+The difference is not just about capability -- it is about **reliability**. An LLM answering a math question from memory might get it right, or it might hallucinate a plausible but wrong answer. An LLM that calls a calculator tool *always* gets the math right. An LLM recalling an API's behavior from training data might describe an outdated version. An LLM that calls the API gets the current, real response.
+
+> **Key insight:** Tools do not just expand what an LLM can do -- they make the things it does more trustworthy. Retrieval replaces recall. Computation replaces guessing. Verified actions replace speculation.
+
+## Categories of Tools
+
+Not all tools are the same. They fall into four broad categories, each with different characteristics and risk profiles.
+
+**Information retrieval** tools bring external data into the model's context. These include web search, database queries, file reading, API lookups, and knowledge base searches. They are read-only -- they observe the world but do not change it. This makes them the safest category of tools: if something goes wrong, you have not altered any external state.
+
+**Computation** tools perform precise calculations that LLMs are unreliable at doing on their own. Calculators, code execution sandboxes, unit converters, and statistical functions all fall here. Like retrieval tools, they are typically side-effect-free -- they compute and return a result without changing anything.
+
+**Side-effect tools** are where things get interesting -- and risky. These tools make changes to external systems: sending emails, writing files, creating database records, posting to APIs, or triggering workflows. Once a side-effect tool executes, the action cannot easily be undone. An agent that sends the wrong email or deletes the wrong file has caused real-world harm.
+
+**Integration tools** connect the agent to external services and platforms. These include tools for interacting with GitHub, Slack, Jira, cloud providers, payment processors, and other systems. They often combine retrieval and side effects -- reading from a service and writing back to it.
+
+<MermaidDiagram chart={`graph TD
+    subgraph Retrieval["Information Retrieval"]
+        R1["Web search"]
+        R2["Database queries"]
+        R3["File reading"]
+        R4["API lookups"]
+    end
+    subgraph Compute["Computation"]
+        C1["Calculator"]
+        C2["Code execution"]
+        C3["Unit conversion"]
+        C4["Data analysis"]
+    end
+    subgraph SideEffect["Side Effects"]
+        S1["Send email"]
+        S2["Write files"]
+        S3["Create records"]
+        S4["Trigger workflows"]
+    end
+    subgraph Integration["External Integrations"]
+        I1["GitHub, Slack, Jira"]
+        I2["Cloud providers"]
+        I3["Payment systems"]
+        I4["Messaging platforms"]
+    end
+    Retrieval --- Compute
+    Compute --- SideEffect
+    SideEffect --- Integration
+    style Retrieval fill:#ebf8ff,stroke:#3182ce
+    style Compute fill:#e6fffa,stroke:#38b2ac
+    style SideEffect fill:#fefcbf,stroke:#d69e2e
+    style Integration fill:#fed7d7,stroke:#fc8181
+`} />
+
+The categories are color-coded by risk: blue and teal tools (retrieval and computation) are safe to run freely. Yellow tools (side effects) require caution -- you may want user confirmation before executing them. Red tools (integrations that combine read and write) require the most careful design, since they interact with systems that other people and processes depend on.
+
+Understanding these categories matters for agent design. When you are deciding which tools to give an agent, you are making a trust decision. A customer support agent might get retrieval tools (look up order status) but not side-effect tools (issue refunds) unless a human approves.
+
+## How Tool Use Actually Works
+
+This is the most important concept in this lesson, and the one that is most commonly misunderstood: **the LLM does not execute tools**. It never runs code, calls APIs, or touches your filesystem. Here is what actually happens:
+
+1. Your application sends the model a list of available tools, including their names, descriptions, and parameter schemas
+2. The model reads the user's request and decides whether a tool would help
+3. If the model wants to use a tool, it generates a **structured tool call** -- a JSON object specifying which tool to call and what arguments to pass
+4. The model *stops generating* and returns the tool call to your application
+5. **Your code** receives the tool call, validates it, and executes the actual function
+6. Your code sends the tool's result back to the model as a new message
+7. The model reads the result and either generates a final response or requests another tool call
+
+<MermaidDiagram chart={`sequenceDiagram
+    participant App as Your Application
+    participant LLM as Language Model
+    participant Tool as Tool Function
+
+    App->>LLM: User message + available tools
+    LLM->>App: Tool call request (JSON)
+    Note over LLM: Model STOPS here.<br/>It does NOT execute the tool.
+    App->>App: Validate tool call
+    App->>Tool: Execute function
+    Tool->>App: Return result
+    App->>LLM: Tool result message
+    LLM->>App: Final response (or another tool call)
+`} />
+
+This architecture is deliberate. By keeping tool execution in your application code, you maintain full control:
+
+- **Validation** -- you can check that the arguments are safe before executing
+- **Authorization** -- you can enforce permission checks (does this user have access?)
+- **Rate limiting** -- you can throttle how often expensive tools are called
+- **Logging** -- you can record every tool call for debugging and auditing
+- **Human-in-the-loop** -- you can pause and ask for confirmation before dangerous operations
+
+The model's job is to *decide* what tool to call and with what arguments. Your code's job is to *execute* that decision safely. This separation of concerns is what makes tool-using agents both powerful and controllable.
+
+> **Think of it this way:** The LLM is like a skilled operator giving instructions over a radio. It can analyze the situation and say "use wrench B on bolt 7 with 30 newton-meters of torque." But it is your application that holds the wrench and turns the bolt. The operator cannot physically do anything -- it can only communicate what should be done.
+
+## Revisiting the Fact-Checker
+
+Now we can see exactly what was missing from our Module 2 fact-checker. The agent had excellent reasoning -- it could decompose claims, identify what needed verification, and synthesize a judgment. But it had zero tools. Every time it needed to verify a fact, it had to fall back on its training data, which might be outdated, incomplete, or simply wrong.
+
+With tools, that same agent becomes dramatically more capable:
+
+- **Claim: "The Eiffel Tower is 330 meters tall"** -- without tools, the model recalls from training. With a `web_search` tool, it finds the current official measurement.
+- **Claim: "Python is the most popular programming language in 2026"** -- without tools, the model guesses based on trends it saw during training. With tools, it searches for the latest TIOBE or Stack Overflow survey data.
+- **Claim: "This company's revenue grew 40% last year"** -- without tools, the model cannot verify at all. With an `api_lookup` tool connected to a financial data service, it retrieves the actual numbers.
+
+The reasoning engine stays the same. The tools just give it access to ground truth. This is the pattern you will see throughout this module: **tools do not replace reasoning -- they make reasoning useful** by grounding it in real, current, verifiable information.
+
+## Summary
+
+Tools are what transform LLMs from knowledge engines into action-taking agents. Without tools, a model can only reason from its training data -- it cannot search, compute, verify, or act. Here are the key ideas from this lesson:
+
+- The **knowledge-action gap** is the fundamental limitation of LLMs without tools: they can think about anything but cannot do anything
+- Tools fall into four categories: **information retrieval** (safe, read-only), **computation** (safe, precise), **side effects** (risky, irreversible), and **external integrations** (complex, combining reads and writes)
+- The most critical architectural concept: **the LLM does not execute tools**. It generates a structured request, and your application code handles execution, validation, and control
+- This separation gives you **validation, authorization, rate limiting, logging, and human-in-the-loop** control over every tool invocation
+- Tools do not replace reasoning -- they **make reasoning useful** by grounding it in real-world data and actions
+
+In the next lesson, we will go from the "why" to the "how." **Function Calling Basics** covers the exact mechanics of how LLMs select and invoke functions -- schemas, parameters, structured responses, and the full request-response lifecycle.

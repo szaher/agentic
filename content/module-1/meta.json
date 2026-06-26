@@ -1,0 +1,71 @@
+{
+  "id": 1,
+  "title": "Foundations of LLM Agents",
+  "description": "What agents are, why they matter, and the core loop that powers every agentic system",
+  "color": "#68d391",
+  "lessons": [
+    {
+      "slug": "01-why-agents-matter",
+      "title": "Why Agents Matter",
+      "description": "The shift from static LLM calls to autonomous, goal-driven systems",
+      "estimatedMinutes": 10,
+      "diagramTypes": ["architecture"],
+      "hasCode": false,
+      "hasQuiz": true
+    },
+    {
+      "slug": "02-what-is-an-agent",
+      "title": "What Is an Agent?",
+      "description": "Defining agents: perception, reasoning, action, and the environment",
+      "estimatedMinutes": 12,
+      "diagramTypes": ["architecture", "flowchart"],
+      "hasCode": false,
+      "hasQuiz": true
+    },
+    {
+      "slug": "03-llm-capabilities-for-agents",
+      "title": "LLM Capabilities That Enable Agents",
+      "description": "Instruction following, in-context learning, reasoning, and tool use",
+      "estimatedMinutes": 10,
+      "diagramTypes": ["comparison"],
+      "hasCode": true,
+      "hasQuiz": true
+    },
+    {
+      "slug": "04-the-agent-loop",
+      "title": "The Agent Loop",
+      "description": "The observe-think-act cycle that drives every agent",
+      "estimatedMinutes": 12,
+      "diagramTypes": ["flowchart", "sequence"],
+      "hasCode": true,
+      "hasQuiz": true
+    },
+    {
+      "slug": "05-agent-ecosystem",
+      "title": "The Agent Ecosystem",
+      "description": "Landscape of frameworks, protocols, and standards shaping the field",
+      "estimatedMinutes": 10,
+      "diagramTypes": ["architecture"],
+      "hasCode": false,
+      "hasQuiz": true
+    },
+    {
+      "slug": "06-your-first-agent",
+      "title": "Your First Agent",
+      "description": "Build a simple agent from scratch using raw API calls",
+      "estimatedMinutes": 15,
+      "diagramTypes": ["flowchart"],
+      "hasCode": true,
+      "hasQuiz": false
+    },
+    {
+      "slug": "07-when-to-use-agents",
+      "title": "When to Use Agents",
+      "description": "Decision framework for when agents add value vs. simpler approaches",
+      "estimatedMinutes": 10,
+      "diagramTypes": ["flowchart", "comparison"],
+      "hasCode": false,
+      "hasQuiz": true
+    }
+  ]
+}

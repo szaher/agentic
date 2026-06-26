@@ -1,0 +1,347 @@
+---
+title: "Plan-and-Execute Agents"
+quiz:
+  - question: "What is the key architectural difference between ReAct and Plan-and-Execute agents?"
+    options:
+      - "ReAct uses tools while Plan-and-Execute does not"
+      - "Plan-and-Execute separates planning and execution into distinct phases, while ReAct interleaves them"
+      - "Plan-and-Execute cannot use tools, only reasoning"
+      - "ReAct creates a full plan upfront before taking any actions"
+    correctIndex: 1
+  - question: "When should a Plan-and-Execute agent trigger replanning?"
+    options:
+      - "After every single step, regardless of outcome"
+      - "Only when the final step fails"
+      - "When a step produces unexpected results that invalidate remaining steps in the plan"
+      - "Replanning should never happen — the original plan must always be followed"
+    correctIndex: 2
+  - question: "Which type of task is Plan-and-Execute LEAST well-suited for?"
+    options:
+      - "A research report requiring five sequential data-gathering steps"
+      - "A simple single-step question like 'What time is it in Tokyo?'"
+      - "Migrating a database schema across three environments"
+      - "Coordinating multiple API calls to build a travel itinerary"
+    correctIndex: 1
+  - question: "What role does the executor play in a Plan-and-Execute architecture?"
+    options:
+      - "It creates the initial plan and decides the order of steps"
+      - "It carries out individual steps from the plan using tools and returns results"
+      - "It only monitors the planner and logs errors"
+      - "It replaces the planner after the first step is complete"
+    correctIndex: 1
+---
+
+## Overview
+
+In the previous lesson, we explored **ReAct** -- an architecture where the agent interleaves reasoning and action one step at a time. ReAct is powerful and interpretable, but it has a blind spot: it never stops to think about the big picture. Each cycle of thought-action-observation decides only the *next* move, without considering how that move fits into a broader strategy. For simple tasks, that is fine. For complex, multi-step tasks -- writing a research report, planning a trip, migrating a codebase -- the lack of upfront planning can lead to wasted steps, missed dependencies, and meandering execution.
+
+**Plan-and-Execute** is an agent architecture that fixes this by splitting the work into two distinct phases. First, a **planner** analyzes the full task and produces an ordered list of steps. Then, an **executor** works through those steps one at a time, using tools and reasoning to complete each one. If something unexpected happens along the way, the agent can **replan** -- updating the remaining steps based on new information.
+
+This separation of planning from execution mirrors how humans tackle complex projects. You do not write a research paper by randomly searching for facts. You outline the sections first, then fill each one in. Plan-and-Execute agents do the same thing.
+
+## The Two-Phase Architecture
+
+The core idea is a clean separation of concerns. The planner thinks strategically -- it looks at the entire task and breaks it into manageable steps. The executor thinks tactically -- it focuses on completing one step well before moving to the next.
+
+<MermaidDiagram chart={`graph TD
+    U["User Task"] --> P["PLANNER<br/>Analyze task, create step list"]
+    P --> S1["Step 1"]
+    P --> S2["Step 2"]
+    P --> S3["Step 3"]
+    P --> SN["Step N"]
+    S1 --> E["EXECUTOR<br/>Execute each step with tools"]
+    S2 --> E
+    S3 --> E
+    SN --> E
+    E --> R{"Result<br/>unexpected?"}
+    R -- "No" --> NEXT["Continue to<br/>next step"]
+    R -- "Yes" --> RP["REPLANNER<br/>Update remaining steps"]
+    RP --> E
+    NEXT --> DONE["Final Response"]
+    style P fill:#ebf8ff,stroke:#3182ce
+    style E fill:#f0fff4,stroke:#68d391
+    style RP fill:#fefcbf,stroke:#d69e2e
+    style R fill:#fff5f5,stroke:#fc8181
+`} />
+
+Notice the three distinct components. The **planner** (blue) runs once at the beginning to create the step list. The **executor** (green) runs in a loop, completing one step at a time. The **replanner** (yellow) activates only when something unexpected happens -- a step fails, reveals new information, or makes the remaining plan obsolete. The decision point (red) is the critical junction where the agent decides whether to continue with the current plan or adapt.
+
+## Plan-and-Execute in Motion
+
+Let's trace through a concrete example. Imagine a user asks: "Compare the pricing and features of AWS Lambda, Google Cloud Functions, and Azure Functions for a startup running 1 million invocations per month."
+
+<MermaidDiagram chart={`sequenceDiagram
+    participant User
+    participant Planner
+    participant Executor
+    participant Tools
+
+    User->>Planner: Compare serverless pricing for 3 providers
+    Note over Planner: Analyze task, identify steps
+
+    Planner->>Executor: Plan:<br/>1. Search AWS Lambda pricing<br/>2. Search GCF pricing<br/>3. Search Azure Functions pricing<br/>4. Compare features<br/>5. Synthesize recommendation
+
+    Executor->>Tools: web_search("AWS Lambda pricing 1M invocations")
+    Tools->>Executor: AWS pricing data
+    Note over Executor: Step 1 complete ✓
+
+    Executor->>Tools: web_search("Google Cloud Functions pricing")
+    Tools->>Executor: GCF pricing data
+    Note over Executor: Step 2 complete ✓
+
+    Executor->>Tools: web_search("Azure Functions pricing")
+    Tools->>Executor: Azure data + "Azure also offers a Flex plan"
+    Note over Executor: Step 3 result reveals<br/>new info — replan needed
+
+    Executor->>Planner: Unexpected: Azure has Flex Consumption plan
+    Planner->>Executor: Revised plan:<br/>4. Research Azure Flex plan details<br/>5. Compare all features (including Flex)<br/>6. Synthesize recommendation
+
+    Executor->>Tools: web_search("Azure Functions Flex Consumption plan")
+    Tools->>Executor: Flex plan details
+    Note over Executor: Steps 4-6 continue...
+
+    Executor->>User: Final comparison report
+`} />
+
+This sequence shows the full lifecycle. The planner creates a five-step plan upfront. The executor works through steps 1 through 3 without issues. But step 3 reveals something the planner did not anticipate -- Azure has a new Flex Consumption plan that changes the comparison. Rather than ignoring this or blindly continuing, the agent replans: it inserts a new research step and adjusts the remaining steps accordingly. The final output is more thorough because the agent adapted.
+
+## How It Compares to ReAct
+
+The difference between ReAct and Plan-and-Execute is the difference between navigating turn-by-turn and studying the map first.
+
+**ReAct** decides one action at a time. After each observation, it thinks about what to do *next* -- but only next. It has no explicit representation of the full task or how far along it is. This makes it excellent for tasks where the path forward is unclear or changes rapidly, but it can lead to inefficient execution on structured problems.
+
+**Plan-and-Execute** creates a complete plan before taking any action. It knows how many steps remain, what depends on what, and where the goal is. This makes it excellent for complex, multi-step tasks where coordination matters, but it adds overhead for simple tasks that do not need a plan.
+
+| Aspect | ReAct | Plan-and-Execute |
+|--------|-------|-----------------|
+| Planning | None -- decides action-by-action | Explicit upfront plan |
+| Visibility | Sees only the current step | Sees the full task structure |
+| Adaptability | Naturally flexible (no plan to break) | Requires explicit replanning |
+| Efficiency on complex tasks | Can meander or repeat work | Structured, avoids redundancy |
+| Overhead | Low -- just think and act | Higher -- planning takes time and tokens |
+| Progress tracking | Difficult -- no step list | Easy -- check off completed steps |
+
+> **Key insight:** ReAct and Plan-and-Execute are not competitors -- they are tools for different situations. ReAct excels at exploratory, open-ended tasks. Plan-and-Execute excels at structured, multi-step tasks where you can anticipate the steps. Many real-world agents combine both: Plan-and-Execute at the top level, with ReAct inside the executor for individual steps.
+
+## Implementing a Plan-and-Execute Agent
+
+Let's build a Plan-and-Execute agent from scratch. The implementation has three core components: a planner that generates a step list, an executor that carries out each step, and a replanning check that decides whether the plan needs updating.
+
+<CodeBlock code={`import json
+from anthropic import Anthropic
+
+client = Anthropic()
+
+PLANNER_SYSTEM = """You are a planning agent. Given a user task, break it down
+into a numbered list of concrete steps. Each step should be a single, actionable
+item that can be executed independently.
+
+Output your plan as a JSON array of strings. Example:
+["Search for X", "Analyze the results of X", "Compare X with Y", "Write summary"]
+
+Rules:
+- Each step should be specific and actionable
+- Steps should be in logical order
+- Include 3-8 steps (no more, no less)
+- Do not include meta-steps like "start" or "finish"
+"""
+
+EXECUTOR_SYSTEM = """You are an execution agent. You receive a single step to
+complete and the results of any previous steps. Execute the current step
+thoroughly and report your findings.
+
+You have access to tools. Use them when the step requires external information.
+Report what you found and whether anything unexpected came up.
+"""
+
+REPLANNER_SYSTEM = """You are a replanning agent. You receive:
+1. The original task
+2. Steps completed so far with their results
+3. The remaining steps in the current plan
+4. What unexpected information was discovered
+
+Decide whether the remaining steps need to change. If yes, output a revised
+list of remaining steps as a JSON array. If no, output the original remaining
+steps unchanged. Always output a JSON array of strings.
+"""
+
+def create_plan(task: str) -> list[str]:
+    """Phase 1: Generate a step-by-step plan for the task."""
+    response = client.messages.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=1024,
+        system=PLANNER_SYSTEM,
+        messages=[{"role": "user", "content": task}],
+    )
+    return json.loads(response.content[0].text)
+
+
+def execute_step(step: str, context: list[dict]) -> dict:
+    """Phase 2: Execute a single step with context from prior steps."""
+    context_str = ""
+    if context:
+        context_str = "Previous step results:\\n"
+        for c in context:
+            context_str += f"- {c['step']}: {c['result']}\\n"
+
+    prompt = f"{context_str}\\nNow execute this step: {step}"
+    response = client.messages.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=2048,
+        system=EXECUTOR_SYSTEM,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    return {
+        "step": step,
+        "result": response.content[0].text,
+    }
+
+
+def check_replan(task: str, completed: list[dict],
+                 remaining: list[str], unexpected: str) -> list[str]:
+    """Decide whether to replan and return updated remaining steps."""
+    prompt = f"""Original task: {task}
+
+Completed steps:
+{json.dumps([c['step'] for c in completed], indent=2)}
+
+Remaining steps:
+{json.dumps(remaining, indent=2)}
+
+Unexpected information: {unexpected}
+
+Should the remaining steps change? Output the remaining steps as a JSON array.
+"""
+    response = client.messages.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=1024,
+        system=REPLANNER_SYSTEM,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    return json.loads(response.content[0].text)
+
+
+def plan_and_execute(task: str) -> str:
+    """Full Plan-and-Execute loop."""
+    # Phase 1: Plan
+    print("📋 Planning...")
+    steps = create_plan(task)
+    print(f"Plan created with {len(steps)} steps:")
+    for i, step in enumerate(steps, 1):
+        print(f"  {i}. {step}")
+
+    # Phase 2: Execute
+    completed = []
+    remaining = steps.copy()
+
+    while remaining:
+        current_step = remaining.pop(0)
+        step_num = len(completed) + 1
+        print(f"\\n⚡ Executing step {step_num}: {current_step}")
+
+        result = execute_step(current_step, completed)
+        completed.append(result)
+
+        # Check for unexpected findings that might require replanning
+        if remaining and "unexpected" in result["result"].lower():
+            print("🔄 Unexpected findings detected — replanning...")
+            remaining = check_replan(
+                task, completed, remaining, result["result"]
+            )
+            print("Updated remaining steps:")
+            for i, step in enumerate(remaining, step_num + 1):
+                print(f"  {i}. {step}")
+
+    # Phase 3: Synthesize
+    print("\\n✅ All steps complete. Synthesizing response...")
+    synthesis_prompt = f"""Task: {task}
+
+Step results:
+{json.dumps([{"step": c["step"], "result": c["result"]} for c in completed], indent=2)}
+
+Synthesize a comprehensive final response from all step results.
+"""
+    response = client.messages.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=4096,
+        messages=[{"role": "user", "content": synthesis_prompt}],
+    )
+    return response.content[0].text
+
+
+# Run it
+result = plan_and_execute(
+    "Compare the pros and cons of PostgreSQL vs MongoDB "
+    "for a real-time analytics dashboard that ingests 10K events/second"
+)
+print(result)
+`} language="python" filename="plan_and_execute_agent.py" />
+
+Let's walk through the key design decisions in this implementation:
+
+**Separate system prompts for each role.** The planner, executor, and replanner each get a focused system prompt that defines their specific job. This prevents role confusion -- the planner never tries to execute, and the executor never tries to replan. This separation is the architectural backbone of Plan-and-Execute.
+
+**Context accumulation.** The `completed` list acts as the agent's working memory. Each executor call receives the results of all previous steps, so later steps can build on earlier findings. This is how step 4 ("Compare features") can reference the data gathered in steps 1 through 3.
+
+**Lightweight replanning trigger.** The code checks for the word "unexpected" in the executor's output as a simple heuristic. In a production system, you would use a more sophisticated check -- perhaps a dedicated LLM call that evaluates whether the result deviates from expectations. The key principle is that replanning should not happen on every step (too expensive) but should trigger when the plan is clearly stale.
+
+## Dynamic Replanning
+
+**Replanning** is what separates a good Plan-and-Execute agent from a rigid script. Without it, you just have a to-do list runner that blindly follows steps even when they no longer make sense.
+
+There are three common triggers for replanning:
+
+**Step failure.** A tool call fails, an API returns an error, or a search yields no results. The remaining steps that depended on that result need to be adjusted. For example, if a web search for pricing data returns nothing, the agent might replan to try a different search query or consult an alternative source.
+
+**New information.** A step reveals something the planner could not have anticipated. In our serverless comparison example, discovering Azure's Flex plan changed the scope of the comparison. The agent needs to incorporate this new information into remaining steps.
+
+**Goal refinement.** As the agent works through the task, it may realize the user's goal is different from what the planner assumed. For instance, a step might reveal that the user's "real-time analytics" requirement rules out one of the databases entirely, simplifying the remaining comparison.
+
+> **Connection to Module 2:** Replanning benefits enormously from **reasoning models** (lesson 05 in Module 2). Extended thinking allows the replanner to carefully evaluate what changed, why the current plan is insufficient, and what the revised plan should look like. A quick, shallow replan might miss subtle dependencies between steps. A reasoning model that thinks through the implications produces better revised plans.
+
+## Strengths and Weaknesses
+
+**Strengths of Plan-and-Execute:**
+
+- **Predictable structure.** You can see the full plan before any execution starts. This makes it easy to estimate how long a task will take, what resources it will need, and where it might fail.
+- **Progress tracking.** At any point, you know exactly which steps are done and which remain. This is invaluable for long-running tasks and for showing progress to users.
+- **Better for complex tasks.** Tasks with dependencies between steps benefit from upfront planning. The planner can identify that step 4 depends on steps 1-3 and order them correctly, while ReAct might discover this dependency only after starting step 4.
+- **Easier to debug.** When something goes wrong, you can inspect the plan, see which step failed, and understand the intended flow. Debugging a ReAct trace requires following the full thought-action-observation chain.
+- **Cost-efficient for structured work.** The planner runs once, creating an efficient roadmap. ReAct's per-step reasoning can accumulate significant token costs over many cycles.
+
+**Weaknesses of Plan-and-Execute:**
+
+- **Planning overhead.** The initial planning step costs time and tokens, even for tasks that turn out to be simple. A one-step task does not need a planner.
+- **Plan staleness.** The longer the plan, the more likely that later steps become irrelevant or wrong by the time the agent reaches them. Replanning helps but adds its own cost.
+- **Harder to implement.** Three components (planner, executor, replanner) are more complex than ReAct's single loop. Each needs its own prompt, and the handoffs between them must be carefully managed.
+- **Rigid when exploration is needed.** Some tasks require open-ended exploration where the next step depends entirely on what you just found. A plan constrains this exploration -- the agent may follow the plan instead of pursuing a promising unexpected lead.
+
+## When to Use Plan-and-Execute
+
+Plan-and-Execute is the right choice when:
+
+- The task has **multiple distinct steps** that need to happen in order
+- You need **progress visibility** -- users or systems need to know how far along the agent is
+- The task is **well-defined enough** to plan upfront, even if details may change
+- Steps have **dependencies** -- later steps need results from earlier ones
+- **Cost matters** -- avoiding redundant work saves tokens and API calls
+
+Stick with ReAct when:
+
+- The task is **simple** or **single-step** -- planning overhead is not worth it
+- The task is **highly exploratory** -- you cannot predict the steps in advance
+- **Speed matters more than structure** -- ReAct's immediate action beats planning delay
+- The environment is **rapidly changing** -- plans go stale faster than they can be created
+
+## Summary
+
+**Plan-and-Execute** agents separate thinking from doing. The planner creates a structured roadmap, the executor follows it step by step, and the replanner adapts when reality diverges from the plan. Here are the key ideas from this lesson:
+
+- Plan-and-Execute splits agent behavior into **two distinct phases**: planning (create a step list) and execution (complete each step), unlike ReAct which interleaves reasoning and action in a single loop
+- The **planner** analyzes the full task and outputs an ordered list of steps; the **executor** carries out each step with access to tools and the results of prior steps
+- **Dynamic replanning** is triggered when a step fails, reveals new information, or changes the scope of the task -- it updates remaining steps without restarting from scratch
+- Plan-and-Execute excels at **complex, multi-step tasks** with dependencies and benefits from **progress tracking** and **predictability**, but adds **planning overhead** that is wasteful for simple tasks
+- The pattern maps naturally to **reasoning models** from Module 2 -- extended thinking in the planner produces higher-quality plans with better step decomposition
+
+In the next lesson, **Self-Reflection and Critique** adds a quality check after execution. Instead of returning the first answer, a self-reflecting agent evaluates its own output, identifies weaknesses, and iterates until the response meets a quality bar -- adding a feedback loop that Plan-and-Execute does not have on its own.

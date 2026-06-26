@@ -1,0 +1,397 @@
+---
+title: "LLM-as-Judge Evaluation"
+quiz:
+  - question: "What is the primary advantage of pointwise scoring over pairwise comparison for LLM-as-judge evaluation?"
+    options:
+      - "Pointwise scoring eliminates all forms of bias from the judge"
+      - "Each output is scored independently, so adding new outputs does not require re-evaluating existing ones"
+      - "Pointwise scoring always produces more accurate results than pairwise comparison"
+      - "It requires fewer LLM calls because no rubric is needed"
+    correctIndex: 1
+  - question: "Why is position bias a concern in pairwise comparison evaluation?"
+    options:
+      - "The judge LLM may systematically favor whichever response appears first (or last) regardless of quality"
+      - "Position bias causes the judge to always score both responses equally"
+      - "It only affects models with fewer than 100 billion parameters"
+      - "Position bias makes the judge ignore the rubric entirely"
+    correctIndex: 0
+  - question: "What does inter-rater agreement measure in LLM-as-judge systems?"
+    options:
+      - "How quickly multiple judges can evaluate the same output"
+      - "Whether the judge model agrees with the original agent's reasoning"
+      - "The consistency of scores when multiple judges (or the same judge across runs) evaluate the same output"
+      - "The total number of evaluation criteria in the rubric"
+    correctIndex: 2
+  - question: "When implementing calibration for an LLM judge, what is the purpose of including 'anchor examples' in the prompt?"
+    options:
+      - "To increase the token count so the model pays more attention"
+      - "To replace the rubric with concrete examples"
+      - "To provide reference points that ground the scoring scale with known-quality outputs"
+      - "To test whether the judge can identify trick questions"
+    correctIndex: 3
+---
+
+## Overview
+
+In Lesson 01, you saw why evaluating agents is fundamentally harder than evaluating traditional software -- non-deterministic outputs, multi-step reasoning, and subjective quality make simple pass/fail testing insufficient. Lessons 02 and 03 covered benchmarks and testing strategies that work well for tasks with verifiable answers. But what about the vast majority of agent outputs -- summaries, explanations, code reviews, plans -- where there is no single correct answer to check against?
+
+This is where **LLM-as-judge** evaluation enters the picture. Instead of writing brittle heuristics or relying solely on expensive human review, you use a language model itself as an automated evaluator. The judge LLM reads the agent's output, applies a structured **rubric**, and produces a score with reasoning. This approach scales to thousands of evaluations per hour while maintaining quality that correlates strongly with human judgment -- when done correctly.
+
+The idea connects directly to the debate and consensus patterns from Module 9, Lesson 06. In that lesson, a judge agent synthesized the strongest arguments from a structured debate. Here, you formalize that judge role into a reusable evaluation framework: the judge no longer mediates a live debate but instead scores recorded outputs against explicit criteria. Think of it as moving from a courtroom trial (live, interactive) to a grading rubric (systematic, repeatable).
+
+## The LLM-as-Judge Pipeline
+
+The core pipeline is straightforward: an agent produces output, you pair it with a scoring rubric, a judge LLM evaluates the output against that rubric, and you collect structured scores. The power lies in the rubric design and the calibration techniques you apply around this basic loop.
+
+<MermaidDiagram chart={`flowchart TD
+    AO[Agent Output] --> PP[Prompt Assembly]
+    RB[Scoring Rubric] --> PP
+    REF[Reference Answer<br/>optional] --> PP
+    PP --> JM[Judge LLM]
+    JM --> SS[Structured Score]
+    SS --> DB[(Score Database)]
+    DB --> AN[Analysis &<br/>Dashboards]
+
+    subgraph Calibration["Calibration Layer"]
+        ANC[Anchor Examples] --> PP
+        SS --> PB[Position Bias<br/>Check]
+        SS --> IR[Inter-Rater<br/>Agreement]
+        PB --> QC[Quality Control]
+        IR --> QC
+    end
+
+    style Calibration fill:#fefcbf,stroke:#d69e2e
+    style AO fill:#e9d8fd,stroke:#805ad5,color:#1a202c
+    style JM fill:#ebf8ff,stroke:#3182ce
+    style SS fill:#f0fff4,stroke:#38a169
+    style DB fill:#fed7d7,stroke:#e53e3e
+`} />
+
+The rubric is the most critical component. A vague rubric ("rate quality from 1-5") produces inconsistent, meaningless scores. A well-designed rubric specifies exactly what each score level means, with concrete indicators that leave minimal room for interpretation.
+
+## Pointwise Scoring
+
+**Pointwise scoring** is the simplest LLM-as-judge approach. The judge evaluates a single output against a rubric and assigns a score on a defined scale. Each output is scored independently -- the judge does not compare it to other outputs.
+
+A rubric for pointwise scoring typically defines discrete levels with explicit criteria:
+
+- **Score 5 (Excellent):** Fully addresses the question with accurate, complete information. Reasoning is clear and well-structured. No factual errors.
+- **Score 4 (Good):** Addresses the question with mostly accurate information. Minor gaps or slightly unclear reasoning.
+- **Score 3 (Adequate):** Partially addresses the question. Some inaccuracies or significant gaps in reasoning.
+- **Score 2 (Poor):** Misses key aspects of the question. Multiple factual errors or confused reasoning.
+- **Score 1 (Failing):** Does not address the question meaningfully. Major errors or incoherent response.
+
+The advantage of pointwise scoring is its **scalability**: adding new outputs to your evaluation set does not require re-evaluating existing ones. If you have 1,000 agent outputs to evaluate, you make 1,000 independent judge calls. The disadvantage is that absolute scores are **harder to calibrate** than relative comparisons -- different judges (or the same judge on different days) may drift in how strictly they apply the rubric.
+
+## Pairwise Comparison
+
+**Pairwise comparison** sidesteps the calibration problem by asking the judge a simpler question: "Which of these two outputs is better?" Instead of assigning absolute scores, the judge compares two outputs head-to-head and picks a winner.
+
+<MermaidDiagram chart={`sequenceDiagram
+    participant E as Evaluator
+    participant J as Judge LLM
+    participant S as Score Tracker
+
+    E->>J: Compare Output A vs Output B<br/>with rubric criteria
+    J->>E: Winner: B, Reasoning: "..."
+
+    Note over E: Swap positions to check bias
+
+    E->>J: Compare Output B vs Output A<br/>(swapped order)
+    J->>E: Winner: B, Reasoning: "..."
+
+    E->>S: Consistent result → high confidence
+    Note over S: If inconsistent → flag for review
+
+    E->>J: Compare Output A vs Output C<br/>with rubric criteria
+    J->>E: Winner: A, Reasoning: "..."
+
+    E->>J: Compare Output B vs Output C<br/>with rubric criteria
+    J->>E: Winner: B, Reasoning: "..."
+
+    S->>S: Aggregate rankings:<br/>B > A > C
+`} />
+
+Humans find it easier to say "this is better than that" than to assign a number on an abstract scale, and LLMs exhibit the same pattern. Pairwise comparison typically achieves **higher agreement with human evaluators** than pointwise scoring. The trade-off is cost: comparing N outputs requires O(N^2) judge calls, whereas pointwise scoring requires only O(N).
+
+> **When to use which:** Use pointwise scoring when you need to evaluate large volumes of outputs independently -- monitoring production agents, running nightly regression suites, or grading thousands of test cases. Use pairwise comparison when you need high-confidence rankings of a smaller set -- comparing two model versions, selecting the best prompt variant, or validating that a new agent beats the baseline.
+
+## Reference-Based Grading
+
+**Reference-based grading** gives the judge a "gold standard" answer to compare against. Instead of evaluating the output in isolation (pointwise) or against another output (pairwise), the judge measures how well the agent's output aligns with a known-good reference.
+
+This approach works well when reference answers exist -- for example, expert-written solutions, curated documentation, or ground-truth datasets. The judge does not simply check for string matching; it evaluates semantic equivalence, completeness, and whether the agent's output conveys the same key information as the reference, even if phrased differently.
+
+Reference-based grading is particularly effective for **factual tasks** (question answering, information extraction, summarization) where you can define what a correct answer looks like. It is less useful for **creative or open-ended tasks** where multiple valid approaches exist and a single reference would unfairly penalize legitimate alternatives.
+
+The rubric for reference-based grading typically evaluates:
+
+- **Factual alignment:** Does the output contain the same key facts as the reference?
+- **Completeness:** Does the output cover all important points from the reference?
+- **Accuracy:** Does the output avoid introducing information not present in the reference?
+- **Coherence:** Is the output well-organized, regardless of how it compares to the reference?
+
+## Calibration Techniques
+
+Raw LLM judge scores are only useful if they are **calibrated** -- meaning a score of 4 today means the same thing as a score of 4 next week, and a score of 4 from Judge A means roughly the same as a score of 4 from Judge B. Several techniques improve calibration.
+
+**Anchor examples** are the most effective calibration tool. You include 2-3 pre-scored examples directly in the judge's prompt, showing what a score of 5, 3, and 1 look like for your specific task. These **grounding examples** give the judge concrete reference points that anchor the abstract scoring scale to real outputs. Without anchors, the judge must invent its own interpretation of "what does a 4 look like?" -- and that interpretation drifts across calls.
+
+**Chain-of-thought scoring** requires the judge to explain its reasoning before producing a score. This is not just for transparency; it measurably improves consistency. When the judge must articulate *why* an output deserves a certain score, it is forced to check its reasoning against the rubric criteria rather than producing a gut-feeling number. Always extract the score from the structured output, not from the reasoning text.
+
+**Multi-judge ensembling** runs the same evaluation through multiple judge calls (either the same model with different temperatures or different models entirely) and aggregates the scores. This reduces variance and catches cases where a single judge call produces an outlier score. A median of three judge scores is more reliable than any single score.
+
+## Position Bias Mitigation
+
+**Position bias** is the most well-documented failure mode of LLM-as-judge systems. When performing pairwise comparison, the judge LLM systematically favors whichever response appears in a particular position -- typically the first response or the last response, depending on the model. This bias can be strong enough to override genuine quality differences.
+
+The standard mitigation is **position swapping**: evaluate each pair twice, once with Output A first and once with Output B first. If the judge picks the same winner regardless of position, the result is trustworthy. If the winner changes when you swap positions, the comparison is inconclusive and should be flagged for human review or additional evaluation.
+
+A more sophisticated approach uses **randomized presentation order** across your entire evaluation set. Instead of always presenting outputs in the same order, randomly shuffle which appears first. Over many evaluations, position bias cancels out in the aggregate statistics even if individual comparisons are affected.
+
+For pointwise scoring, position bias is less of a concern since there is only one output. However, **verbosity bias** is a related issue: judges tend to give higher scores to longer, more detailed responses even when the additional length adds no value. Mitigate this by explicitly instructing the judge to evaluate conciseness as a positive quality and to penalize padding.
+
+## Inter-Rater Agreement
+
+**Inter-rater agreement** measures how consistently multiple judges score the same output. In human evaluation research, this is typically measured using **Cohen's kappa** (for two raters) or **Fleiss' kappa** (for multiple raters). For LLM judges, you can compute the same statistics by running the same evaluation multiple times and measuring score consistency.
+
+A kappa score above 0.8 indicates strong agreement -- your judge is producing reliable, reproducible scores. A kappa between 0.6 and 0.8 suggests moderate agreement -- acceptable for directional insights but not for fine-grained comparisons. Below 0.6, the judge is too inconsistent to be useful, and you need to revise the rubric, add anchor examples, or switch to a more capable judge model.
+
+In practice, you should compute inter-rater agreement as part of your **evaluation validation** workflow: before trusting a judge's scores in production, run it on a calibration set where you have human ground-truth scores and verify that the judge agrees with humans at an acceptable level.
+
+## Implementing an LLM Judge
+
+The following implementation builds a reusable LLM judge with structured rubrics, anchor examples, and position bias detection. It supports both pointwise scoring and pairwise comparison:
+
+<CodeBlock code={`import anthropic
+import json
+import random
+from dataclasses import dataclass
+
+client = anthropic.Anthropic()
+JUDGE_MODEL = "claude-sonnet-4-20250514"
+
+
+@dataclass
+class JudgeResult:
+    score: int | None          # Pointwise score (1-5)
+    winner: str | None         # Pairwise winner ("A" or "B")
+    reasoning: str             # Judge's chain-of-thought
+    confidence: str            # "high", "medium", or "low"
+    bias_flag: bool = False    # True if position swap was inconsistent
+
+
+# --- Rubric Definition ---
+
+RUBRIC = """Evaluate the response on a 1-5 scale using these criteria:
+
+**Correctness (40%):** Are the facts accurate? Is the reasoning sound?
+**Completeness (30%):** Does the response address all parts of the question?
+**Clarity (20%):** Is the response well-organized and easy to follow?
+**Conciseness (10%):** Does the response avoid unnecessary padding or repetition?
+
+Scoring guide:
+- 5: Exceptional on all criteria. Could be used as a reference answer.
+- 4: Strong on all criteria with minor gaps.
+- 3: Adequate but with notable weaknesses in one or more criteria.
+- 2: Significant issues in correctness, completeness, or clarity.
+- 1: Fails to meaningfully address the question.
+"""
+
+ANCHOR_EXAMPLES = """
+## Anchor Examples
+
+### Example: Score 5
+Question: "What is a race condition?"
+Response: "A race condition occurs when two or more threads access shared
+data concurrently, and the outcome depends on the timing of their
+execution. For example, if two threads both read a counter, increment it,
+and write it back, the final value depends on which thread writes last.
+The fix is synchronization: mutexes, locks, or atomic operations ensure
+only one thread modifies the data at a time."
+Reasoning: Accurate definition, concrete example, and solution. Concise.
+
+### Example: Score 3
+Question: "What is a race condition?"
+Response: "A race condition is a bug in concurrent programming. It happens
+when threads interfere with each other. You should use locks to fix it."
+Reasoning: Correct direction but vague. No example. "Interfere" is imprecise.
+
+### Example: Score 1
+Question: "What is a race condition?"
+Response: "A race condition is when your code runs too slowly because
+of too many function calls competing for CPU time."
+Reasoning: Fundamentally incorrect. Confuses concurrency bugs with
+performance issues.
+"""
+
+
+def pointwise_score(question: str, response: str) -> JudgeResult:
+    """Score a single response against the rubric."""
+    prompt = f"""{RUBRIC}
+
+{ANCHOR_EXAMPLES}
+
+Now evaluate this response:
+
+**Question:** {question}
+
+**Response:** {response}
+
+Provide your evaluation as JSON:
+{{
+  "reasoning": "Step-by-step evaluation against each criterion",
+  "score": <1-5>,
+  "confidence": "high|medium|low"
+}}"""
+
+    result = client.messages.create(
+        model=JUDGE_MODEL,
+        max_tokens=1024,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    verdict = json.loads(result.content[0].text)
+
+    return JudgeResult(
+        score=verdict["score"],
+        winner=None,
+        reasoning=verdict["reasoning"],
+        confidence=verdict["confidence"],
+    )
+
+
+def pairwise_compare(
+    question: str,
+    response_a: str,
+    response_b: str,
+    swap: bool = False,
+) -> dict:
+    """Compare two responses, optionally swapping their positions."""
+    if swap:
+        first, second = response_b, response_a
+        label_first, label_second = "B", "A"
+    else:
+        first, second = response_a, response_b
+        label_first, label_second = "A", "B"
+
+    prompt = f"""{RUBRIC}
+
+Compare these two responses to the question and determine which is better.
+
+**Question:** {question}
+
+**Response 1:**
+{first}
+
+**Response 2:**
+{second}
+
+Evaluate BOTH responses against each rubric criterion, then pick a winner.
+Do NOT let response length influence your judgment.
+
+Provide your evaluation as JSON:
+{{
+  "reasoning": "Criterion-by-criterion comparison",
+  "winner": "Response 1" or "Response 2",
+  "confidence": "high|medium|low"
+}}"""
+
+    result = client.messages.create(
+        model=JUDGE_MODEL,
+        max_tokens=1024,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    verdict = json.loads(result.content[0].text)
+
+    # Map back to original labels
+    if verdict["winner"] == "Response 1":
+        mapped_winner = label_first
+    else:
+        mapped_winner = label_second
+
+    return {"winner": mapped_winner, **verdict}
+
+
+def pairwise_with_bias_check(
+    question: str,
+    response_a: str,
+    response_b: str,
+) -> JudgeResult:
+    """Run pairwise comparison with position-swap bias detection."""
+
+    # Evaluate in both orderings
+    result_normal = pairwise_compare(question, response_a, response_b, swap=False)
+    result_swapped = pairwise_compare(question, response_a, response_b, swap=True)
+
+    consistent = result_normal["winner"] == result_swapped["winner"]
+
+    return JudgeResult(
+        score=None,
+        winner=result_normal["winner"] if consistent else None,
+        reasoning=(
+            f"Normal: {result_normal['reasoning']}\\n\\n"
+            f"Swapped: {result_swapped['reasoning']}"
+        ),
+        confidence="high" if consistent else "low",
+        bias_flag=not consistent,
+    )
+
+
+# --- Usage ---
+
+question = "Explain the CAP theorem and its implications for distributed systems."
+
+response_a = (
+    "The CAP theorem states that a distributed system can provide at most "
+    "two of three guarantees: Consistency (all nodes see the same data), "
+    "Availability (every request gets a response), and Partition tolerance "
+    "(the system works despite network splits). Since network partitions "
+    "are unavoidable in practice, the real choice is between CP (consistent "
+    "but may reject requests during partitions) and AP (always available "
+    "but may return stale data). Modern systems like DynamoDB choose AP "
+    "with tunable consistency, while systems like Spanner choose CP with "
+    "high availability through engineering."
+)
+
+response_b = (
+    "CAP theorem is about databases. You can only pick two of consistency, "
+    "availability, and partition tolerance. Most systems pick availability."
+)
+
+# Pointwise scoring
+print("=== Pointwise Scoring ===")
+score_a = pointwise_score(question, response_a)
+score_b = pointwise_score(question, response_b)
+print(f"Response A: {score_a.score}/5 ({score_a.confidence} confidence)")
+print(f"Response B: {score_b.score}/5 ({score_b.confidence} confidence)")
+
+# Pairwise comparison with bias check
+print("\\n=== Pairwise Comparison ===")
+comparison = pairwise_with_bias_check(question, response_a, response_b)
+if comparison.bias_flag:
+    print("Position bias detected -- result inconclusive")
+else:
+    print(f"Winner: Response {comparison.winner} ({comparison.confidence} confidence)")
+`} language="python" filename="llm_judge.py" />
+
+Several design choices in this implementation deserve attention. The rubric breaks evaluation into **weighted criteria** (correctness, completeness, clarity, conciseness) rather than asking for a single holistic score -- this forces the judge to evaluate each dimension and produces more consistent results. The **anchor examples** are embedded directly in the prompt, grounding the abstract 1-5 scale with concrete reference points. The `pairwise_with_bias_check` function runs every comparison twice with swapped positions, automatically flagging cases where the winner changes -- these are unreliable and should be escalated to human review or a stronger judge model.
+
+Notice that the judge uses `claude-sonnet-4-20250514` rather than a larger model. In practice, the judge model should be **at least as capable** as the agent being evaluated. Using a weaker model to judge a stronger model's output produces unreliable scores -- the judge cannot recognize quality it cannot itself produce. When evaluating outputs from a frontier model, use the same frontier model (or a different one) as the judge.
+
+## Connecting to Debate-as-Evaluation
+
+In Module 9, Lesson 06, you built adversarial debate systems where a proposer, challenger, and judge collaborate to improve answer quality. That same debate structure can be repurposed as an **evaluation technique**. Instead of using debate to generate better answers, you use it to generate better *evaluations*.
+
+The approach works like this: two judge agents independently score an output, and if they disagree, they debate their reasoning. A meta-judge reads the debate transcript and renders a final verdict. This **judge debate** pattern is particularly useful for ambiguous cases where reasonable evaluators might disagree -- the debate forces each judge to articulate *why* it assigned a particular score, surfacing criteria that a single judge might apply inconsistently.
+
+This is more expensive than a single judge call, but it produces evaluation scores that are more trustworthy for high-stakes decisions -- choosing between model versions, deciding whether an agent is ready for production, or evaluating safety-critical outputs where a wrong evaluation could have real consequences.
+
+## Summary
+
+**LLM-as-judge** evaluation uses language models to score agent outputs at scale, bridging the gap between cheap-but-brittle automated metrics and expensive-but-accurate human review. **Pointwise scoring** evaluates individual outputs against a structured rubric, scaling linearly with the number of outputs. **Pairwise comparison** asks which of two outputs is better, achieving higher agreement with human evaluators at the cost of quadratic scaling. **Reference-based grading** measures outputs against known-good answers, working best for factual tasks.
+
+**Calibration** is essential: without **anchor examples**, **chain-of-thought scoring**, and **multi-judge ensembling**, raw judge scores drift and lose meaning. **Position bias** -- the tendency to favor responses based on their presentation order -- must be actively mitigated through position swapping or randomized ordering. **Inter-rater agreement** (measured by Cohen's or Fleiss' kappa) tells you whether your judge is reliable enough to trust.
+
+The debate patterns from Module 9, Lesson 06 connect naturally to evaluation: structured disagreement between judges produces more trustworthy scores for ambiguous cases, just as debate between agents produces more trustworthy answers.
+
+In the next lesson, you will explore **tracing and debugging** -- the complementary skill of understanding *why* an agent produced a particular output, so you know what to fix when the judge identifies a problem.

@@ -1,0 +1,232 @@
+---
+title: "The Architecture Landscape"
+quiz:
+  - question: "Why did the research agent from Module 3 sometimes go in circles or miss important steps?"
+    options:
+      - "The tools it used were poorly designed"
+      - "The LLM model was too small for research tasks"
+      - "It lacked a structured architecture to guide its reasoning and actions"
+      - "It did not have access to enough tools"
+    correctIndex: 2
+  - question: "Which agent architecture separates the planning phase from the execution phase?"
+    options:
+      - "Simple loop"
+      - "ReAct"
+      - "Reflection"
+      - "Plan-and-Execute"
+    correctIndex: 3
+  - question: "On the autonomy spectrum, which architecture gives the developer the MOST control over agent behavior?"
+    options:
+      - "Simple loop"
+      - "ReAct"
+      - "Workflow / State Machine"
+      - "Plan-and-Execute"
+    correctIndex: 2
+  - question: "What is the primary benefit of the Reflection architecture pattern?"
+    options:
+      - "It eliminates the need for tools entirely"
+      - "It allows the agent to critique and revise its own output before delivering it"
+      - "It routes requests to different specialized models"
+      - "It plans all steps upfront before executing any of them"
+    correctIndex: 1
+---
+
+## Overview
+
+In Module 3, we built a research agent that could search the web, read pages, and write reports. It worked -- sometimes impressively well. But if you ran it enough times, you noticed problems. Sometimes it searched for the same thing twice. Sometimes it read a page, ignored the results, and went off on a tangent. Sometimes it stopped too early, missing important sources. Sometimes it kept going long after it had enough information.
+
+These are not bugs in the code. The tools worked perfectly. The LLM was capable. The problem was that our agent had no **architecture** -- no deliberate structure governing how it decided what to do next, when to stop, or how to recover from mistakes. It was a simple loop: get the user's request, let the LLM pick a tool, execute it, repeat until the LLM decides to stop. Every decision was fully delegated to the model's judgment in the moment.
+
+That approach has a ceiling. This lesson introduces the concept of **agent architecture** -- the structural patterns that govern how an agent thinks, acts, and self-corrects. We will survey six fundamental architectures, understand when each one shines, and build a mental map for the deep dives in the rest of this module.
+
+## Why Architecture Matters
+
+When you build a traditional application, you do not just throw functions into a file and hope they call each other in the right order. You design the control flow. You decide what happens first, what depends on what, and how errors are handled. Agent architecture applies the same discipline to LLM-powered systems.
+
+Architecture matters for three reasons:
+
+**Reliability.** A well-architected agent produces consistent results across runs. The simple loop gives the LLM complete freedom at every step, which means its behavior can vary wildly between runs. Architecture constrains that freedom in productive ways -- ensuring the agent follows a logical progression and does not skip critical steps.
+
+**Predictability.** When something goes wrong, you need to understand *why*. An agent with clear architectural phases (plan, then execute, then reflect) gives you natural checkpoints. You can inspect the plan, see which execution step failed, and read the reflection. A simple loop with no structure gives you a flat log of interleaved thoughts and actions that is much harder to debug.
+
+**Debuggability.** Architecture creates seams in the system -- boundaries between phases where you can insert logging, validation, human approval, or fallback logic. Without architecture, the only seam is between the LLM and the tools. With architecture, you get rich control points throughout the agent's lifecycle.
+
+> **Key insight:** Agent architecture is not about restricting the LLM. It is about giving it the right structure so it can do its best work. Just like a good meeting agenda does not limit discussion -- it channels it toward a productive outcome.
+
+## A Taxonomy of Agent Architectures
+
+There are six fundamental architectures for LLM agents. Each one makes a different tradeoff between autonomy (letting the LLM decide everything) and control (imposing structure on the agent's behavior). Here is the full landscape:
+
+<MermaidDiagram chart={`graph TD
+    subgraph Architectures["Agent Architecture Taxonomy"]
+        SL["Simple Loop<br/>───<br/>LLM picks tools freely<br/>in an open-ended loop"]
+        RE["ReAct<br/>───<br/>Structured Thought → Action<br/>→ Observation cycle"]
+        PE["Plan-and-Execute<br/>───<br/>Plan all steps upfront,<br/>then execute sequentially"]
+        RF["Reflection<br/>───<br/>Generate → Critique<br/>→ Revise cycle"]
+        RO["Routing<br/>───<br/>Classify input, delegate<br/>to specialized handlers"]
+        WF["Workflow / State Machine<br/>───<br/>Deterministic control flow<br/>with LLM-powered nodes"]
+    end
+    SL --> RE
+    RE --> PE
+    PE --> RF
+    RF --> RO
+    RO --> WF
+    style Architectures fill:#f5f0ff,stroke:#b794f4
+    style SL fill:#fed7d7,stroke:#fc8181
+    style RE fill:#fefcbf,stroke:#d69e2e
+    style PE fill:#fefcbf,stroke:#d69e2e
+    style RF fill:#e6fffa,stroke:#38b2ac
+    style RO fill:#ebf8ff,stroke:#3182ce
+    style WF fill:#e2e8f0,stroke:#718096
+`} />
+
+The arrows show increasing structure, not a hierarchy. You do not "graduate" from one to the next. Each architecture is a tool in your toolbox, suited to different problems. Let's preview each one.
+
+## 1. Simple Loop
+
+The **simple loop** is what we built in Modules 1 and 3. The agent receives a user message, passes it to the LLM along with available tools, executes whatever tool the LLM requests, feeds the result back, and repeats until the LLM produces a final response.
+
+This architecture has zero imposed structure. The LLM has full autonomy over which tools to call, in what order, how many times, and when to stop. It is the easiest architecture to build -- you can implement one in twenty lines of code -- and for simple tasks, it works well.
+
+**Best suited for:** Simple, well-defined tasks where the LLM is unlikely to get lost. Single-turn tool calls. Quick prototypes. Tasks where the order of operations does not matter much.
+
+**Limitations:** No mechanism for planning ahead. No self-correction. No way to guarantee specific steps happen. Behavior varies between runs. Difficult to debug when things go wrong.
+
+## 2. ReAct (Reasoning + Acting)
+
+**ReAct** adds a single but powerful constraint to the simple loop: before every action, the agent must produce an explicit reasoning step. Instead of jumping straight from observation to tool call, the agent follows a strict Thought-Action-Observation cycle.
+
+The model *thinks* about what it knows so far and what it should do next. Then it takes an *action* (calls a tool). Then it reads the *observation* (the tool's result). Then it thinks again. This interleaving of reasoning and acting means the agent's decision-making process is visible and traceable in the transcript.
+
+**Best suited for:** Multi-step research and investigation. Tasks requiring adaptive reasoning -- where the next step depends on what you learned from the last one. Situations where you need an audit trail of the agent's thinking.
+
+**Limitations:** Still reactive rather than proactive. The agent plans only one step ahead. Can still go in circles if it does not recognize it has already explored a path.
+
+## 3. Plan-and-Execute
+
+**Plan-and-Execute** inverts the simple loop's approach entirely. Instead of figuring out the next step one turn at a time, the agent first creates a complete plan -- a numbered list of steps to achieve the goal. Then it executes those steps one by one, tracking progress. If a step fails or reveals new information, the agent can replan.
+
+This separation of planning and execution is powerful. The planning phase uses the LLM's full reasoning capacity to think about the problem holistically. The execution phase can be more mechanical, following the plan step by step.
+
+**Best suited for:** Complex, multi-step tasks with clear goals. Tasks where you can anticipate the steps needed. Situations where you want to show the user a plan before executing it. Long-running tasks where progress tracking matters.
+
+**Limitations:** The initial plan may be wrong or incomplete. Replanning adds latency. Overly rigid plans can prevent the agent from adapting to unexpected discoveries.
+
+## 4. Reflection (Generate-Critique-Revise)
+
+The **Reflection** architecture adds a quality-assurance loop. The agent generates an output, then critiques its own work, then revises based on that critique. This cycle can repeat multiple times until the output meets a quality threshold or a maximum iteration count.
+
+Reflection can be implemented with a single LLM playing both roles (generator and critic), or with separate LLM calls with different system prompts -- one optimized for generation and one for harsh critique. The key insight is that LLMs are often better at evaluating work than producing it on the first try, so giving them a chance to self-correct dramatically improves output quality.
+
+**Best suited for:** Tasks where output quality is critical -- writing, code generation, analysis. Situations where a first draft is easy but polishing is hard. Tasks with clear quality criteria that the critic can check against.
+
+**Limitations:** Each critique-revise cycle costs additional LLM calls. The agent might over-revise, making things worse. Without clear quality criteria, the critic can be vague or unhelpful.
+
+## 5. Routing (Classify and Delegate)
+
+**Routing** is fundamentally different from the architectures above. Instead of one agent doing everything, a router agent classifies the incoming request and delegates it to the most appropriate specialized handler. Each handler might use a different architecture, different tools, or even a different model.
+
+Think of it as a switchboard. A customer support system might route billing questions to a billing agent (with access to payment tools), technical issues to a troubleshooting agent (with access to diagnostic tools), and general questions to a knowledge-base agent (with access to documentation search).
+
+**Best suited for:** Systems that handle diverse request types. Situations where different requests need different tools, models, or safety guardrails. Multi-domain applications. Cost optimization -- routing simple requests to smaller, cheaper models.
+
+**Limitations:** The router itself can misclassify requests. Adding a new request type requires building a new handler. Handoff logic between agents can be complex.
+
+## 6. Workflow / State Machine
+
+The **Workflow** architecture provides the most structure. You define a directed graph of states and transitions, where each state represents a specific step in the process. Some states involve LLM calls (for reasoning, generation, or classification), while others are purely deterministic (data validation, API calls, conditional branching). The control flow follows the graph -- the LLM does not decide *what to do next*; the graph does.
+
+This is the architecture closest to traditional software engineering. You get the full power of LLMs at the nodes that need intelligence, while keeping everything else predictable and testable.
+
+**Best suited for:** Production systems with strict reliability requirements. Regulated domains (finance, healthcare) where you need auditability. Complex processes with well-defined steps. Situations where you need guaranteed execution of specific steps in a specific order.
+
+**Limitations:** Requires more upfront design. Less flexible -- adding a new capability means redesigning the graph. Can be over-engineered for simple tasks.
+
+## The Autonomy-Control Spectrum
+
+These architectures are not random alternatives. They fall along a spectrum from maximum LLM autonomy to maximum developer control:
+
+<MermaidDiagram chart={`graph LR
+    subgraph Spectrum["Autonomy ← → Control"]
+        SL["Simple<br/>Loop"]
+        RE["ReAct"]
+        PE["Plan-and-<br/>Execute"]
+        RF["Reflection"]
+        RO["Routing"]
+        WF["Workflow"]
+    end
+    SL --> RE --> PE --> RF --> RO --> WF
+    A1["🔓 LLM decides<br/>everything"] -.-> SL
+    WF -.-> A2["🔒 Developer decides<br/>control flow"]
+    style Spectrum fill:#f5f0ff,stroke:#b794f4
+    style SL fill:#fed7d7,stroke:#fc8181
+    style RE fill:#fefcbf,stroke:#d69e2e
+    style PE fill:#fefcbf,stroke:#d69e2e
+    style RF fill:#e6fffa,stroke:#38b2ac
+    style RO fill:#ebf8ff,stroke:#3182ce
+    style WF fill:#e2e8f0,stroke:#718096
+    style A1 fill:#fff,stroke:#fff,color:#e53e3e
+    style A2 fill:#fff,stroke:#fff,color:#2d3748
+`} />
+
+On the left, the simple loop gives the LLM full autonomy. Every decision -- what to do, when to do it, when to stop -- is made by the model. On the right, the workflow architecture gives the developer full control over the process, using the LLM only at specific nodes for specific tasks.
+
+Neither end of the spectrum is inherently better. The right position depends on your problem:
+
+- **High autonomy** works when the task is exploratory, the stakes are low, and you trust the model's judgment. Prototyping, brainstorming, open-ended research.
+- **High control** works when the task is well-defined, the stakes are high, and you need predictable, auditable behavior. Production pipelines, regulated processes, customer-facing systems.
+- **The middle ground** is where most real-world agents live. ReAct, Plan-and-Execute, and Reflection give you meaningful structure while still leveraging the LLM's ability to adapt and reason.
+
+## Combining Architectures
+
+In practice, production agents rarely use a single architecture in isolation. They combine patterns. A workflow agent might use ReAct at one of its nodes. A routing agent might delegate to a Plan-and-Execute agent for complex requests and a simple loop for straightforward ones. A Plan-and-Execute agent might use reflection on its final output before delivering it.
+
+<MermaidDiagram chart={`graph TD
+    subgraph Combined["Real-World Agent: Combined Architectures"]
+        Router["Router<br/>(classify request)"]
+        Router -->|simple query| SL["Simple Loop<br/>Agent"]
+        Router -->|complex task| PE["Plan-and-Execute<br/>Agent"]
+        Router -->|writing task| RF["Reflection<br/>Agent"]
+        PE --> PE_Reflect["Reflection<br/>(on final output)"]
+        SL --> Response["Response<br/>to User"]
+        PE_Reflect --> Response
+        RF --> Response
+    end
+    style Combined fill:#f5f0ff,stroke:#b794f4
+    style Router fill:#ebf8ff,stroke:#3182ce
+    style SL fill:#fed7d7,stroke:#fc8181
+    style PE fill:#fefcbf,stroke:#d69e2e
+    style RF fill:#e6fffa,stroke:#38b2ac
+    style PE_Reflect fill:#e6fffa,stroke:#38b2ac
+    style Response fill:#f0fff4,stroke:#68d391
+`} />
+
+This is why understanding all six architectures matters even if you only use two or three directly. Knowing the full landscape lets you pick the right building blocks and compose them into a system that matches your problem's actual requirements.
+
+## What is Coming in This Module
+
+This lesson is your map. The next six lessons are the territory:
+
+- **Lesson 02: ReAct** -- We will implement the Thought-Action-Observation cycle from scratch and see how explicit reasoning traces transform debugging.
+- **Lesson 03: Plan-and-Execute** -- We will build an agent that plans before acting, with support for dynamic replanning when things change.
+- **Lesson 04: Self-Reflection** -- We will add a generate-critique-revise loop and see how self-evaluation can catch errors the first pass missed.
+- **Lesson 05: Routing and Handoffs** -- We will build a router that classifies requests and delegates to specialized agents with different capabilities.
+- **Lesson 06: Workflow Agents** -- We will construct a state machine agent with deterministic control flow and LLM-powered decision nodes.
+- **Lesson 07: Choosing Architectures** -- We will build a decision framework for matching architectures to problems, drawing on everything from the module.
+
+By the end of this module, you will not just know *what* these architectures are -- you will know *how* to build them and *when* to use each one.
+
+## Summary
+
+Agent architecture is the structural pattern that governs how an agent decides what to do, in what order, and how it recovers from mistakes. Architecture matters because it determines your agent's reliability, predictability, and debuggability.
+
+- The **simple loop** gives the LLM full autonomy -- easy to build, hard to control
+- **ReAct** adds explicit reasoning before every action, creating traceable decision-making
+- **Plan-and-Execute** separates thinking from doing, enabling holistic planning and progress tracking
+- **Reflection** adds a critique-and-revise cycle, improving output quality through self-evaluation
+- **Routing** classifies inputs and delegates to specialized handlers, enabling multi-domain systems
+- **Workflow / State Machine** provides deterministic control flow with LLM-powered nodes, maximizing reliability
+- These architectures fall along an **autonomy-control spectrum** -- the right choice depends on your task's complexity, stakes, and need for predictability
+- Production agents typically **combine multiple architectures**, using routing to dispatch and different patterns at different stages
+
+In the next lesson, we will take the first step off the map and into the details. **ReAct: Reasoning + Acting** introduces the most influential agent architecture in the field -- and shows why making the LLM think out loud changes everything.

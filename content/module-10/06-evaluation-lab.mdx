@@ -1,0 +1,681 @@
+---
+title: "Evaluation Lab"
+---
+
+## Overview
+
+You have spent five lessons building a conceptual toolkit for agent evaluation. You understand why evaluation matters, how public benchmarks measure capability, what testing strategies apply at each level, how LLM-as-judge scoring works, and how tracing reveals what happens inside a running agent. Each of those lessons gave you a piece of the puzzle. This lesson assembles them into a single, working system.
+
+The **evaluation harness** you will build in this lesson is the engine that ties everything together. It takes a set of test cases with expected outcomes, runs your agent against each one, scores the results using an LLM judge, aggregates those scores into a report, and compares them against a saved baseline to detect regressions. When you change your agent's prompts, swap models, update tools, or refactor orchestration logic, the harness tells you whether the change helped, hurt, or had no effect -- before that change reaches users.
+
+This is a hands-on lesson. You will build the harness incrementally across four stages, with each stage producing working code that feeds into the next.
+
+## Architecture of the Evaluation Harness
+
+Before writing any code, look at the full system you are building. The architecture has five components connected in a pipeline. Test cases flow in one end, and a regression report comes out the other.
+
+<MermaidDiagram chart={`graph TD
+    subgraph Pipeline["Evaluation Harness Pipeline"]
+        direction TB
+        DS["Evaluation Dataset<br/>──────────────────<br/>Test cases with inputs,<br/>golden answers, metadata,<br/>and difficulty labels"]
+        AR["Agent Runner<br/>──────────────────<br/>Executes the agent per test case,<br/>captures full trace: tool calls,<br/>reasoning steps, final output"]
+        JG["LLM Judge<br/>──────────────────<br/>Scores each output against<br/>its golden answer using<br/>a rubric (0.0 – 1.0)"]
+        SA["Score Aggregation<br/>──────────────────<br/>Computes per-category and<br/>overall metrics, generates<br/>the eval report"]
+        RD["Regression Detector<br/>──────────────────<br/>Compares current scores<br/>against saved baseline,<br/>flags degradations"]
+        DS --> AR
+        AR --> JG
+        JG --> SA
+        SA --> RD
+    end
+    RD --> PASS["✅ Pass — No Regressions"]
+    RD --> FAIL["❌ Fail — Regressions Detected"]
+    style Pipeline fill:#ebf8ff,stroke:#3182ce
+    style PASS fill:#c6f6d5,stroke:#38a169
+    style FAIL fill:#fed7d7,stroke:#e53e3e
+`} />
+
+Each component is deliberately simple. The power comes from their composition: the dataset defines what to test, the runner executes it, the judge scores it, the aggregator summarizes it, and the regression detector decides whether you should merge the change or investigate further.
+
+## Stage 1: Define the Evaluation Dataset
+
+Every evaluation starts with data. An **evaluation dataset** is a collection of test cases, where each test case specifies an input to give the agent and the expected output you want back. Without golden answers, you have no ground truth. Without ground truth, you have no measurement.
+
+A well-structured test case includes more than just input and output. It carries metadata -- a category label for grouping, a difficulty rating for stratified analysis, and a unique identifier for tracking results across runs.
+
+<CodeBlock code={`import json
+from dataclasses import dataclass, field, asdict
+from typing import Optional
+
+
+@dataclass
+class EvalTestCase:
+    """A single evaluation test case with input, expected output, and metadata."""
+
+    id: str
+    input_text: str
+    golden_answer: str
+    category: str
+    difficulty: str = "medium"  # easy, medium, hard
+    metadata: dict = field(default_factory=dict)
+
+
+@dataclass
+class EvalDataset:
+    """A collection of test cases that can be saved and loaded."""
+
+    name: str
+    version: str
+    test_cases: list[EvalTestCase] = field(default_factory=list)
+
+    def add_case(self, case: EvalTestCase) -> None:
+        self.test_cases.append(case)
+
+    def filter_by_category(self, category: str) -> list[EvalTestCase]:
+        return [tc for tc in self.test_cases if tc.category == category]
+
+    def save(self, path: str) -> None:
+        with open(path, "w") as f:
+            json.dump(asdict(self), f, indent=2)
+
+    @classmethod
+    def load(cls, path: str) -> "EvalDataset":
+        with open(path) as f:
+            data = json.load(f)
+        cases = [EvalTestCase(**tc) for tc in data["test_cases"]]
+        return cls(name=data["name"], version=data["version"], test_cases=cases)
+
+
+# Build a dataset for a research agent
+dataset = EvalDataset(name="research-agent-eval", version="1.0")
+
+dataset.add_case(EvalTestCase(
+    id="fact-001",
+    input_text="What is the capital of France and what is its population?",
+    golden_answer="Paris, with a population of approximately 2.1 million in the city proper.",
+    category="factual",
+    difficulty="easy",
+))
+
+dataset.add_case(EvalTestCase(
+    id="reason-001",
+    input_text="Compare the trade-offs between microservices and monolithic architecture for a startup with 5 engineers.",
+    golden_answer="For a 5-person startup, a monolith is typically preferable: simpler deployment, less operational overhead, easier debugging, and faster iteration. Microservices add network complexity, require service discovery, and demand DevOps maturity that small teams rarely have. Start monolithic, extract services only when specific scaling bottlenecks emerge.",
+    category="reasoning",
+    difficulty="hard",
+))
+
+dataset.add_case(EvalTestCase(
+    id="tool-001",
+    input_text="Find the current weather in Tokyo and convert the temperature from Celsius to Fahrenheit.",
+    golden_answer="The agent should call a weather API tool for Tokyo, retrieve the temperature in Celsius, and compute the Fahrenheit equivalent using F = C * 9/5 + 32.",
+    category="tool_use",
+    difficulty="medium",
+))
+
+dataset.save("research_agent_eval_v1.json")
+print(f"Dataset saved: {len(dataset.test_cases)} test cases")
+`} language="python" filename="eval_dataset.py" />
+
+Notice that the golden answers are not rigid templates. For factual questions, the golden answer states the expected fact. For reasoning questions, it captures the key points the response should cover. For tool-use questions, it describes the expected behavior sequence. The LLM judge you build in Stage 3 will compare agent output against these references using semantic understanding, not string matching.
+
+**Versioning your datasets** is critical. When you add new test cases or refine golden answers, bump the version string. This lets you correlate evaluation results with the exact dataset that produced them. Without versioning, you cannot tell whether a score change came from a better agent or a harder dataset.
+
+## Stage 2: Build the Agent Runner
+
+The **agent runner** is the component that executes your agent on each test case and captures the results. It needs to record not just the final output, but the full execution trace -- every tool call, every reasoning step, every intermediate decision. The trace is what lets you debug failures after the evaluation finishes.
+
+<MermaidDiagram chart={`sequenceDiagram
+    participant R as Agent Runner
+    participant A as Agent
+    participant T as Tools
+    participant S as Trace Store
+
+    R->>A: Submit test case input
+    activate A
+    A->>A: Reasoning step 1
+    A->>T: Tool call (e.g., search)
+    T-->>A: Tool result
+    A->>A: Reasoning step 2
+    A->>T: Tool call (e.g., calculate)
+    T-->>A: Tool result
+    A->>A: Final reasoning
+    A-->>R: Final output
+    deactivate A
+    R->>S: Store trace + output + timing
+`} />
+
+<CodeBlock code={`import time
+from dataclasses import dataclass, field
+from typing import Callable, Any
+
+
+@dataclass
+class ToolCall:
+    """A single tool invocation recorded during agent execution."""
+
+    tool_name: str
+    tool_input: dict
+    tool_output: str
+    duration_ms: float
+
+
+@dataclass
+class AgentTrace:
+    """Complete execution trace for one test case."""
+
+    test_case_id: str
+    final_output: str
+    tool_calls: list[ToolCall] = field(default_factory=list)
+    reasoning_steps: list[str] = field(default_factory=list)
+    total_duration_ms: float = 0.0
+    error: str | None = None
+
+
+@dataclass
+class EvalResult:
+    """Pairs a trace with its test case for downstream scoring."""
+
+    test_case: "EvalTestCase"
+    trace: AgentTrace
+
+
+class AgentRunner:
+    """Executes an agent function against every test case in a dataset."""
+
+    def __init__(self, agent_fn: Callable[[str], dict], concurrency: int = 1):
+        self.agent_fn = agent_fn
+        self.concurrency = concurrency
+
+    def run_single(self, test_case: "EvalTestCase") -> EvalResult:
+        """Run the agent on a single test case and capture the trace."""
+        start = time.time()
+        try:
+            result = self.agent_fn(test_case.input_text)
+            duration = (time.time() - start) * 1000
+
+            trace = AgentTrace(
+                test_case_id=test_case.id,
+                final_output=result.get("output", ""),
+                tool_calls=[
+                    ToolCall(**tc) for tc in result.get("tool_calls", [])
+                ],
+                reasoning_steps=result.get("reasoning_steps", []),
+                total_duration_ms=duration,
+            )
+        except Exception as e:
+            duration = (time.time() - start) * 1000
+            trace = AgentTrace(
+                test_case_id=test_case.id,
+                final_output="",
+                total_duration_ms=duration,
+                error=str(e),
+            )
+
+        return EvalResult(test_case=test_case, trace=trace)
+
+    def run_dataset(self, dataset: "EvalDataset") -> list[EvalResult]:
+        """Run the agent on every test case in the dataset."""
+        results = []
+        for i, test_case in enumerate(dataset.test_cases):
+            print(f"Running [{i+1}/{len(dataset.test_cases)}]: {test_case.id}")
+            result = self.run_single(test_case)
+            if result.trace.error:
+                print(f"  ERROR: {result.trace.error}")
+            else:
+                print(f"  Done in {result.trace.total_duration_ms:.0f}ms "
+                      f"({len(result.trace.tool_calls)} tool calls)")
+            results.append(result)
+        return results
+
+
+# Example: wrap your agent as a callable
+def my_research_agent(input_text: str) -> dict:
+    """
+    Replace this with your actual agent invocation.
+    Must return a dict with 'output' and optionally 'tool_calls'
+    and 'reasoning_steps'.
+    """
+    # In practice, this calls your LLM agent
+    return {
+        "output": "Paris is the capital of France with ~2.1 million people.",
+        "tool_calls": [],
+        "reasoning_steps": ["Identified factual question", "Retrieved answer"],
+    }
+
+
+runner = AgentRunner(agent_fn=my_research_agent)
+# results = runner.run_dataset(dataset)
+`} language="python" filename="agent_runner.py" />
+
+Two design decisions deserve explanation. First, the runner wraps every execution in a try/except block. Agents fail -- they hit rate limits, produce malformed tool calls, or enter infinite loops. A crashed evaluation is worse than a low score because it produces no data at all. Catching errors and recording them as failed traces lets the rest of the pipeline continue.
+
+Second, the runner captures timing data. **Latency** is an evaluation dimension that purely accuracy-focused systems overlook. An agent that produces perfect answers in thirty seconds may be worse for your users than one that produces good answers in two seconds. Recording duration per test case lets you track performance regressions alongside quality regressions.
+
+## Stage 3: Implement LLM-as-Judge Scoring
+
+You built the conceptual foundation for LLM-as-judge evaluation in Lesson 04. Now you implement it. The **scoring function** takes each evaluation result -- the agent's output paired with the golden answer -- and asks a judge LLM to rate it on a 0.0 to 1.0 scale using a structured rubric.
+
+<CodeBlock code={`import json
+from dataclasses import dataclass
+
+
+@dataclass
+class JudgeScore:
+    """Score assigned by the LLM judge for one test case."""
+
+    test_case_id: str
+    score: float          # 0.0 to 1.0
+    reasoning: str        # Judge's explanation
+    category: str
+    difficulty: str
+
+
+JUDGE_PROMPT = """You are an evaluation judge. Compare the agent's output against
+the golden answer and assign a score from 0.0 to 1.0.
+
+## Scoring Rubric
+
+- **1.0**: The output fully addresses the question with correct, complete information
+  that covers all key points in the golden answer.
+- **0.75**: The output is mostly correct and covers the main points, with minor
+  omissions or imprecisions that do not mislead.
+- **0.5**: The output is partially correct. It addresses the question but misses
+  significant points or includes some inaccuracies.
+- **0.25**: The output attempts to answer but is mostly incorrect or misses the
+  core point of the golden answer.
+- **0.0**: The output is completely wrong, irrelevant, empty, or the agent errored.
+
+## Input
+
+**Question:** {question}
+
+**Golden Answer:** {golden_answer}
+
+**Agent Output:** {agent_output}
+
+## Instructions
+
+Evaluate the agent output against the golden answer. Consider semantic equivalence,
+not exact wording. The agent may phrase things differently and still be correct.
+Respond with ONLY a JSON object:
+
+{{"score": <float>, "reasoning": "<one paragraph explanation>"}}
+"""
+
+
+def judge_single(
+    eval_result: "EvalResult",
+    llm_call: callable,
+) -> JudgeScore:
+    """Score a single evaluation result using the LLM judge."""
+
+    test_case = eval_result.test_case
+    agent_output = eval_result.trace.final_output
+
+    # Handle agent errors as automatic zero
+    if eval_result.trace.error:
+        return JudgeScore(
+            test_case_id=test_case.id,
+            score=0.0,
+            reasoning=f"Agent errored: {eval_result.trace.error}",
+            category=test_case.category,
+            difficulty=test_case.difficulty,
+        )
+
+    prompt = JUDGE_PROMPT.format(
+        question=test_case.input_text,
+        golden_answer=test_case.golden_answer,
+        agent_output=agent_output,
+    )
+
+    # Call the judge LLM
+    response = llm_call(prompt)
+
+    try:
+        parsed = json.loads(response)
+        score = max(0.0, min(1.0, float(parsed["score"])))
+        reasoning = parsed["reasoning"]
+    except (json.JSONDecodeError, KeyError, ValueError):
+        score = 0.0
+        reasoning = f"Judge response could not be parsed: {response[:200]}"
+
+    return JudgeScore(
+        test_case_id=test_case.id,
+        score=score,
+        reasoning=reasoning,
+        category=test_case.category,
+        difficulty=test_case.difficulty,
+    )
+
+
+def judge_all(
+    eval_results: list["EvalResult"],
+    llm_call: callable,
+) -> list[JudgeScore]:
+    """Score all evaluation results."""
+    scores = []
+    for i, result in enumerate(eval_results):
+        print(f"Judging [{i+1}/{len(eval_results)}]: {result.test_case.id}")
+        score = judge_single(result, llm_call)
+        print(f"  Score: {score.score:.2f} — {score.reasoning[:80]}...")
+        scores.append(score)
+    return scores
+`} language="python" filename="llm_judge.py" />
+
+The rubric is the most important part of this code. A vague rubric produces noisy scores. A specific rubric produces consistent ones. Notice how each score level has concrete criteria: "fully addresses," "mostly correct with minor omissions," "partially correct with significant gaps." These criteria give the judge LLM clear decision boundaries.
+
+Three defensive measures protect against judge failures. First, agent errors bypass the judge entirely and receive an automatic zero -- there is no point asking a judge to evaluate an empty output. Second, the score is clamped to the 0.0-1.0 range in case the judge returns an out-of-bounds value. Third, JSON parsing failures produce a zero with an explanatory message rather than crashing the pipeline.
+
+> **Key insight from Lesson 04:** Use a different model for the judge than for the agent under evaluation. If your agent runs on Claude Sonnet, judge with Claude Opus. This avoids the self-evaluation bias where a model rates its own outputs too favorably.
+
+## Stage 4: Add Regression Detection
+
+Scores from a single run are useful, but the real value of an evaluation harness is **regression detection** -- the ability to compare the current run against a known baseline and flag any degradation. Without regression detection, you are flying blind every time you change your agent.
+
+The regression detector loads a saved baseline (the scores from your last known-good run), compares it category-by-category against the current run, and flags any category where the score dropped by more than a configurable threshold.
+
+<MermaidDiagram chart={`graph LR
+    subgraph Current["Current Eval Run"]
+        C1["factual: 0.92"]
+        C2["reasoning: 0.78"]
+        C3["tool_use: 0.85"]
+    end
+    subgraph Baseline["Saved Baseline"]
+        B1["factual: 0.90"]
+        B2["reasoning: 0.85"]
+        B3["tool_use: 0.88"]
+    end
+    C1 --- CMP1["Δ +0.02 ✅"]
+    B1 --- CMP1
+    C2 --- CMP2["Δ -0.07 ❌"]
+    B2 --- CMP2
+    C3 --- CMP3["Δ -0.03 ⚠️"]
+    B3 --- CMP3
+    style CMP1 fill:#c6f6d5,stroke:#38a169
+    style CMP2 fill:#fed7d7,stroke:#e53e3e
+    style CMP3 fill:#fefcbf,stroke:#d69e2e
+`} />
+
+<CodeBlock code={`import json
+from dataclasses import dataclass, asdict
+from collections import defaultdict
+
+
+@dataclass
+class CategoryMetrics:
+    """Aggregated metrics for one category."""
+
+    category: str
+    mean_score: float
+    num_cases: int
+    scores_by_difficulty: dict[str, float]
+
+
+@dataclass
+class EvalReport:
+    """Full evaluation report with per-category and overall metrics."""
+
+    overall_score: float
+    categories: list[CategoryMetrics]
+    total_cases: int
+    total_errors: int
+
+    def save_as_baseline(self, path: str) -> None:
+        """Save this report as the baseline for future comparisons."""
+        data = {
+            "overall_score": self.overall_score,
+            "total_cases": self.total_cases,
+            "categories": {
+                cat.category: {
+                    "mean_score": cat.mean_score,
+                    "num_cases": cat.num_cases,
+                    "by_difficulty": cat.scores_by_difficulty,
+                }
+                for cat in self.categories
+            },
+        }
+        with open(path, "w") as f:
+            json.dump(data, f, indent=2)
+        print(f"Baseline saved to {path}")
+
+
+@dataclass
+class RegressionResult:
+    """Result of comparing current scores against a baseline."""
+
+    category: str
+    baseline_score: float
+    current_score: float
+    delta: float
+    status: str  # "pass", "warn", "fail"
+
+
+def aggregate_scores(scores: list["JudgeScore"]) -> EvalReport:
+    """Aggregate individual scores into a structured report."""
+
+    by_category = defaultdict(list)
+    by_cat_difficulty = defaultdict(lambda: defaultdict(list))
+    errors = sum(1 for s in scores if s.score == 0.0 and "errored" in s.reasoning)
+
+    for s in scores:
+        by_category[s.category].append(s.score)
+        by_cat_difficulty[s.category][s.difficulty].append(s.score)
+
+    categories = []
+    for cat, cat_scores in sorted(by_category.items()):
+        difficulty_means = {
+            diff: sum(diff_scores) / len(diff_scores)
+            for diff, diff_scores in by_cat_difficulty[cat].items()
+        }
+        categories.append(CategoryMetrics(
+            category=cat,
+            mean_score=sum(cat_scores) / len(cat_scores),
+            num_cases=len(cat_scores),
+            scores_by_difficulty=difficulty_means,
+        ))
+
+    all_scores = [s.score for s in scores]
+    overall = sum(all_scores) / len(all_scores) if all_scores else 0.0
+
+    return EvalReport(
+        overall_score=overall,
+        categories=categories,
+        total_cases=len(scores),
+        total_errors=errors,
+    )
+
+
+def detect_regressions(
+    current: EvalReport,
+    baseline_path: str,
+    fail_threshold: float = 0.05,
+    warn_threshold: float = 0.02,
+) -> list[RegressionResult]:
+    """Compare current scores against a saved baseline."""
+
+    with open(baseline_path) as f:
+        baseline = json.load(f)
+
+    results = []
+    baseline_cats = baseline.get("categories", {})
+
+    for cat_metrics in current.categories:
+        cat = cat_metrics.category
+        if cat not in baseline_cats:
+            # New category, no baseline to compare
+            results.append(RegressionResult(
+                category=cat,
+                baseline_score=0.0,
+                current_score=cat_metrics.mean_score,
+                delta=cat_metrics.mean_score,
+                status="pass",
+            ))
+            continue
+
+        baseline_score = baseline_cats[cat]["mean_score"]
+        delta = cat_metrics.mean_score - baseline_score
+
+        if delta < -fail_threshold:
+            status = "fail"
+        elif delta < -warn_threshold:
+            status = "warn"
+        else:
+            status = "pass"
+
+        results.append(RegressionResult(
+            category=cat,
+            baseline_score=baseline_score,
+            current_score=cat_metrics.mean_score,
+            delta=delta,
+            status=status,
+        ))
+
+    return results
+
+
+def print_regression_report(regressions: list[RegressionResult]) -> bool:
+    """Print a formatted regression report. Returns True if all passed."""
+
+    status_symbols = {"pass": "✅", "warn": "⚠️", "fail": "❌"}
+
+    print("\n" + "=" * 60)
+    print("REGRESSION REPORT")
+    print("=" * 60)
+
+    all_passed = True
+    for r in regressions:
+        symbol = status_symbols[r.status]
+        print(f"  {symbol} {r.category:15s}  "
+              f"baseline={r.baseline_score:.3f}  "
+              f"current={r.current_score:.3f}  "
+              f"Δ={r.delta:+.3f}")
+        if r.status == "fail":
+            all_passed = False
+
+    print("=" * 60)
+    if all_passed:
+        print("Result: PASS — No regressions detected.")
+    else:
+        print("Result: FAIL — Regressions detected. Investigate before merging.")
+    print("=" * 60 + "\n")
+
+    return all_passed
+`} language="python" filename="regression_detector.py" />
+
+The **two-threshold system** is intentional. A drop of 0.02 earns a warning -- it might be noise or it might be a real degradation that needs watching. A drop of 0.05 earns a failure -- it almost certainly reflects a meaningful quality loss. You should calibrate these thresholds for your domain. An agent handling medical queries might use a fail threshold of 0.01. A casual chatbot might tolerate 0.10.
+
+## Putting It All Together
+
+With all four stages built, you can assemble them into a single evaluation pipeline that runs end-to-end. This is the script you would invoke in CI/CD, triggered by every pull request that changes agent prompts, model configuration, or tool definitions.
+
+<CodeBlock code={`import sys
+
+
+def run_evaluation(
+    dataset_path: str,
+    agent_fn: callable,
+    llm_judge_fn: callable,
+    baseline_path: str | None = None,
+    save_baseline: bool = False,
+    baseline_output_path: str = "baseline.json",
+) -> bool:
+    """
+    Run the full evaluation pipeline.
+    Returns True if no regressions were detected (or no baseline exists).
+    """
+
+    # Stage 1: Load the dataset
+    print("\\n📋 Loading evaluation dataset...")
+    dataset = EvalDataset.load(dataset_path)
+    print(f"   Loaded {len(dataset.test_cases)} test cases "
+          f"from '{dataset.name}' v{dataset.version}")
+
+    # Stage 2: Run the agent
+    print("\\n🤖 Running agent on test cases...")
+    runner = AgentRunner(agent_fn=agent_fn)
+    eval_results = runner.run_dataset(dataset)
+
+    # Stage 3: Score with LLM judge
+    print("\\n⚖️  Scoring outputs with LLM judge...")
+    scores = judge_all(eval_results, llm_judge_fn)
+
+    # Stage 4: Aggregate and check regressions
+    print("\\n📊 Aggregating scores...")
+    report = aggregate_scores(scores)
+    print(f"   Overall score: {report.overall_score:.3f}")
+    print(f"   Total cases: {report.total_cases}")
+    print(f"   Errors: {report.total_errors}")
+
+    for cat in report.categories:
+        print(f"   {cat.category}: {cat.mean_score:.3f} ({cat.num_cases} cases)")
+
+    # Save as new baseline if requested
+    if save_baseline:
+        report.save_as_baseline(baseline_output_path)
+
+    # Check regressions against existing baseline
+    if baseline_path:
+        print("\\n🔍 Checking for regressions...")
+        regressions = detect_regressions(report, baseline_path)
+        passed = print_regression_report(regressions)
+        return passed
+
+    print("\\nNo baseline provided — skipping regression check.")
+    return True
+
+
+# Usage:
+# First run — establish baseline:
+#   run_evaluation("eval_v1.json", my_agent, my_judge, save_baseline=True)
+#
+# Subsequent runs — check for regressions:
+#   passed = run_evaluation("eval_v1.json", my_agent, my_judge, baseline_path="baseline.json")
+#   if not passed:
+#       sys.exit(1)  # Fail the CI pipeline
+`} language="python" filename="run_eval.py" />
+
+The `run_evaluation` function supports two modes. In **baseline mode** (`save_baseline=True`), it runs the full pipeline and saves the resulting scores as the baseline for future comparisons. You do this once when your agent reaches a quality level you are satisfied with. In **regression mode** (`baseline_path="baseline.json"`), it runs the pipeline, compares against the saved baseline, and returns `False` if any category dropped below the failure threshold. In CI/CD, a `False` return triggers `sys.exit(1)`, blocking the merge.
+
+## Integrating the Harness Into Your Workflow
+
+Building the harness is the first step. Making it part of your development workflow is what makes it valuable. The following diagram shows where the evaluation harness fits in a typical agent development cycle.
+
+<MermaidDiagram chart={`graph TD
+    subgraph Dev["Development Cycle"]
+        direction TB
+        CHANGE["Make a Change<br/>Prompt / Model / Tools / Logic"]
+        LOCAL["Run Eval Locally<br/>Quick feedback loop"]
+        FIX["Investigate & Fix<br/>Review traces for failures"]
+        PUSH["Push to Branch"]
+        CI["CI Runs Full Eval<br/>Against saved baseline"]
+        REVIEW["Code Review<br/>Eval report attached to PR"]
+        MERGE["Merge & Update Baseline"]
+    end
+    CHANGE --> LOCAL
+    LOCAL -->|"Regressions"| FIX
+    FIX --> CHANGE
+    LOCAL -->|"No regressions"| PUSH
+    PUSH --> CI
+    CI -->|"Regressions"| FIX
+    CI -->|"Pass"| REVIEW
+    REVIEW --> MERGE
+    MERGE -->|"Save new baseline"| BASELINE["baseline.json<br/>Committed to repo"]
+    style Dev fill:#ebf8ff,stroke:#3182ce
+    style BASELINE fill:#fefcbf,stroke:#d69e2e
+`} />
+
+Three practices make this workflow effective:
+
+**Run locally before pushing.** The full evaluation suite might take minutes, but a subset of critical test cases can run in seconds. Create a "smoke" dataset with your five most important test cases and run it after every prompt change. Save the full suite for CI.
+
+**Commit your baseline.** The `baseline.json` file belongs in version control alongside your agent code. When you merge a change that improves scores, update the baseline in the same commit. This ensures every developer compares against the same known-good state.
+
+**Grow your dataset continuously.** Every bug report is a potential test case. When a user reports that the agent gave a wrong answer, add that input and the correct answer to your evaluation dataset. Over time, your dataset becomes a comprehensive record of every failure mode your agent has encountered -- and a guarantee that each one stays fixed.
+
+## Summary
+
+You built a complete evaluation harness across four stages. The **evaluation dataset** defines what to test and what correctness looks like. The **agent runner** executes each test case and captures traces for debugging. The **LLM judge** scores each output against its golden answer using a structured rubric. The **regression detector** compares current scores to a saved baseline and flags any degradation.
+
+This harness turns agent development from guesswork into engineering. Instead of wondering whether a prompt change helped, you measure it. Instead of discovering regressions from user complaints, you catch them before merge. Instead of debating quality subjectively, you point to a number and a trend.
+
+This lesson also concludes Module 10. You now have the full evaluation toolkit: the theory from Lessons 01 through 05, and the working code from this lab. Your agents are tested and evaluated -- Module 11 takes them to production with deployment, monitoring, and safety.

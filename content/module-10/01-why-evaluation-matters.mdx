@@ -1,0 +1,241 @@
+---
+title: "Why Evaluation Matters"
+quiz:
+  - question: "A team deploys a customer support agent that answers billing questions. During testing, they run the same question 'Why was I charged twice?' ten times and get ten different responses — some accurate, some containing hallucinated policy details. The team wants to measure quality, but traditional unit tests expect a single correct output. What is the fundamental evaluation challenge they are facing?"
+    options:
+      - "The model's temperature is set too high and should be reduced to zero to eliminate variation"
+      - "Non-determinism -- the agent produces different outputs for identical inputs, so evaluation must shift from exact-match correctness to statistical quality measurement across multiple runs"
+      - "The agent needs a longer system prompt with more detailed billing policy information"
+      - "They should switch to a larger model that produces more consistent outputs"
+    correctIndex: 1
+  - question: "An agent tasked with booking a flight successfully finds a cheap fare and completes the reservation, but it skipped the step where it was supposed to check the user's loyalty program for available points. The final outcome (booked flight) looks correct. Which evaluation concept captures why this agent still failed?"
+    options:
+      - "Trajectory evaluation -- the agent's path through intermediate steps matters, not just whether the final outcome appears correct"
+      - "Benchmark contamination -- the agent memorized the correct final answer from training data"
+      - "The agent's tool definitions are missing a loyalty program API"
+      - "Output evaluation -- the final booking confirmation should have included loyalty point information"
+    correctIndex: 0
+  - question: "A company uses GPT-4 to evaluate whether their Claude-based agent's responses are helpful and accurate. A colleague argues this is circular because 'you're using AI to judge AI.' Which statement best describes the validity of this approach?"
+    options:
+      - "It is completely invalid -- only human evaluators can judge AI output reliably"
+      - "It is valid only if the judge model is from the same provider as the agent being evaluated"
+      - "This is the eval paradox in practice -- LLM-as-judge is a pragmatic necessity because human evaluation does not scale, but it requires careful calibration, rubric design, and periodic human validation to remain trustworthy"
+      - "It is perfectly valid with no caveats because larger models always judge smaller models accurately"
+    correctIndex: 2
+  - question: "A team practices eval-driven development: before improving their agent's ability to handle refund requests, they first build a dataset of 50 refund scenarios with expected behaviors and score their current agent against it. They find the agent scores 62%. After prompt changes, they re-run and score 78%. What is the primary benefit of this workflow compared to making prompt changes and manually spot-checking a few examples?"
+    options:
+      - "It guarantees the agent will score 100% once enough prompt iterations are completed"
+      - "It eliminates the need for human review of agent outputs entirely"
+      - "It provides quantitative, reproducible measurement of improvement and catches regressions -- changes that fix one scenario but break others are detected immediately rather than discovered in production"
+      - "It reduces the cost of running the agent because fewer LLM calls are needed during development"
+    correctIndex: 2
+---
+
+## Overview
+
+You have spent nine modules building increasingly sophisticated agent systems. You can design single agents with tools, wire them into multi-step reasoning loops, give them memory, connect them across frameworks, and orchestrate entire teams of specialist agents. In the Multi-Agent Lab, you assembled a research team that decomposes tasks, delegates work, and synthesizes results.
+
+But here is an uncomfortable question: **how do you know any of it actually works?**
+
+Not whether it runs without errors -- whether it produces *correct*, *reliable*, *safe* outputs across the full range of inputs your users will throw at it. Whether the agent that scored well on your five test cases will hold up against five thousand. Whether the prompt change you made yesterday improved refund handling without quietly breaking cancellation handling. Whether your multi-agent research team produces accurate synthesis or confidently assembled hallucinations.
+
+Module 10 introduces **evaluation and testing** for LLM agents -- the discipline of systematically measuring agent quality, detecting regressions, and building justified confidence that your agents behave as intended. This opening lesson explains why evaluation is uniquely challenging for agent systems, what an evaluation stack looks like, and how evaluation-driven development changes the way you build agents.
+
+## The Gap Between "It Works" and "It Works Reliably"
+
+Every agent builder has experienced the same progression. You write a prompt, test it with a few examples, see good results, and declare it ready. Then users find edge cases you never imagined. The agent hallucinates a policy that does not exist. It calls the wrong tool in a sequence that looked right during development. It produces a beautiful answer to a question it fundamentally misunderstood.
+
+The gap between "it worked on my examples" and "it works reliably in production" is the evaluation gap. Traditional software engineering closed this gap with decades of testing methodology -- unit tests, integration tests, end-to-end tests, CI/CD pipelines, code coverage metrics. But agents break the assumptions that make those methods work.
+
+## Why Agents Break Traditional Testing
+
+Traditional software testing rests on a foundational assumption: **given the same input, the system produces the same output**. This assumption enables exact-match assertions, regression test suites, and deterministic CI pipelines. Agent systems violate this assumption in multiple ways, and each violation creates a distinct evaluation challenge.
+
+### Non-Determinism: Same Input, Different Output
+
+The most fundamental challenge is **non-determinism**. When you call an LLM, the response is sampled from a probability distribution over tokens. Even with the same prompt, the same model, and the same temperature setting, the output varies between runs. The agent might phrase the same correct answer differently, choose a different but equally valid tool sequence, or occasionally produce an incorrect response that it gets right ninety-five percent of the time.
+
+This means you cannot write a test that asserts `output == expected_string`. The test would fail on correct responses that happen to be worded differently, and it would pass on incorrect responses that happen to match the expected phrasing. Evaluation must shift from **exact match** to **semantic correctness** -- does the output convey the right information, regardless of how it is phrased?
+
+### Multi-Step Evaluation: Trajectory vs. Outcome
+
+A traditional function call has one input and one output. An agent might take fifteen steps -- reasoning, calling tools, interpreting results, reasoning again -- before producing a final answer. Two distinct evaluation questions emerge:
+
+- **Outcome evaluation**: Is the final answer correct?
+- **Trajectory evaluation**: Did the agent take a reasonable path to get there?
+
+These can diverge. An agent might arrive at the correct answer through flawed reasoning -- it hallucinated an intermediate fact but happened to reach the right conclusion anyway. Or it might follow a perfect reasoning chain but make an error in the final synthesis step. Evaluating only the outcome misses dangerous fragility in the reasoning. Evaluating only the trajectory misses whether the agent actually solved the user's problem.
+
+Robust evaluation requires assessing **both** the destination and the journey.
+
+### The Eval Paradox: Using AI to Evaluate AI
+
+Here is the uncomfortable truth: evaluating agent outputs at scale requires capabilities that only AI can provide. A human can judge whether an agent's response is helpful, accurate, and safe -- but a human cannot judge ten thousand responses per day. You need automated evaluation. And the most capable automated evaluator available is... another LLM.
+
+This creates the **eval paradox**: you are using AI to judge AI. The judge model has its own biases, its own failure modes, its own blind spots. It might consistently rate verbose responses higher than concise ones, or fail to detect subtle factual errors that a domain expert would catch. If the judge model shares training data with the agent being evaluated, it might mistake familiar-sounding nonsense for correctness.
+
+The eval paradox does not make LLM-as-judge invalid -- it makes it a tool that requires careful calibration. You need rubrics, scoring guidelines, human validation samples, and awareness of systematic biases. Lesson 04 in this module covers LLM-as-judge evaluation in depth.
+
+### Compound Error Accumulation
+
+In traditional software, a function either works or it does not. In agent systems, small errors compound across steps. If each individual step has a 95% success rate, a ten-step agent trajectory has a combined success rate of roughly 60% (0.95^10 = 0.599). A twenty-step trajectory drops to about 36%.
+
+This **compound error accumulation** means that agents which look reliable on simple tasks can fail dramatically on complex multi-step workflows. Evaluation must test not just individual capabilities but complete end-to-end trajectories at realistic complexity levels.
+
+## The Evaluation Stack
+
+Evaluating agents is not a single activity -- it is a layered system where each layer addresses a different aspect of quality. The following diagram shows the complete evaluation stack, from low-level metrics up to high-level human judgment.
+
+<MermaidDiagram chart={`graph TD
+    subgraph Stack["The Agent Evaluation Stack"]
+        direction TB
+        HUMAN["Human Review<br/>──────────────────────<br/>Expert judgment on edge cases<br/>Calibration of automated judges<br/>Safety and policy compliance<br/>User experience assessment"]
+        MONITORING["Production Monitoring<br/>──────────────────────<br/>Latency, cost, error rates<br/>Drift detection over time<br/>User feedback signals<br/>A/B testing in production"]
+        JUDGE["LLM-as-Judge Scoring<br/>──────────────────────<br/>Rubric-based evaluation<br/>Pairwise comparison<br/>Factual accuracy checks<br/>Instruction following assessment"]
+        TESTS["Test Suites<br/>──────────────────────<br/>Regression test datasets<br/>Edge case collections<br/>Golden answer comparisons<br/>Tool use correctness checks"]
+        BENCHMARKS["Benchmarks<br/>──────────────────────<br/>SWE-Bench, GAIA, WebArena<br/>Standardized capability measurement<br/>Cross-model comparison<br/>Community-validated datasets"]
+        METRICS["Metrics<br/>──────────────────────<br/>Task success rate<br/>Trajectory efficiency<br/>Tool selection accuracy<br/>Response quality scores"]
+    end
+    HUMAN --> MONITORING
+    MONITORING --> JUDGE
+    JUDGE --> TESTS
+    TESTS --> BENCHMARKS
+    BENCHMARKS --> METRICS
+    style Stack fill:#ebf8ff,stroke:#3182ce,stroke-width:2px
+    style HUMAN fill:#fefcbf,stroke:#d69e2e,stroke-width:2px
+    style MONITORING fill:#fed7e2,stroke:#d53f8c
+    style JUDGE fill:#e9d8fd,stroke:#805ad5
+    style TESTS fill:#c6f6d5,stroke:#38a169
+    style BENCHMARKS fill:#bee3f8,stroke:#3182ce
+    style METRICS fill:#e2e8f0,stroke:#718096
+`} />
+
+Each layer builds on the ones below it:
+
+**Metrics** are the atomic measurements -- task success rate, average trajectory length, tool selection accuracy, response quality scores. They are numbers you can track over time and compare across agent versions.
+
+**Benchmarks** are standardized evaluation datasets that the community has validated. SWE-Bench measures an agent's ability to solve real GitHub issues. GAIA tests general AI assistant capabilities. WebArena evaluates web navigation tasks. Benchmarks let you compare your agent against published baselines and track progress against well-understood challenges. Lesson 02 covers the major agent benchmarks in detail.
+
+**Test suites** are your custom evaluation datasets -- collections of inputs, expected behaviors, and scoring criteria tailored to your agent's specific domain and use cases. Unlike benchmarks, test suites are private and reflect your production scenarios. They form the backbone of regression testing: before deploying a prompt change, you run the test suite and verify that the change improves target metrics without degrading others. Lesson 03 covers testing strategies.
+
+**LLM-as-judge scoring** uses a separate LLM to evaluate agent outputs against rubrics you define. This enables evaluation at a scale that human review cannot match. A judge model can score thousands of agent responses per hour, checking for factual accuracy, instruction following, helpfulness, and safety. Lesson 04 covers LLM-as-judge patterns.
+
+**Production monitoring** tracks agent behavior in the real world -- latency, cost, error rates, user feedback, and quality drift over time. An agent that scores well on your test suite might degrade in production as user behavior shifts or upstream APIs change. Monitoring closes the feedback loop between evaluation and deployment. Lesson 05 covers tracing and debugging.
+
+**Human review** sits at the top because it remains the gold standard for quality judgment. Humans catch failure modes that automated systems miss -- subtle toxicity, cultural insensitivity, technically correct but unhelpful responses. Human review also calibrates the automated layers: you use human judgments to validate that your LLM-as-judge rubrics actually measure what you intend.
+
+## Traditional Testing vs. Agent Testing
+
+The differences between evaluating traditional software and evaluating agent systems are structural, not superficial. Understanding these differences prevents you from applying the wrong evaluation methodology and drawing false conclusions from your results.
+
+<MermaidDiagram chart={`graph LR
+    subgraph Traditional["Traditional Software Testing"]
+        direction TB
+        T1["Deterministic<br/>Same input always<br/>produces same output"]
+        T2["Binary Pass/Fail<br/>Output matches expected<br/>value or it does not"]
+        T3["Unit Boundaries<br/>Functions have clear inputs,<br/>outputs, and contracts"]
+        T4["Fast Feedback<br/>Tests run in milliseconds<br/>Full suite in seconds"]
+        T5["Cost: Negligible<br/>CPU cycles are cheap<br/>Run tests on every commit"]
+    end
+    subgraph Agent["Agent System Testing"]
+        direction TB
+        A1["Non-Deterministic<br/>Same input produces<br/>different valid outputs"]
+        A2["Graded Quality<br/>Outputs are scored on<br/>a spectrum of quality"]
+        A3["Fuzzy Boundaries<br/>Multi-step trajectories with<br/>emergent tool interactions"]
+        A4["Slow Feedback<br/>Each test requires LLM calls<br/>Full suite takes minutes/hours"]
+        A5["Cost: Significant<br/>Every test run costs API fees<br/>Must budget evaluation spend"]
+    end
+    T1 -.->|"becomes"| A1
+    T2 -.->|"becomes"| A2
+    T3 -.->|"becomes"| A3
+    T4 -.->|"becomes"| A4
+    T5 -.->|"becomes"| A5
+    style Traditional fill:#ebf8ff,stroke:#3182ce,stroke-width:2px
+    style Agent fill:#fefcbf,stroke:#d69e2e,stroke-width:2px
+    style T1 fill:#bee3f8,stroke:#3182ce
+    style T2 fill:#bee3f8,stroke:#3182ce
+    style T3 fill:#bee3f8,stroke:#3182ce
+    style T4 fill:#bee3f8,stroke:#3182ce
+    style T5 fill:#bee3f8,stroke:#3182ce
+    style A1 fill:#fef3c7,stroke:#d69e2e
+    style A2 fill:#fef3c7,stroke:#d69e2e
+    style A3 fill:#fef3c7,stroke:#d69e2e
+    style A4 fill:#fef3c7,stroke:#d69e2e
+    style A5 fill:#fef3c7,stroke:#d69e2e
+`} />
+
+Five shifts define the transition:
+
+**Deterministic to non-deterministic.** You cannot assert that the output equals a specific string. You must define what *correct* means semantically and measure whether outputs meet that definition across multiple runs.
+
+**Binary pass/fail to graded quality.** A traditional test either passes or fails. An agent response exists on a spectrum -- it might be partially correct, mostly helpful but slightly misleading, or factually accurate but poorly structured. Evaluation must produce quality scores, not just boolean verdicts.
+
+**Clear unit boundaries to fuzzy trajectories.** A function has a defined signature: specific inputs, specific outputs, a testable contract. An agent trajectory is an emergent sequence of reasoning steps and tool calls whose structure varies between runs. There is no fixed contract to test against, only behavioral expectations.
+
+**Fast feedback to slow feedback.** A traditional unit test runs in milliseconds. An agent evaluation test requires one or more LLM API calls, each taking hundreds of milliseconds to seconds. A test suite of five hundred cases might take thirty minutes and cost real money. This changes how often you can run evaluations and how you design your testing pipeline.
+
+**Negligible cost to significant cost.** Traditional tests consume CPU cycles that cost fractions of a cent. Agent tests consume API calls that cost dollars. A comprehensive evaluation run against a large test suite can cost hundreds of dollars. This means you must be strategic about *when* you run full evaluations and *how* you design cost-efficient evaluation tiers.
+
+## Eval-Driven Development
+
+Given these challenges, how should evaluation fit into your agent development workflow? The answer is **eval-driven development** -- a discipline where you build your evaluation harness *before* you iterate on your agent, and every change is measured against that harness.
+
+The workflow follows a cycle:
+
+**Step 1: Define evaluation criteria.** Before writing a single prompt, decide what "good" means for your agent. What tasks should it handle? What quality level is acceptable? What failure modes are unacceptable? Express these criteria as measurable metrics -- task success rate above 85%, no hallucinated policy references, average response time under five seconds.
+
+**Step 2: Build an evaluation dataset.** Create a collection of representative inputs paired with expected behaviors. Not expected exact outputs -- expected behaviors. "The agent should identify this as a refund request and check the order status" is a behavioral expectation. "The agent should respond with 'I'd be happy to help with your refund'" is a brittle exact-match expectation. Start with twenty to fifty cases covering the most common and most critical scenarios.
+
+**Step 3: Baseline your current agent.** Run your evaluation dataset against your current agent and record the scores. This is your baseline. If you are starting from scratch, your baseline might be zero -- that is fine. The point is to have a number to improve against.
+
+**Step 4: Iterate with measurement.** Make a change -- adjust the prompt, add a tool, modify the system instructions -- and re-run the evaluation. Compare the new scores to the baseline. Did the change improve the target metric? Did it cause regressions in other metrics? If the change improved refund handling from 62% to 78% but dropped cancellation handling from 90% to 72%, you have a regression that needs attention.
+
+**Step 5: Expand the evaluation dataset.** As you discover new failure modes in production or from user feedback, add them to your evaluation dataset. The dataset grows over time, becoming an increasingly comprehensive representation of real-world agent behavior. Yesterday's production failure becomes tomorrow's regression test.
+
+This cycle mirrors **test-driven development** in traditional software engineering, adapted for the unique challenges of non-deterministic, multi-step agent systems. The evaluation harness is your source of truth. Without it, you are navigating by intuition. With it, you have a compass.
+
+## The Cost of Skipping Evaluation
+
+Teams that skip systematic evaluation pay the cost in other ways:
+
+- **Silent regressions.** A prompt change that improves one capability quietly breaks another. Without a test suite, you discover the regression when a user complains -- or when the broken behavior causes real harm.
+
+- **Anecdote-driven development.** Without quantitative metrics, team discussions devolve into competing anecdotes. "I tested it with this example and it worked great" versus "I tested it with a different example and it failed." Neither anecdote tells you the actual success rate across representative inputs.
+
+- **Unearned confidence.** A handful of cherry-picked successful examples creates the illusion of reliability. The agent enters production with unknown failure rates on the long tail of inputs that real users will submit.
+
+- **Inability to compare approaches.** Should you use a ReAct loop or a plan-then-execute pattern? Should you use Claude or GPT-4 as your base model? Without evaluation data, you cannot make these decisions empirically. You are guessing.
+
+- **Regulatory and safety risk.** In domains like healthcare, finance, and legal, deploying an agent without systematic evaluation creates liability. Regulators increasingly expect documented evidence that AI systems have been tested against representative scenarios.
+
+## What's Ahead in This Module
+
+The remaining lessons in this module build out each layer of the evaluation stack, moving from standardized measurement to hands-on practice.
+
+- **Lesson 02: Agent Benchmarks** -- The major benchmarks for measuring agent capability: SWE-Bench for software engineering, GAIA for general assistance, WebArena for web navigation, and others. You will learn what each benchmark measures, how to interpret scores, and how to use benchmarks to compare models and architectures.
+
+- **Lesson 03: Testing Strategies for Agents** -- How to build test suites for your specific agent, from unit testing individual tools to integration testing agent loops to end-to-end trajectory evaluation. Covers deterministic testing of tool calls, statistical testing of LLM outputs, and regression testing workflows.
+
+- **Lesson 04: LLM-as-Judge Evaluation** -- Using LLMs to evaluate agent outputs at scale. Covers rubric design, pairwise comparison, calibration against human judgments, and the pitfalls of judge model bias.
+
+- **Lesson 05: Tracing and Debugging Agents** -- Tracing multi-step agent runs to understand what happened and why. Covers tracing tools, structured logging, failure mode taxonomy, and debugging strategies for common agent failures.
+
+- **Lesson 06: Evaluation Lab** -- A hands-on lab where you build a complete evaluation harness with automated scoring, regression detection, and a dashboard for tracking agent quality over time.
+
+## Summary
+
+**Evaluation and testing** is what separates agent prototypes from production-ready agent systems. The challenges are real -- non-determinism, multi-step trajectories, the eval paradox, compound error accumulation, and significant cost -- but they are manageable with the right methodology and tools.
+
+- **Non-determinism** means evaluation must shift from exact-match assertions to semantic quality measurement across multiple runs. The same input will produce different outputs, and evaluation must distinguish between acceptable variation and actual errors.
+
+- **Trajectory evaluation** matters as much as outcome evaluation. An agent that arrives at the correct answer through flawed reasoning is fragile. An agent that follows a sound trajectory but stumbles at the final step is fixable. Evaluating both the journey and the destination gives you a complete picture.
+
+- **The eval paradox** -- using AI to evaluate AI -- is a pragmatic necessity, not a logical flaw. LLM-as-judge evaluation works when calibrated with rubrics, validated against human judgments, and monitored for systematic biases.
+
+- **The evaluation stack** has six layers: metrics, benchmarks, test suites, LLM-as-judge scoring, production monitoring, and human review. Each layer addresses a different aspect of quality, and a mature evaluation practice uses all six.
+
+- **Eval-driven development** is the discipline of building your evaluation harness before iterating on your agent. Define criteria, build a dataset, baseline your agent, iterate with measurement, and expand the dataset over time. Every change is measured, every regression is caught, and every improvement is quantified.
+
+- **Skipping evaluation** costs more than doing it. Silent regressions, anecdote-driven development, unearned confidence, inability to compare approaches, and regulatory risk are the predictable consequences of building agents without systematic measurement.
+
+In the next lesson, you will explore the **major agent benchmarks** -- SWE-Bench, GAIA, WebArena, and others -- that provide standardized, community-validated datasets for measuring what your agents can actually do.

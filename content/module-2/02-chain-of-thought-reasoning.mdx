@@ -1,0 +1,335 @@
+---
+title: "Chain-of-Thought Reasoning"
+quiz:
+  - question: "What is the key difference between few-shot CoT and zero-shot CoT prompting?"
+    options:
+      - "Few-shot CoT uses larger models while zero-shot CoT works with any model"
+      - "Few-shot CoT includes worked reasoning examples in the prompt while zero-shot CoT uses a trigger phrase like 'Let's think step by step'"
+      - "Zero-shot CoT is more accurate than few-shot CoT in all cases"
+      - "Few-shot CoT does not produce intermediate reasoning steps"
+    correctIndex: 1
+  - question: "Why does Chain-of-Thought prompting improve accuracy on complex tasks?"
+    options:
+      - "It forces the model to use more compute by generating longer outputs"
+      - "It changes the model's weights to specialize in reasoning"
+      - "It breaks the problem into intermediate steps, reducing compounding errors and making reasoning inspectable"
+      - "It automatically retries the prompt if the first answer is wrong"
+    correctIndex: 2
+  - question: "In self-consistency prompting, how is the final answer determined?"
+    options:
+      - "The longest reasoning chain is selected as the answer"
+      - "The model samples multiple reasoning paths and takes the majority vote across their final answers"
+      - "The user manually picks the best reasoning path"
+      - "The first generated answer is always used"
+    correctIndex: 1
+  - question: "How does Chain-of-Thought reasoning connect to the agent loop covered in Module 1?"
+    options:
+      - "CoT replaces the agent loop entirely"
+      - "CoT is only used during the Act phase of the loop"
+      - "CoT powers the Think step of the observe-think-act cycle, letting the agent reason before choosing an action"
+      - "CoT is unrelated to agent architectures"
+    correctIndex: 2
+---
+
+## Overview
+
+In the previous lesson, we explored how prompt engineering for agents differs from chatbot prompting -- structuring prompts with tool instructions, behavioral boundaries, and clear task decomposition. But even the best-structured prompt can fail when the task requires multi-step reasoning. Ask an LLM to solve a word problem, plan a series of API calls, or debug a logical error, and a direct answer often goes wrong.
+
+**Chain-of-Thought (CoT) reasoning** is the technique that changed this. Introduced by Wei et al. in 2022, CoT prompting encourages the model to produce intermediate reasoning steps before arriving at a final answer. Instead of leaping straight to a conclusion, the model "shows its work" -- and this simple shift dramatically improves accuracy on complex tasks.
+
+For agents, CoT is not just a nice-to-have. It is the mechanism that powers the **Think** step in the observe-think-act loop you studied in Module 1. Every time an agent decides which tool to call next, evaluates a tool's output, or plans a multi-step strategy, it is performing chain-of-thought reasoning. Understanding CoT deeply will make you a better agent builder.
+
+## The Problem: Direct Prompting Falls Short
+
+Consider a multi-step problem: *"A store sells notebooks for $4 each. Maria buys 3 notebooks and pays with a $20 bill. She then buys a pen for $2.50. How much money does she have left?"*
+
+With **direct prompting**, you simply ask the question and hope for a correct answer. The model tries to jump to the conclusion in a single step. For simple questions this works fine, but as the number of reasoning steps increases, accuracy drops sharply. The model must hold multiple intermediate values in its "head" simultaneously, and errors compound.
+
+With **CoT prompting**, the model works through each step explicitly:
+
+1. 3 notebooks at $4 each = $12
+2. $20 - $12 = $8 remaining after notebooks
+3. $8 - $2.50 = $5.50 remaining after the pen
+
+The answer is $5.50. By externalizing each step as text, the model can attend to its own intermediate results, catching errors that would compound in a single-step approach.
+
+<MermaidDiagram chart={`flowchart LR
+    subgraph Direct["Direct Prompting"]
+        Q1[Question] --> A1[Answer]
+    end
+    subgraph CoT["Chain-of-Thought Prompting"]
+        Q2[Question] --> S1[Step 1]
+        S1 --> S2[Step 2]
+        S2 --> S3[Step 3]
+        S3 --> A2[Answer]
+    end
+
+    style Direct fill:#fed7d7,stroke:#e53e3e,color:#1a202c
+    style CoT fill:#c6f6d5,stroke:#38a169,color:#1a202c
+    style Q1 fill:#fefcbf,stroke:#d69e2e,color:#1a202c
+    style A1 fill:#fefcbf,stroke:#d69e2e,color:#1a202c
+    style Q2 fill:#fefcbf,stroke:#d69e2e,color:#1a202c
+    style S1 fill:#ebf8ff,stroke:#3182ce,color:#1a202c
+    style S2 fill:#ebf8ff,stroke:#3182ce,color:#1a202c
+    style S3 fill:#ebf8ff,stroke:#3182ce,color:#1a202c
+    style A2 fill:#fefcbf,stroke:#d69e2e,color:#1a202c
+`} />
+
+The diagram above captures the core insight: direct prompting maps input to output in a single hop, while CoT prompting introduces a **reasoning chain** of intermediate steps between the question and the answer. Those intermediate steps are what make the difference.
+
+## Three Variants of Chain-of-Thought
+
+CoT prompting has evolved into several distinct techniques. Each offers a different trade-off between effort, accuracy, and generality.
+
+### Few-Shot CoT
+
+**Few-shot CoT** is the original technique from the Wei et al. paper. You provide one or more worked examples in the prompt that demonstrate step-by-step reasoning, and the model follows the same pattern for the actual question.
+
+The key idea is that the model learns the *format* of reasoning from your examples -- not just the answer, but the process of arriving at it. You are teaching the model to "show its work" by showing your own work first.
+
+Few-shot CoT is powerful but requires crafting good examples for each type of problem. The quality of your demonstrations directly affects the quality of the model's reasoning.
+
+### Zero-Shot CoT
+
+**Zero-shot CoT**, discovered by Kojima et al. in 2022, is remarkably simple: just append the phrase **"Let's think step by step"** to your prompt. No examples needed.
+
+This works because large language models have already internalized reasoning patterns from their training data. The trigger phrase activates those patterns, causing the model to decompose the problem into steps rather than jumping to an answer. It is less reliable than few-shot CoT on specialized tasks, but it is universally applicable and requires zero prompt engineering effort.
+
+Other effective trigger phrases include:
+- *"Let's work through this step by step."*
+- *"Let's break this down."*
+- *"Think carefully before answering."*
+- *"Before answering, reason through each part of the problem."*
+
+### Self-Consistency
+
+**Self-consistency**, introduced by Wang et al. in 2023, takes CoT one step further. Instead of generating a single reasoning chain, you sample multiple independent chains (typically 5-20) using a higher temperature setting, then take the **majority vote** across their final answers.
+
+The intuition is that correct reasoning paths tend to converge on the same answer, while incorrect paths are more likely to diverge. By sampling many paths and voting, you filter out random reasoning errors.
+
+Self-consistency is the most accurate CoT variant but also the most expensive, since it requires multiple LLM calls per question. It is most valuable for high-stakes decisions where accuracy matters more than latency or cost.
+
+## CoT in Action: A Reasoning Trace
+
+Let's trace how an LLM uses chain-of-thought reasoning to solve a complex problem step by step. The following sequence diagram shows the internal reasoning process -- the kind of thinking that happens during the **Think** phase of an agent loop:
+
+<MermaidDiagram chart={`sequenceDiagram
+    participant U as User
+    participant L as LLM (with CoT)
+
+    U->>L: "A farmer has 15 acres. He plants wheat<br/>on 2/5 of his land and corn on 1/3.<br/>How many acres are left unplanted?"
+
+    Note over L: Step 1: Calculate wheat acreage<br/>2/5 of 15 = 6 acres of wheat
+
+    Note over L: Step 2: Calculate corn acreage<br/>1/3 of 15 = 5 acres of corn
+
+    Note over L: Step 3: Total planted<br/>6 + 5 = 11 acres planted
+
+    Note over L: Step 4: Calculate unplanted<br/>15 - 11 = 4 acres unplanted
+
+    L->>U: "The farmer has 4 acres left unplanted.<br/>Wheat: 6 acres, Corn: 5 acres,<br/>Planted total: 11, Remaining: 4"
+`} />
+
+Notice how each step builds on the previous one. The model holds intermediate results (6 acres, 5 acres, 11 acres) as explicit text tokens rather than trying to compute the final answer in a single forward pass. This is the fundamental mechanism that makes CoT work.
+
+## Why Does Chain-of-Thought Work?
+
+CoT's effectiveness comes from three properties:
+
+**1. Decomposition reduces complexity.** A multi-step problem that is hard to solve in one shot becomes a series of simple sub-problems. Each individual step is well within the model's capability, even if the combined problem is not.
+
+**2. Intermediate results become attention targets.** When the model writes "2/5 of 15 = 6" as text, those tokens become part of the context that the model can attend to when computing the next step. The model is essentially using its own output as a scratchpad -- externalizing working memory that would otherwise be lost in the hidden states.
+
+**3. Reasoning becomes inspectable.** When an agent produces a wrong answer, CoT lets you trace *where* the reasoning went wrong. Was the initial decomposition flawed? Did a calculation error occur in step 2? This debuggability is critical for building reliable agents -- you cannot fix what you cannot see.
+
+> **Key insight:** CoT does not give the model new capabilities. It gives the model a way to use its existing capabilities more effectively by breaking hard problems into easy ones and keeping intermediate results visible.
+
+## Comparing Direct and CoT Prompting in Code
+
+Let's see the practical difference between direct prompting and CoT prompting using the Anthropic API. We will ask Claude to solve a logical reasoning problem both ways and compare the results:
+
+<CodeBlock code={`import anthropic
+
+client = anthropic.Anthropic()
+
+PROBLEM = """
+A company has 4 teams: Alpha, Beta, Gamma, and Delta.
+- Alpha has twice as many members as Beta.
+- Gamma has 3 more members than Alpha.
+- Delta has half as many members as Gamma.
+- Beta has 5 members.
+How many total members does the company have?
+"""
+
+# --- Approach 1: Direct Prompting ---
+direct_response = client.messages.create(
+    model="claude-sonnet-4-20250514",
+    max_tokens=256,
+    messages=[{
+        "role": "user",
+        "content": f"Answer with just the number. {PROBLEM}"
+    }]
+)
+print("Direct prompting answer:")
+print(direct_response.content[0].text)
+print()
+
+# --- Approach 2: Few-Shot CoT ---
+few_shot_cot_response = client.messages.create(
+    model="claude-sonnet-4-20250514",
+    max_tokens=1024,
+    messages=[{
+        "role": "user",
+        "content": f"""Solve this step by step, showing your work for each team.
+
+Example:
+Q: Team X has 4 members. Team Y has double Team X. How many total?
+A: Let's work through this:
+- Team X = 4 members
+- Team Y = 2 * 4 = 8 members
+- Total = 4 + 8 = 12 members
+
+Now solve:
+{PROBLEM}"""
+    }]
+)
+print("Few-shot CoT answer:")
+print(few_shot_cot_response.content[0].text)
+print()
+
+# --- Approach 3: Zero-Shot CoT ---
+zero_shot_cot_response = client.messages.create(
+    model="claude-sonnet-4-20250514",
+    max_tokens=1024,
+    messages=[{
+        "role": "user",
+        "content": f"{PROBLEM}\\nLet's think step by step."
+    }]
+)
+print("Zero-shot CoT answer:")
+print(zero_shot_cot_response.content[0].text)
+`} language="python" filename="cot_comparison.py" />
+
+The correct answer is:
+- Beta = 5
+- Alpha = 2 * 5 = 10
+- Gamma = 10 + 3 = 13
+- Delta = 13 / 2 = 6.5
+
+Total = 34.5 members.
+
+With direct prompting, the model often produces an incorrect number because it tries to hold all the relationships in its head at once. With CoT -- whether few-shot or zero-shot -- the model works through each team's count sequentially, dramatically reducing the chance of error.
+
+## Self-Consistency in Practice
+
+When accuracy is critical, self-consistency adds another layer of reliability. Here is how you would implement it:
+
+<CodeBlock code={`import anthropic
+from collections import Counter
+
+client = anthropic.Anthropic()
+
+def extract_final_number(text: str) -> str:
+    """Extract the last number mentioned in the response."""
+    import re
+    numbers = re.findall(r"[\\d.]+", text)
+    return numbers[-1] if numbers else "unknown"
+
+def self_consistency_solve(problem: str, n_samples: int = 5) -> str:
+    """Sample multiple CoT reasoning paths and take majority vote."""
+
+    answers = []
+
+    for i in range(n_samples):
+        response = client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=1024,
+            temperature=0.7,   # Higher temp for diverse paths
+            messages=[{
+                "role": "user",
+                "content": f"{problem}\\nLet's think step by step."
+            }]
+        )
+
+        reasoning = response.content[0].text
+        answer = extract_final_number(reasoning)
+        answers.append(answer)
+        print(f"  Sample {i+1}: {answer}")
+
+    # Majority vote
+    vote_counts = Counter(answers)
+    winner, count = vote_counts.most_common(1)[0]
+
+    print(f"\\nMajority answer: {winner} ({count}/{n_samples} votes)")
+    return winner
+
+PROBLEM = """
+A train travels from City A to City B at 60 mph.
+The return trip is at 40 mph.
+The cities are 120 miles apart.
+What is the average speed for the entire round trip?
+"""
+
+# Note: The correct answer is 48 mph (harmonic mean), NOT 50 mph.
+# This is a classic trick question where CoT + self-consistency shines.
+result = self_consistency_solve(PROBLEM, n_samples=5)
+`} language="python" filename="self_consistency.py" />
+
+Notice the **temperature of 0.7** -- this is intentional. Self-consistency needs diverse reasoning paths. At temperature 0, every sample would produce the same chain, defeating the purpose. The diversity comes from the temperature; the accuracy comes from the voting.
+
+## CoT and the Agent Loop
+
+Chain-of-thought reasoning is not just a prompting trick -- it is the cognitive engine that powers intelligent agents. Recall the **observe-think-act** loop from Module 1. The Think step is where CoT does its work:
+
+<MermaidDiagram chart={`flowchart TD
+    OBS[Observe: Tool result or user input] --> COT
+
+    subgraph COT["Think Step (Chain-of-Thought)"]
+        R1["1. What did I just learn?"]
+        R2["2. What do I still need?"]
+        R3["3. Which tool should I use next?"]
+        R4["4. What arguments should I pass?"]
+        R1 --> R2 --> R3 --> R4
+    end
+
+    COT --> DEC{Decision}
+    DEC -->|Need more info| ACT[Act: Call a tool]
+    DEC -->|Have enough| ANS[Respond to user]
+    ACT --> OBS
+
+    style COT fill:#ebf8ff,stroke:#3182ce,color:#1a202c
+    style R1 fill:#e9d8fd,stroke:#805ad5,color:#1a202c
+    style R2 fill:#e9d8fd,stroke:#805ad5,color:#1a202c
+    style R3 fill:#e9d8fd,stroke:#805ad5,color:#1a202c
+    style R4 fill:#e9d8fd,stroke:#805ad5,color:#1a202c
+    style OBS fill:#fefcbf,stroke:#d69e2e,color:#1a202c
+    style DEC fill:#fed7d7,stroke:#e53e3e,color:#1a202c
+    style ACT fill:#c6f6d5,stroke:#38a169,color:#1a202c
+    style ANS fill:#c6f6d5,stroke:#38a169,color:#1a202c
+`} />
+
+When you write an agent's system prompt and include instructions like "Before acting, reason about what you know and what you still need," you are explicitly requesting CoT behavior. The agent's internal monologue -- assessing observations, planning next steps, selecting tools -- is chain-of-thought reasoning applied to action selection rather than math problems.
+
+This is also why **ReAct** (Reasoning + Acting), one of the most influential agent architectures, works so well. ReAct explicitly separates the Thought from the Action in the model's output, forcing visible chain-of-thought reasoning at every step of the agent loop. You will explore ReAct in detail in Module 4 (Agent Architectures).
+
+## When to Use Each Variant
+
+Choosing the right CoT variant depends on your use case:
+
+**Zero-shot CoT** ("Let's think step by step") is your default starting point. It requires no example crafting, works across domains, and provides a meaningful accuracy boost on any multi-step task. Use it when you need a quick improvement without investing in prompt engineering.
+
+**Few-shot CoT** is the right choice when you have a specific, repeated task and can invest time in crafting high-quality examples. The examples serve as a template for the exact reasoning pattern you want. Common in production agent systems where the same type of reasoning happens thousands of times.
+
+**Self-consistency** is reserved for high-stakes decisions where accuracy matters more than cost or latency. Think: medical reasoning, financial calculations, or any agent action that is expensive to reverse. The additional API calls are a small price for significantly higher reliability.
+
+> **Looking ahead:** In lesson 05 (Reasoning Models and Extended Thinking), you will learn about models like OpenAI's o1/o3 and Claude's extended thinking mode. These models have CoT *built into the model itself* -- they generate internal reasoning tokens automatically, without any special prompting. They represent the next evolution of the ideas in this lesson.
+
+## Summary
+
+**Chain-of-Thought reasoning** is the technique of prompting an LLM to produce intermediate reasoning steps before arriving at a final answer. It works because decomposition reduces complexity, intermediate results become visible attention targets, and the reasoning chain becomes inspectable for debugging.
+
+The three main variants are **few-shot CoT** (provide worked examples), **zero-shot CoT** (append "Let's think step by step"), and **self-consistency** (sample multiple chains, majority vote). Each offers a different trade-off between prompt engineering effort, cost, and accuracy.
+
+For agent builders, CoT is foundational -- it is the mechanism that powers the Think step in the observe-think-act loop. When an agent reasons about which tool to call, evaluates whether it has enough information, or plans a multi-step strategy, it is performing chain-of-thought reasoning. Mastering CoT means building agents that reason reliably rather than guess.
+
+In the next lesson, we will turn to **Structured Outputs** -- getting the model to produce reliable JSON, function calls, and typed responses that your agent code can parse and act on programmatically.

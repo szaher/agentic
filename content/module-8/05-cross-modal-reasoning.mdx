@@ -1,0 +1,405 @@
+---
+title: "Cross-Modal Reasoning"
+quiz:
+  - question: "What is grounding in the context of multi-modal agents?"
+    options:
+      - "Connecting the agent to a physical robot that can interact with the real world"
+      - "Anchoring visual elements to their semantic meaning by linking information across modalities such as mapping a bar in a chart to its numeric value"
+      - "Restricting the model to only answer questions about topics it was trained on"
+      - "Converting all inputs to text before processing them"
+    correctIndex: 1
+  - question: "Why does chain-of-thought reasoning improve visual question answering compared to a single-step approach?"
+    options:
+      - "It forces the model to decompose the image into individual pixels before reasoning"
+      - "It reduces the resolution of the image to make processing faster"
+      - "It separates perception from reasoning, letting the model first describe what it sees and then reason over that structured description step by step"
+      - "It bypasses the vision encoder entirely and uses text-only reasoning"
+    correctIndex: 2
+  - question: "In a cross-modal pipeline, what is the purpose of the structured extraction step between perceiving an image and generating a final report?"
+    options:
+      - "It converts the extracted data into a format the agent can reason over programmatically, enabling calculations, comparisons, and trend analysis that pure vision cannot reliably perform"
+      - "It compresses the image to reduce token usage"
+      - "It sends the image to a separate model specialized in OCR"
+      - "It is optional and only used for debugging purposes"
+    correctIndex: 0
+  - question: "How does cross-modal reasoning differ from simply chaining a vision model and a text model sequentially?"
+    options:
+      - "Cross-modal reasoning uses a single model that processes all modalities at once"
+      - "There is no meaningful difference; they are the same technique"
+      - "Cross-modal reasoning involves iterative feedback between modalities where reasoning in one modality informs what to extract or verify in another"
+      - "Cross-modal reasoning only works with audio and text, not images"
+    correctIndex: 2
+---
+
+## Overview
+
+In the previous lessons, you learned how agents can perceive images (Lesson 02), process audio (Lesson 03), and generate visual content (Lesson 04). Each of those lessons treated a single modality in isolation -- the agent either looked at an image *or* listened to audio *or* produced a picture. But real-world tasks rarely fit neatly into one modality. A financial analyst looks at a chart, reads the axis labels, calculates percentage changes, and writes a narrative summary. A doctor reviews an X-ray, reads the patient notes, and produces a diagnosis that synthesizes both. A field engineer photographs a broken component, describes the damage, and generates a repair procedure.
+
+**Cross-modal reasoning** is the ability to combine information from multiple modalities -- sight, text, structured data, and generated output -- within a single reasoning chain. Rather than processing each modality independently, the agent weaves them together, using insight from one modality to guide extraction or reasoning in another.
+
+This lesson builds directly on the **chain-of-thought reasoning** techniques from Module 2. There, you learned that decomposing a problem into explicit intermediate steps improves accuracy and makes reasoning inspectable. Cross-modal reasoning applies the same principle across modality boundaries: perceive first, extract second, reason third, generate fourth. Each step externalizes intermediate results that the next step can attend to.
+
+## Grounding: Connecting What the Agent Sees to What It Knows
+
+The foundational concept behind cross-modal reasoning is **grounding** -- the process of anchoring visual or auditory elements to their semantic meaning by linking information across modalities. When you look at a bar chart, grounding is what lets you connect the tallest bar to the label "Q4 Revenue" and the number "$2.3M" on the y-axis. You are linking a visual pattern (tall rectangle) to textual meaning (a specific quarter and dollar amount).
+
+For an LLM agent, grounding is not automatic. A vision-language model can describe what it sees ("there is a tall blue bar"), but reliably extracting the precise numeric value requires the model to attend to axis labels, gridlines, and scale -- and then connect all of those pieces into a coherent interpretation. This is where chain-of-thought reasoning becomes essential.
+
+Without grounding, the agent operates in **ungrounded** mode: it can describe visual patterns but cannot reliably connect them to facts. With grounding, the agent operates in **grounded** mode: every visual observation is anchored to a specific meaning that can be verified and reasoned about.
+
+> **Key insight:** Grounding is not a separate technique you bolt on. It is the natural result of applying structured, step-by-step reasoning to multi-modal inputs. When the agent explicitly describes what it sees, extracts values, and cross-checks them, grounding emerges from the process.
+
+## The Cross-Modal Pipeline
+
+Cross-modal reasoning follows a pipeline pattern where each stage transforms the input into a more structured and actionable form. The pipeline below shows how an agent processes a chart image into a complete analytical report:
+
+<MermaidDiagram chart={`flowchart TD
+    IMG["📊 Input: Chart Image"] --> PERCEIVE
+
+    subgraph PERCEIVE["Stage 1: Perceive"]
+        P1["Identify chart type<br/>(bar, line, pie, etc.)"]
+        P2["Read axis labels,<br/>title, and legend"]
+        P3["Describe visual patterns<br/>(trends, outliers, clusters)"]
+        P1 --> P2 --> P3
+    end
+
+    PERCEIVE --> EXTRACT
+
+    subgraph EXTRACT["Stage 2: Extract"]
+        E1["Extract numeric values<br/>from each data point"]
+        E2["Structure as table<br/>(rows, columns, headers)"]
+        E3["Validate: do values<br/>match visual proportions?"]
+        E1 --> E2 --> E3
+    end
+
+    EXTRACT --> REASON
+
+    subgraph REASON["Stage 3: Reason"]
+        R1["Calculate trends<br/>(growth rates, averages)"]
+        R2["Identify anomalies<br/>and correlations"]
+        R3["Compare to context<br/>(benchmarks, history)"]
+        R1 --> R2 --> R3
+    end
+
+    REASON --> GENERATE
+
+    subgraph GENERATE["Stage 4: Generate"]
+        G1["Write narrative summary<br/>with key findings"]
+        G2["Generate comparison<br/>chart or table"]
+        G3["Produce final report<br/>combining text + visuals"]
+        G1 --> G2 --> G3
+    end
+
+    GENERATE --> OUTPUT["📄 Output: Analytical Report"]
+
+    style PERCEIVE fill:#ebf8ff,stroke:#3182ce,color:#1a202c
+    style EXTRACT fill:#e9d8fd,stroke:#805ad5,color:#1a202c
+    style REASON fill:#fefcbf,stroke:#d69e2e,color:#1a202c
+    style GENERATE fill:#c6f6d5,stroke:#38a169,color:#1a202c
+    style IMG fill:#fed7d7,stroke:#e53e3e,color:#1a202c
+    style OUTPUT fill:#c6f6d5,stroke:#38a169,color:#1a202c
+`} />
+
+Each stage in this pipeline serves a distinct purpose:
+
+- **Perceive** turns raw pixels into natural language descriptions. The agent identifies what kind of chart it is looking at, reads the labels, and describes the overall shape of the data.
+- **Extract** converts those descriptions into structured data. Instead of "the blue bar is the tallest," the agent produces `{"Q4": 2300000, "Q3": 1800000, ...}`. This is the critical grounding step -- visual patterns become programmable values.
+- **Reason** applies logic and computation to the structured data. This is where the agent calculates growth rates, identifies outliers, and draws conclusions. Crucially, this step operates on the extracted numbers, not on the raw image -- the agent has crossed from the visual modality to the analytical modality.
+- **Generate** produces the final output, which may itself be multi-modal: a written summary, a reformatted table, or even a new chart for comparison.
+
+## Visual Question Answering with Chain-of-Thought
+
+When an agent needs to answer a specific question about a visual input, the pipeline collapses into a focused **visual question answering (VQA)** workflow. The sequence diagram below shows how an agent handles a user asking a question about a dashboard screenshot:
+
+<MermaidDiagram chart={`sequenceDiagram
+    participant U as User
+    participant A as Agent
+    participant V as Vision Model
+    participant R as Reasoning (CoT)
+
+    U->>A: "Which region had the highest<br/>growth rate last quarter?"<br/>+ [dashboard screenshot]
+
+    A->>V: Perceive: Describe this dashboard.<br/>Focus on regional data and trends.
+    V-->>A: "Bar chart showing 4 regions.<br/>North: $1.2M→$1.5M, South: $800K→$1.1M,<br/>East: $600K→$650K, West: $900K→$950K.<br/>Title: 'Q3 vs Q4 Regional Revenue.'"
+
+    A->>R: Extract + Reason (CoT):<br/>1. Parse each region's Q3→Q4 values<br/>2. Calculate growth rate per region<br/>3. Identify the highest
+
+    Note over R: Step 1: North: $1.2M → $1.5M<br/>South: $800K → $1.1M<br/>East: $600K → $650K<br/>West: $900K → $950K
+
+    Note over R: Step 2: Growth rates<br/>North: (1.5-1.2)/1.2 = 25.0%<br/>South: (1.1-0.8)/0.8 = 37.5%<br/>East: (0.65-0.6)/0.6 = 8.3%<br/>West: (0.95-0.9)/0.9 = 5.6%
+
+    Note over R: Step 3: Highest = South at 37.5%
+
+    R-->>A: South region, 37.5% growth
+
+    A->>U: "The South region had the highest<br/>growth rate at 37.5%, growing from<br/>$800K to $1.1M between Q3 and Q4."
+`} />
+
+Notice the separation between **perception** (the Vision Model describing the chart) and **reasoning** (the CoT step calculating growth rates). This separation is deliberate and important. Vision models are strong at describing what they see but weak at precise arithmetic. By extracting the numbers first and then reasoning over them in a text-only chain-of-thought step, the agent plays to each modality's strengths.
+
+This is exactly the chain-of-thought principle from Module 2 applied to a visual context: decompose the problem, externalize intermediate results, and reason step by step. The only difference is that the first step of the chain crosses a modality boundary -- from pixels to text.
+
+## Multi-Step Cross-Modal Workflows
+
+Real-world cross-modal tasks often require multiple round trips between modalities. The agent might look at an image, extract data, realize it needs to look at a different part of the image more carefully, re-examine with a focused prompt, and then continue reasoning. This iterative pattern is what distinguishes true **cross-modal reasoning** from simple sequential chaining.
+
+Consider a complex workflow where an agent analyzes a multi-page financial report:
+
+1. **First pass (visual):** Scan all pages and identify which ones contain charts versus tables versus text.
+2. **Focused extraction (visual + text):** For each chart, extract data points. For each table, parse rows and columns. For text sections, summarize key claims.
+3. **Cross-reference (reasoning):** Check whether the numbers in the charts match the numbers in the tables. Flag any discrepancies.
+4. **Synthesis (generation):** Write a summary that integrates findings from all sources, noting where the visual data confirms or contradicts the textual claims.
+
+The key characteristic of this workflow is **feedback between modalities**. The reasoning step in phase 3 might discover that a chart shows different numbers than the accompanying table. This triggers a return to the visual modality -- the agent re-examines the chart with a more focused prompt to determine whether it misread a value or whether there is a genuine discrepancy in the document.
+
+## Building a Cross-Modal Chart Analysis Agent
+
+Let's build a complete agent that takes a chart image, extracts data, answers questions, and generates a summary. This implementation brings together the perceive-extract-reason-generate pipeline in working code:
+
+<CodeBlock code={`import anthropic
+import base64
+import json
+from pathlib import Path
+
+
+client = anthropic.Anthropic()
+MODEL = "claude-sonnet-4-20250514"
+
+
+def load_image_as_base64(image_path: str) -> str:
+    """Load an image file and return its base64-encoded content."""
+    image_bytes = Path(image_path).read_bytes()
+    return base64.standard_b64encode(image_bytes).decode("utf-8")
+
+
+def perceive_chart(image_b64: str, media_type: str = "image/png") -> str:
+    """Stage 1: Perceive -- describe the chart in detail."""
+    response = client.messages.create(
+        model=MODEL,
+        max_tokens=1024,
+        messages=[{
+            "role": "user",
+            "content": [
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": media_type,
+                        "data": image_b64,
+                    },
+                },
+                {
+                    "type": "text",
+                    "text": (
+                        "Describe this chart in detail. Include:\n"
+                        "1. Chart type (bar, line, pie, etc.)\n"
+                        "2. Title and axis labels\n"
+                        "3. All data points with their exact values\n"
+                        "4. Any visible trends, patterns, or outliers\n"
+                        "Be precise with numbers -- read them carefully "
+                        "from the axes and data labels."
+                    ),
+                },
+            ],
+        }],
+    )
+    return response.content[0].text
+
+
+def extract_structured_data(description: str) -> dict:
+    """Stage 2: Extract -- convert description to structured JSON."""
+    response = client.messages.create(
+        model=MODEL,
+        max_tokens=1024,
+        messages=[{
+            "role": "user",
+            "content": (
+                "Given this chart description, extract the data into "
+                "structured JSON. Include chart_type, title, x_axis, "
+                "y_axis, and a 'data' array of objects with the "
+                "relevant fields.\n\n"
+                f"Description:\n{description}\n\n"
+                "Respond with ONLY valid JSON, no markdown fences."
+            ),
+        }],
+    )
+    return json.loads(response.content[0].text)
+
+
+def reason_about_data(
+    structured_data: dict, question: str
+) -> str:
+    """Stage 3: Reason -- answer a question using chain-of-thought."""
+    response = client.messages.create(
+        model=MODEL,
+        max_tokens=1024,
+        messages=[{
+            "role": "user",
+            "content": (
+                "You are given structured data extracted from a chart. "
+                "Answer the question using step-by-step reasoning.\n\n"
+                "Data:\n"
+                f"{json.dumps(structured_data, indent=2)}\n\n"
+                f"Question: {question}\n\n"
+                "Think step by step:\n"
+                "1. Identify which data points are relevant\n"
+                "2. Perform any necessary calculations\n"
+                "3. State your conclusion with supporting numbers"
+            ),
+        }],
+    )
+    return response.content[0].text
+
+
+def generate_summary(
+    description: str, structured_data: dict, qa_pairs: list[dict]
+) -> str:
+    """Stage 4: Generate -- produce an analytical report."""
+    qa_text = "\n".join(
+        f"Q: {qa['question']}\nA: {qa['answer']}"
+        for qa in qa_pairs
+    )
+
+    response = client.messages.create(
+        model=MODEL,
+        max_tokens=2048,
+        messages=[{
+            "role": "user",
+            "content": (
+                "Write a concise analytical summary of this chart. "
+                "Integrate the visual description, extracted data, "
+                "and Q&A findings into a coherent report.\n\n"
+                f"Visual description:\n{description}\n\n"
+                f"Extracted data:\n"
+                f"{json.dumps(structured_data, indent=2)}\n\n"
+                f"Analysis Q&A:\n{qa_text}\n\n"
+                "Format the summary with:\n"
+                "- A one-sentence overview\n"
+                "- Key findings (bulleted)\n"
+                "- Notable trends or concerns\n"
+                "- Recommended next steps"
+            ),
+        }],
+    )
+    return response.content[0].text
+
+
+# --- Run the full cross-modal pipeline ---
+
+def analyze_chart(image_path: str, questions: list[str]) -> str:
+    """End-to-end cross-modal chart analysis."""
+    print("Stage 1: Perceiving chart...")
+    image_b64 = load_image_as_base64(image_path)
+    description = perceive_chart(image_b64)
+    print(f"  Perceived: {description[:120]}...")
+
+    print("Stage 2: Extracting structured data...")
+    structured_data = extract_structured_data(description)
+    print(f"  Extracted {len(structured_data.get('data', []))} "
+          f"data points")
+
+    print("Stage 3: Reasoning about data...")
+    qa_pairs = []
+    for question in questions:
+        answer = reason_about_data(structured_data, question)
+        qa_pairs.append({"question": question, "answer": answer})
+        print(f"  Q: {question}")
+        print(f"  A: {answer[:100]}...")
+
+    print("Stage 4: Generating summary report...")
+    summary = generate_summary(description, structured_data, qa_pairs)
+
+    return summary
+
+
+# Example usage
+if __name__ == "__main__":
+    report = analyze_chart(
+        image_path="quarterly_revenue.png",
+        questions=[
+            "Which quarter had the highest revenue?",
+            "What is the quarter-over-quarter growth rate?",
+            "Are there any quarters with declining revenue?",
+        ],
+    )
+    print("\n=== FINAL REPORT ===\n")
+    print(report)
+`} language="python" filename="cross_modal_agent.py" />
+
+There are several design decisions worth highlighting in this code:
+
+**Separation of stages.** Each function handles exactly one stage of the pipeline. The `perceive_chart` function only describes what it sees -- it does not try to calculate growth rates. The `reason_about_data` function only works with structured data -- it never sees the original image. This separation ensures that each stage can be tested, debugged, and improved independently.
+
+**Grounding through extraction.** The `extract_structured_data` function is the grounding step. It converts free-text descriptions like "the Q4 bar reaches approximately $2.3 million" into `{"quarter": "Q4", "revenue": 2300000}`. Once the data is in structured form, the reasoning stage can perform exact arithmetic rather than relying on the vision model's approximate number reading.
+
+**Chain-of-thought in the reasoning stage.** The `reason_about_data` function explicitly prompts for step-by-step reasoning, applying the CoT techniques from Module 2. This is critical for multi-step calculations like growth rates, where a single-step answer is prone to errors.
+
+## Validation: Closing the Loop
+
+One of the most powerful aspects of cross-modal reasoning is the ability to **validate** extracted data by crossing back into the visual modality. If the agent extracts a value of $2.3M for Q4 revenue, it can re-examine the chart with a focused prompt: "Look at the Q4 bar specifically. Does it reach the $2.3M gridline?" This cross-modal validation catches extraction errors that would otherwise propagate through the entire pipeline.
+
+<CodeBlock code={`def validate_extraction(
+    image_b64: str,
+    structured_data: dict,
+    media_type: str = "image/png",
+) -> dict:
+    """Cross-modal validation: verify extracted values
+    against the original image."""
+    response = client.messages.create(
+        model=MODEL,
+        max_tokens=1024,
+        messages=[{
+            "role": "user",
+            "content": [
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": media_type,
+                        "data": image_b64,
+                    },
+                },
+                {
+                    "type": "text",
+                    "text": (
+                        "I extracted the following data from this "
+                        "chart. Please verify each value by looking "
+                        "at the chart carefully.\n\n"
+                        f"{json.dumps(structured_data, indent=2)}\n\n"
+                        "For each data point, respond with:\n"
+                        '- "correct" if the value matches the chart\n'
+                        '- "incorrect: [actual value]" if it does '
+                        "not match\n\n"
+                        "Return your findings as a JSON object with "
+                        "the same keys and your verification result "
+                        "for each."
+                    ),
+                },
+            ],
+        }],
+    )
+    return json.loads(response.content[0].text)
+`} language="python" filename="validation.py" />
+
+This validation step transforms the pipeline from a one-way chain into a **feedback loop**. When validation catches an error, the agent can re-extract with a corrected prompt, improving the accuracy of the final output. This iterative refinement is a hallmark of robust cross-modal systems.
+
+## When Cross-Modal Reasoning Breaks Down
+
+Cross-modal reasoning is powerful but not infallible. Understanding its failure modes helps you build more robust agents:
+
+- **Perception errors compound.** If the vision model misreads "1.8M" as "1.3M" in the perception stage, every downstream calculation will be wrong. The validation step described above mitigates this, but does not eliminate it entirely.
+- **Ambiguous visuals resist grounding.** Low-resolution charts, overlapping labels, and 3D effects make precise value extraction unreliable. When the agent encounters ambiguous visuals, it should express uncertainty rather than guess.
+- **Context limits constrain complex documents.** A multi-page report with dozens of charts may exceed the model's context window when all descriptions and extracted data are combined. Prioritizing which charts to analyze deeply is itself a reasoning task.
+- **Hallucinated precision.** The agent may report a value as "$2,347,521" when the chart only shows resolution to the nearest $100K. Training the agent to report values at the appropriate precision level is important for trustworthiness.
+
+> **Practical tip:** Always include confidence indicators in your cross-modal pipeline. If the perception stage is uncertain about a value ("the bar appears to be between $1.7M and $1.9M"), that uncertainty should propagate through the extraction and reasoning stages rather than being silently resolved into a false-precision number.
+
+## Summary
+
+**Cross-modal reasoning** is the ability to combine information from multiple modalities within a single reasoning chain, using insights from one modality to guide extraction or reasoning in another. It is built on the concept of **grounding** -- anchoring visual or auditory elements to their semantic meaning by linking perception to structured data.
+
+The cross-modal pipeline follows four stages: **perceive** (describe what the agent sees), **extract** (convert descriptions to structured data), **reason** (apply chain-of-thought logic to the structured data), and **generate** (produce a final output that may span multiple modalities). This pipeline directly applies the chain-of-thought reasoning principles from Module 2, with the added dimension of crossing modality boundaries between steps.
+
+The key design principle is **separation of perception from reasoning**. Vision models excel at describing what they see but struggle with precise arithmetic. By extracting structured data as an intermediate step, the agent can apply exact computation to values that were originally encoded as pixels. Validation steps that cross back into the visual modality create feedback loops that catch extraction errors before they propagate.
+
+In the next lesson, we will explore **Multi-Modal Tool Use** -- how agents interact with screens, browsers, cameras, and file systems to gather multi-modal inputs and produce multi-modal outputs in real-world environments.

@@ -1,0 +1,71 @@
+{
+  "id": 3,
+  "title": "Tool Use & Function Calling",
+  "description": "Giving agents the ability to act on the world through tools, APIs, and the Model Context Protocol",
+  "color": "#63b3ed",
+  "lessons": [
+    {
+      "slug": "01-why-tools-matter",
+      "title": "Why Tools Matter",
+      "description": "How tool use transforms LLMs from knowledge engines into action-taking agents",
+      "estimatedMinutes": 10,
+      "diagramTypes": ["architecture", "comparison"],
+      "hasCode": false,
+      "hasQuiz": true
+    },
+    {
+      "slug": "02-function-calling-basics",
+      "title": "Function Calling Basics",
+      "description": "How LLMs select and invoke functions: schemas, parameters, and responses",
+      "estimatedMinutes": 12,
+      "diagramTypes": ["sequence", "flowchart"],
+      "hasCode": true,
+      "hasQuiz": true
+    },
+    {
+      "slug": "03-tool-interface-design",
+      "title": "Designing Effective Tool Interfaces",
+      "description": "Principles for tool naming, descriptions, and parameter schemas that LLMs use reliably",
+      "estimatedMinutes": 12,
+      "diagramTypes": ["comparison"],
+      "hasCode": true,
+      "hasQuiz": true
+    },
+    {
+      "slug": "04-error-handling-and-retries",
+      "title": "Error Handling and Retries",
+      "description": "Graceful failure: what happens when tools break and how agents recover",
+      "estimatedMinutes": 10,
+      "diagramTypes": ["flowchart", "sequence"],
+      "hasCode": true,
+      "hasQuiz": true
+    },
+    {
+      "slug": "05-model-context-protocol",
+      "title": "Model Context Protocol (MCP)",
+      "description": "The open standard for connecting agents to tools, data, and services",
+      "estimatedMinutes": 12,
+      "diagramTypes": ["architecture", "sequence"],
+      "hasCode": true,
+      "hasQuiz": true
+    },
+    {
+      "slug": "06-building-mcp-servers",
+      "title": "Building MCP Servers",
+      "description": "Create your own MCP server to expose custom tools and resources",
+      "estimatedMinutes": 15,
+      "diagramTypes": ["architecture", "flowchart"],
+      "hasCode": true,
+      "hasQuiz": false
+    },
+    {
+      "slug": "07-tool-use-lab",
+      "title": "Tool Use Lab",
+      "description": "Hands-on: build an agent that searches the web, reads files, and calls APIs",
+      "estimatedMinutes": 15,
+      "diagramTypes": ["sequence"],
+      "hasCode": true,
+      "hasQuiz": false
+    }
+  ]
+}

@@ -1,0 +1,272 @@
+---
+title: "Self-Reflection and Critique"
+quiz:
+  - question: "What is the core addition that self-reflection introduces to the standard agent loop?"
+    options:
+      - "A planning step that decomposes the task before execution"
+      - "A critique step where the agent evaluates its own output and revises before responding"
+      - "A memory retrieval step that fetches relevant past interactions"
+      - "A routing step that delegates to specialized sub-agents"
+    correctIndex: 1
+  - question: "When is self-reflection LEAST likely to improve agent performance?"
+    options:
+      - "Code generation tasks where the agent can check its own logic"
+      - "Long-form writing tasks that benefit from revision"
+      - "Simple factual lookups where the model either knows the answer or hallucinates"
+      - "Complex reasoning tasks with multiple interdependent steps"
+    correctIndex: 2
+  - question: "What is a key advantage of using a separate critic model instead of same-model reflection?"
+    options:
+      - "It is always cheaper because smaller models can serve as critics"
+      - "It avoids the blind-spot problem where the same model repeats its own errors"
+      - "It eliminates the need for a critic prompt entirely"
+      - "It guarantees the output is factually correct"
+    correctIndex: 1
+  - question: "In the Reflexion pattern, what role does the 'verbal reinforcement' play?"
+    options:
+      - "It replaces gradient-based fine-tuning with natural language feedback that persists across attempts"
+      - "It provides numerical reward scores that the model optimizes against"
+      - "It retrains the model weights after each failed attempt"
+      - "It routes the task to a different model if the first attempt fails"
+    correctIndex: 0
+---
+
+## Overview
+
+In the previous lessons, we explored ReAct's interleaved reasoning-and-acting loop and Plan-and-Execute's upfront planning approach. Both architectures produce output in a forward pass -- the agent generates a response and delivers it. But what if the first attempt is not good enough? Humans rarely submit a first draft without reviewing it. We re-read our emails, double-check our code, and revise our arguments. Why should agents be any different?
+
+**Self-reflection** adds a **critique step** to the agent loop: after generating an output, the agent evaluates its own work, identifies weaknesses, and revises before returning the final result. This generate-evaluate-revise cycle transforms a single-pass system into one that iteratively improves its own output.
+
+The insight is simple but powerful: LLMs are often better at *judging* quality than *producing* quality on the first try. A model that writes mediocre code might still recognize that the code has a bug when asked to review it. Self-reflection exploits this asymmetry -- using the model's critical abilities to compensate for its generative limitations.
+
+## The Generate-Critique-Revise Loop
+
+At its core, self-reflection follows a three-phase cycle. The agent generates a candidate output, a critic evaluates it against quality criteria, and if the output does not pass, the agent revises using the critique as guidance. This loop repeats until the output meets the acceptance threshold or a maximum number of iterations is reached.
+
+<MermaidDiagram chart={`flowchart TD
+    INPUT[User Request] --> GEN[Generate Output]
+    GEN --> CRITIC{Critic Evaluates}
+    CRITIC -->|Pass: meets quality bar| OUTPUT[Return Final Output]
+    CRITIC -->|Fail: issues found| FEEDBACK[Critique Feedback]
+    FEEDBACK --> REVISE[Revise Output]
+    REVISE --> CRITIC
+
+    style INPUT fill:#fefcbf,stroke:#d69e2e,color:#1a202c
+    style GEN fill:#ebf8ff,stroke:#3182ce,color:#1a202c
+    style CRITIC fill:#fed7d7,stroke:#e53e3e,color:#1a202c
+    style OUTPUT fill:#c6f6d5,stroke:#38a169,color:#1a202c
+    style FEEDBACK fill:#e9d8fd,stroke:#805ad5,color:#1a202c
+    style REVISE fill:#ebf8ff,stroke:#3182ce,color:#1a202c
+`} />
+
+The key design decisions in this loop are: *What criteria does the critic use?* *How many iterations are allowed?* *What constitutes a "pass"?* These choices determine whether self-reflection adds genuine value or merely burns tokens.
+
+## The Reflexion Pattern
+
+The most influential formalization of self-reflection is the **Reflexion** pattern, introduced by Shinn et al. in 2023. Reflexion goes beyond simple "try again" retries by introducing **verbal reinforcement** -- the agent produces a natural language reflection on *why* its attempt failed, and this reflection is carried forward as context for the next attempt.
+
+The key insight of Reflexion is that natural language feedback is a richer signal than a binary pass/fail. When an agent reflects "I failed because I forgot to handle the edge case where the list is empty," that specific self-diagnosis helps it avoid the same mistake on the next attempt. This is analogous to how humans learn from mistakes -- not just knowing *that* something went wrong, but understanding *why*.
+
+<MermaidDiagram chart={`sequenceDiagram
+    participant U as User
+    participant G as Generator
+    participant C as Critic
+    participant M as Memory
+
+    U->>G: Task request
+    G->>C: Attempt 1: Generated output
+    C->>C: Evaluate against criteria
+    C->>G: Critique: "Missing error handling,<br/>edge case X not covered"
+    G->>M: Store reflection:<br/>"Need to handle empty inputs"
+
+    Note over G: Revision attempt with<br/>critique + stored reflections
+
+    G->>C: Attempt 2: Revised output
+    C->>C: Evaluate against criteria
+    C->>G: Pass: All criteria met
+
+    G->>U: Return final output
+`} />
+
+Notice the **Memory** participant in the diagram. In the full Reflexion pattern, reflections accumulate across attempts, giving the agent an evolving understanding of its own failure modes. This is what distinguishes Reflexion from naive retry loops -- the agent does not just try again blindly; it tries again *with knowledge of what went wrong*.
+
+> **Connection to Module 10:** Self-reflection is essentially a built-in **LLM-as-judge** (a concept you will explore in depth in Module 10, Evaluation). The difference is that in evaluation, the judge scores a finished output after the fact. In self-reflection, the judge operates *inside* the agent loop, catching problems before the user ever sees them.
+
+## Two Approaches: Same-Model vs. Separate Critic
+
+There are two fundamental ways to implement the critic in a self-reflection system, and the choice has significant implications for quality, cost, and reliability.
+
+### Same-Model Reflection
+
+In **same-model reflection**, a single LLM plays both roles -- generator and critic -- using different prompts. The generator prompt produces the output, and a separate critic prompt evaluates it. This is the simplest approach and requires no additional model infrastructure.
+
+The advantage is simplicity and coherence: the same model that generated the output understands the reasoning behind it and can assess it in context. The disadvantage is the **blind-spot problem** -- a model that makes a reasoning error during generation may repeat the same error during critique, because both calls share the same underlying knowledge and biases. If the model believes an incorrect fact, it will not catch the error by reflecting on it.
+
+### Separate Critic
+
+In a **separate critic** setup, a different LLM (or the same model with a fundamentally different prompt and temperature) evaluates the generator's output. This could be a stronger model reviewing a weaker model's work, a specialized fine-tuned model focused on quality assessment, or even a code execution environment that tests generated code.
+
+The advantage is independence: the critic brings a different "perspective" and is less likely to share the generator's blind spots. The disadvantage is increased complexity and cost -- you are running two models instead of one, and the critic must understand the task well enough to evaluate the output without having generated it.
+
+| Approach | Pros | Cons | Best For |
+|----------|------|------|----------|
+| Same-model | Simple, coherent, one model to manage | Shared blind spots, may repeat errors | Writing, reasoning, first-pass review |
+| Separate critic | Independent perspective, catches more errors | More complex, higher cost, needs coordination | Code generation, high-stakes tasks |
+
+## Implementing a Self-Reflecting Agent
+
+Let's build a self-reflecting agent that generates code and then critiques its own output before returning it to the user. The agent uses same-model reflection with distinct generator and critic prompts:
+
+<CodeBlock code={`import anthropic
+import json
+
+client = anthropic.Anthropic()
+MODEL = "claude-sonnet-4-20250514"
+MAX_REVISIONS = 3
+
+GENERATOR_PROMPT = """You are a Python code generator. Given a task description,
+write clean, correct, well-documented Python code that solves the task.
+
+If you are given feedback from a previous attempt, use it to fix the
+issues identified. Do not repeat the same mistakes.
+
+Return ONLY the Python code, no explanations outside the code."""
+
+CRITIC_PROMPT = """You are a senior code reviewer. Evaluate the following Python
+code for correctness, edge cases, and code quality.
+
+Respond in JSON format:
+{
+  "passed": true/false,
+  "issues": ["list of specific issues found"],
+  "suggestions": ["list of improvement suggestions"]
+}
+
+Be strict. Check for:
+- Off-by-one errors
+- Missing edge case handling (empty inputs, None values)
+- Incorrect logic or algorithms
+- Missing type hints or docstrings
+- Potential runtime errors
+
+If the code is correct and handles edge cases well, set passed to true."""
+
+def generate(task: str, feedback: str = "") -> str:
+    """Generate or revise code for the given task."""
+    messages = [{"role": "user", "content": f"Task: {task}"}]
+    if feedback:
+        messages.append({
+            "role": "assistant",
+            "content": "I'll revise the code based on your feedback."
+        })
+        messages.append({
+            "role": "user",
+            "content": f"Previous feedback:\\n{feedback}\\n\\nPlease fix these issues."
+        })
+
+    response = client.messages.create(
+        model=MODEL,
+        max_tokens=2048,
+        system=GENERATOR_PROMPT,
+        messages=messages,
+    )
+    return response.content[0].text
+
+def critique(code: str, task: str) -> dict:
+    """Evaluate generated code and return structured feedback."""
+    response = client.messages.create(
+        model=MODEL,
+        max_tokens=1024,
+        system=CRITIC_PROMPT,
+        messages=[{
+            "role": "user",
+            "content": f"Task: {task}\\n\\nCode to review:\\n\`\`\`python\\n{code}\\n\`\`\`"
+        }],
+    )
+    return json.loads(response.content[0].text)
+
+def self_reflecting_agent(task: str) -> str:
+    """Generate code with self-reflection and iterative revision."""
+    print(f"Task: {task}\\n")
+
+    code = generate(task)
+    print(f"--- Attempt 1 ---\\n{code}\\n")
+
+    for attempt in range(2, MAX_REVISIONS + 2):
+        review = critique(code, task)
+        print(f"--- Critique (Attempt {attempt - 1}) ---")
+        print(f"  Passed: {review['passed']}")
+        for issue in review.get("issues", []):
+            print(f"  Issue: {issue}")
+
+        if review["passed"]:
+            print(f"\\nCode accepted after {attempt - 1} attempt(s).")
+            return code
+
+        # Build feedback string from issues and suggestions
+        feedback = "Issues found:\\n"
+        feedback += "\\n".join(f"- {i}" for i in review["issues"])
+        if review.get("suggestions"):
+            feedback += "\\nSuggestions:\\n"
+            feedback += "\\n".join(f"- {s}" for s in review["suggestions"])
+
+        code = generate(task, feedback)
+        print(f"\\n--- Attempt {attempt} ---\\n{code}\\n")
+
+    print(f"\\nMax revisions reached. Returning best attempt.")
+    return code
+
+
+# --- Run it ---
+result = self_reflecting_agent(
+    "Write a function that finds the longest palindromic substring "
+    "in a given string. Handle edge cases like empty strings and "
+    "single characters."
+)
+`} language="python" filename="self_reflecting_agent.py" />
+
+There are several design choices worth noting in this implementation. The **critic returns structured JSON**, making it easy to programmatically check the `passed` field and iterate over specific issues. The **feedback accumulates** -- each revision attempt receives the full list of issues from the previous critique. And the **MAX_REVISIONS cap** prevents infinite loops when the model cannot satisfy its own critic.
+
+## When Self-Reflection Helps
+
+Self-reflection is not universally beneficial. It shines in specific categories of tasks and can actually hurt performance in others.
+
+### Where Reflection Adds Value
+
+**Code generation** is the strongest use case. Generated code can be logically analyzed for bugs, edge cases, and style issues. The critic can check for specific patterns (error handling, input validation) that the generator might overlook in its first pass. Even better, if you have a test suite, you can use actual test execution as an objective critic rather than relying on LLM judgment.
+
+**Writing and content creation** benefits significantly from revision. First drafts often have structural problems, unclear arguments, or inconsistent tone. A critic prompt that checks for clarity, coherence, and completeness can guide meaningful revisions.
+
+**Complex reasoning** with multiple steps improves when the agent reviews its own chain of thought. The critic can verify that each step follows logically from the previous one, catching errors that compound through a long reasoning chain -- the same principle behind Chain-of-Thought verification from Module 2.
+
+### Where Reflection Hurts
+
+**Simple factual lookups** gain nothing from self-reflection. If the model does not know the answer to "What is the capital of Burkina Faso?", reflecting on its own answer will not help -- it will either confirm the correct answer it already knew or double down on a hallucination. Self-reflection cannot fix knowledge gaps; it can only improve *reasoning* about knowledge the model already has.
+
+**Low-complexity tasks** suffer from unnecessary overhead. If the task is "convert this temperature from Celsius to Fahrenheit," the reflection loop adds latency and cost with no quality improvement. The first-pass answer is almost always correct for simple, well-defined operations.
+
+**Time-sensitive requests** are a poor fit because each reflection iteration adds a full LLM round trip. For a real-time chatbot, adding 2-3 extra LLM calls per response may make latency unacceptable, even if quality improves.
+
+> **Looking ahead:** In the next lesson on **Routing and Handoffs**, you will learn how to classify incoming requests by complexity and route them accordingly. This lets you apply self-reflection selectively -- complex code generation tasks go through the reflection loop, while simple questions get a direct response. Routing is what makes reflection practical in production systems.
+
+## Controlling Reflection Depth
+
+A critical design parameter is **how many revision iterations to allow**. Too few, and you miss fixable issues. Too many, and the agent oscillates -- fixing one issue while introducing another, or the critic becomes increasingly nitpicky about stylistic preferences rather than genuine problems.
+
+In practice, most of the value comes from the **first revision**. Research on Reflexion and similar patterns shows diminishing returns after 2-3 iterations. A reasonable default is:
+
+- **Max 3 iterations** for code generation (test-based feedback is objective)
+- **Max 2 iterations** for writing tasks (subjective quality plateaus quickly)
+- **Max 1 iteration** for reasoning verification (one sanity check is enough)
+
+You should also implement an **escape hatch**: if the critic's feedback on revision N is the same as revision N-1, the agent is stuck in a loop and should return its best attempt rather than continuing to cycle.
+
+## Summary
+
+**Self-reflection** introduces a critique step into the agent loop, transforming single-pass generation into an iterative generate-evaluate-revise cycle. The **Reflexion** pattern formalizes this with verbal reinforcement -- natural language reflections on *why* an attempt failed, carried forward to guide the next attempt.
+
+You can implement the critic as **same-model reflection** (simple but prone to shared blind spots) or a **separate critic** (independent perspective but higher cost and complexity). The choice depends on the task's stakes and your tolerance for complexity.
+
+Self-reflection works best for **code generation, writing, and complex reasoning** -- tasks where quality is subjective or multi-dimensional and where first drafts are reliably improvable. It is least effective for **factual lookups, simple tasks, and time-sensitive requests** where the overhead outweighs the benefit.
+
+In the next lesson, we will explore **Routing and Handoffs** -- how agents classify incoming requests and delegate them to the right sub-agent or workflow. Routing is the complement to reflection: instead of applying the same processing to every request, routing lets you apply heavy techniques like self-reflection only where they are needed.

@@ -1,0 +1,390 @@
+---
+title: "CI/CD for Agent Systems"
+quiz:
+  - question: "Why can't traditional CI/CD pipelines be used as-is for agent systems?"
+    options:
+      - "Agent code is written in a different programming language than web applications"
+      - "Agents have non-deterministic behavior driven by prompts and models, so unit tests alone cannot verify correctness -- you also need evaluation suites and behavioral gates"
+      - "CI/CD tools like GitHub Actions do not support Python projects"
+      - "Agent systems are too simple to require automated deployment pipelines"
+    correctIndex: 1
+  - question: "What is the purpose of an evaluation gate in an agent CI/CD pipeline?"
+    options:
+      - "To block deployments when evaluation scores drop below a defined threshold, preventing regressions from reaching production"
+      - "To automatically fix failing prompts before deployment"
+      - "To replace manual code review with AI-generated reviews"
+      - "To speed up the deployment process by skipping slow tests"
+    correctIndex: 0
+  - question: "Which versioning strategy pins the exact model identifier in your deployment configuration to prevent unexpected behavior changes?"
+    options:
+      - "Prompt versioning"
+      - "Tool versioning"
+      - "Model pinning"
+      - "Canary versioning"
+    correctIndex: 2
+  - question: "In a canary deployment for agents, what is the recommended approach when the canary shows degraded evaluation scores?"
+    options:
+      - "Increase the canary traffic percentage to gather more data"
+      - "Wait 24 hours before making any decision"
+      - "Automatically roll back to the previous known-good version and alert the team"
+      - "Redeploy the same version with a higher temperature setting"
+    correctIndex: 2
+---
+
+## Overview
+
+In the previous lesson, we containerized our agents and deployed them to cloud infrastructure. But deploying once is easy -- the hard part is deploying *continuously* without breaking things. Traditional web applications have mature CI/CD pipelines: push code, run tests, deploy if green. Agent systems break this model because their behavior depends on three moving parts -- code, prompts, and models -- and because their outputs are non-deterministic. A unit test that passes today might fail tomorrow with the same code if the model provider updates their weights.
+
+**CI/CD for agent systems** extends traditional continuous integration and delivery with evaluation gates, prompt versioning, model pinning, and canary deployments. This lesson builds the pipeline that connects your evaluation harness from Module 10 to your deployment infrastructure from the previous lesson, creating an automated path from commit to production that catches regressions before users do.
+
+## Why Traditional CI/CD Falls Short
+
+A standard CI/CD pipeline assumes deterministic behavior: the same input always produces the same output. Run the tests, check the exit code, deploy if zero. Agent systems violate this assumption in three ways:
+
+- **Non-deterministic outputs** -- the same prompt can produce different responses across runs, even with temperature set to zero (model providers do not guarantee bit-exact reproducibility)
+- **Multi-artifact deployments** -- a single agent change might involve updated code, a revised prompt, and a different model version, each needing independent versioning
+- **Behavioral regressions** -- a prompt change that improves performance on one task category can silently degrade another, and unit tests will not catch this
+
+This means agent pipelines need an additional layer between "tests pass" and "deploy": an **evaluation gate** that runs your eval harness against a representative benchmark and blocks deployment if scores drop below a threshold.
+
+<MermaidDiagram chart={`graph TD
+    A["Developer Commits"] --> B["Lint & Static Analysis"]
+    B --> C["Unit Tests"]
+    C --> D["Integration Tests"]
+    D --> E["Evaluation Suite"]
+    E -->|Score >= Threshold| F["Canary Deploy<br/>5% traffic"]
+    E -->|Score < Threshold| X["Block Deploy<br/>Alert Team"]
+    F --> G{"Monitor Canary<br/>15-30 min"}
+    G -->|Metrics Healthy| H["Full Rollout<br/>100% traffic"]
+    G -->|Metrics Degraded| I["Auto-Rollback"]
+    H --> J["Production Monitoring"]
+    I --> J
+    style A fill:#ebf8ff,stroke:#3182ce
+    style B fill:#ebf8ff,stroke:#3182ce
+    style C fill:#ebf8ff,stroke:#3182ce
+    style D fill:#ebf8ff,stroke:#3182ce
+    style E fill:#fefcbf,stroke:#d69e2e
+    style F fill:#e6fffa,stroke:#38b2ac
+    style G fill:#e6fffa,stroke:#38b2ac
+    style H fill:#f0fff4,stroke:#68d391
+    style I fill:#fff5f5,stroke:#fc8181
+    style J fill:#f0fff4,stroke:#68d391
+    style X fill:#fff5f5,stroke:#fc8181
+`} />
+
+Notice the two decision points that do not exist in traditional pipelines: the **evaluation gate** (yellow) that blocks bad changes before deployment, and the **canary monitor** (teal) that catches regressions that only appear under real traffic. Together, these form a two-layer safety net.
+
+## The Three Versioning Axes
+
+Agent behavior is a function of three independent artifacts. Changing any one of them changes the agent's behavior. A robust CI/CD pipeline must version and track all three.
+
+**Prompt versioning** treats prompts as first-class source code. Store them in your Git repository, review them in pull requests, and tag releases. When a prompt change causes a regression, you need to know exactly which version introduced it.
+
+**Model pinning** locks the exact model identifier (e.g., `claude-sonnet-4-20250514`, not just `claude-sonnet-4`) in your deployment configuration. Model providers update weights periodically, and an unpinned model reference means your agent's behavior can change without any code or prompt changes on your side.
+
+**Tool versioning** tracks the versions of external tools and APIs your agent depends on. If your agent calls a search API that changes its response format, your agent breaks -- even though nothing in your repository changed.
+
+<MermaidDiagram chart={`graph LR
+    subgraph VersionControl["Version Control System"]
+        P["Prompt Versions<br/>v1.0, v1.1, v1.2"]
+        M["Model Pins<br/>claude-sonnet-4-20250514"]
+        T["Tool Versions<br/>search-api: 2.3.1<br/>db-client: 1.8.0"]
+    end
+    subgraph Deployment["Deployment Manifest"]
+        D["agent-config.yaml<br/>prompt: prompts/main@v1.2<br/>model: claude-sonnet-4-20250514<br/>tools: tools.lock"]
+    end
+    subgraph Registry["Artifact Registry"]
+        R1["Prompt Registry<br/>Tagged, immutable snapshots"]
+        R2["Container Registry<br/>Agent images with<br/>baked-in configs"]
+    end
+    P --> D
+    M --> D
+    T --> D
+    D --> R1
+    D --> R2
+    style VersionControl fill:#ebf8ff,stroke:#3182ce
+    style Deployment fill:#e6fffa,stroke:#38b2ac
+    style Registry fill:#fefcbf,stroke:#d69e2e
+`} />
+
+The deployment manifest is the single source of truth. It pins every moving part to an exact version, making deployments reproducible and rollbacks trivial -- just redeploy the previous manifest.
+
+## Prompt Versioning in Practice
+
+Prompts deserve the same rigor as application code. Store them in a dedicated directory, track them in Git, and enforce review before merging.
+
+<CodeBlock code={`# Directory structure for versioned prompts
+# prompts/
+#   agents/
+#     research_agent/
+#       system.txt          <- current system prompt
+#       tools.yaml           <- tool definitions
+#       CHANGELOG.md         <- human-readable change log
+#   evals/
+#     research_agent/
+#       benchmark.jsonl      <- evaluation dataset
+
+import hashlib
+from pathlib import Path
+from dataclasses import dataclass
+
+
+@dataclass
+class PromptVersion:
+    """Track prompt versions by content hash for reproducibility."""
+    name: str
+    content: str
+    version_hash: str
+    model_id: str
+
+    @classmethod
+    def from_file(cls, prompt_path: str, model_id: str) -> "PromptVersion":
+        content = Path(prompt_path).read_text()
+        version_hash = hashlib.sha256(content.encode()).hexdigest()[:12]
+        return cls(
+            name=Path(prompt_path).stem,
+            content=content,
+            version_hash=version_hash,
+            model_id=model_id,
+        )
+
+    def to_manifest(self) -> dict:
+        """Generate deployment manifest entry."""
+        return {
+            "prompt_name": self.name,
+            "prompt_hash": self.version_hash,
+            "model_id": self.model_id,
+            "prompt_length_chars": len(self.content),
+        }
+
+
+# Usage: generate a manifest entry for the current prompt
+version = PromptVersion.from_file(
+    "prompts/agents/research_agent/system.txt",
+    model_id="claude-sonnet-4-20250514",
+)
+print(f"Deploying prompt {version.name} @ {version.version_hash}")
+print(f"  Model: {version.model_id}")
+# Output: Deploying prompt system @ a3f8c2e1b409
+#         Model: claude-sonnet-4-20250514
+`} language="python" filename="prompt_versioning.py" />
+
+The content hash serves as an automatic version identifier. If someone changes a single character in the prompt, the hash changes, and your CI/CD pipeline can detect the drift. This is especially useful for catching unreviewed prompt edits in production environments.
+
+## Evaluation Gates: The Core Innovation
+
+The **evaluation gate** is what makes agent CI/CD fundamentally different from traditional pipelines. Instead of a binary pass/fail from unit tests, the eval gate runs your agent against a benchmark dataset (the same harness you built in Module 10) and compares the scores to a threshold.
+
+The key design decisions for eval gates are:
+
+- **Threshold selection** -- set it based on your current production baseline, not an arbitrary number. If production scores 82% accuracy, set the gate at 78% (allowing some variance) rather than 95% (which would block everything).
+- **Statistical significance** -- a single eval run is noisy. Run the benchmark multiple times or use a large enough dataset to get stable scores. A common practice is to require the new version to be "not significantly worse" rather than "better."
+- **Category-level checks** -- an overall score can hide regressions. If your agent handles five task types, check each category independently. A change that improves math tasks but breaks coding tasks might have the same overall score.
+- **Timeout budgets** -- eval suites can be slow and expensive. Run a fast "smoke" eval on every commit and a comprehensive eval on merge to main.
+
+> **Connection to Module 10:** The evaluation harness you built in Module 10 -- with its benchmark datasets, scoring functions, and comparison reports -- is exactly what plugs into this gate. The CI/CD pipeline invokes the same `run_eval.py` script, but instead of printing a report, it checks the scores against thresholds and returns an exit code.
+
+## The Complete CI/CD Pipeline
+
+Here is a production-grade GitHub Actions workflow that implements the full pipeline: lint, test, evaluate, canary deploy, and promote.
+
+<CodeBlock code={`# .github/workflows/agent-ci-cd.yaml
+name: Agent CI/CD Pipeline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  AGENT_IMAGE: ghcr.io/myorg/research-agent
+  EVAL_THRESHOLD_ACCURACY: "0.78"
+  EVAL_THRESHOLD_TOOL_USE: "0.85"
+  CANARY_DURATION_MINUTES: "20"
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Lint prompts (check for common issues)
+        run: |
+          python scripts/lint_prompts.py prompts/
+          # Checks: prompt length limits, required sections,
+          # no hardcoded model names, valid YAML tool defs
+
+      - name: Run unit tests
+        run: pytest tests/unit/ -v --tb=short
+
+      - name: Run integration tests
+        run: pytest tests/integration/ -v --tb=short
+        env:
+          ANTHROPIC_API_KEY: \${{ secrets.ANTHROPIC_API_KEY }}
+
+  # ── Evaluation Gate ──────────────────────────────────
+  eval-gate:
+    needs: lint-and-test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    outputs:
+      eval_passed: \${{ steps.check.outputs.passed }}
+      accuracy_score: \${{ steps.eval.outputs.accuracy }}
+      prompt_hash: \${{ steps.version.outputs.hash }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compute prompt version hash
+        id: version
+        run: |
+          HASH=$(sha256sum prompts/agents/research_agent/system.txt \
+                 | cut -c1-12)
+          echo "hash=$HASH" >> "$GITHUB_OUTPUT"
+          echo "Prompt version: $HASH"
+
+      - name: Run evaluation suite
+        id: eval
+        run: |
+          python scripts/run_eval.py \
+            --benchmark evals/research_agent/benchmark.jsonl \
+            --model claude-sonnet-4-20250514 \
+            --prompt prompts/agents/research_agent/system.txt \
+            --output eval_results.json \
+            --runs 3
+          # Extract scores from results
+          ACCURACY=$(jq '.aggregate.accuracy' eval_results.json)
+          TOOL_USE=$(jq '.aggregate.tool_use_score' eval_results.json)
+          echo "accuracy=$ACCURACY" >> "$GITHUB_OUTPUT"
+          echo "tool_use=$TOOL_USE" >> "$GITHUB_OUTPUT"
+          echo "Accuracy: $ACCURACY | Tool Use: $TOOL_USE"
+        env:
+          ANTHROPIC_API_KEY: \${{ secrets.ANTHROPIC_API_KEY }}
+
+      - name: Check evaluation thresholds
+        id: check
+        run: |
+          python -c "
+          import json, sys
+          results = json.load(open('eval_results.json'))
+          accuracy = results['aggregate']['accuracy']
+          tool_use = results['aggregate']['tool_use_score']
+          threshold_acc = float('$EVAL_THRESHOLD_ACCURACY')
+          threshold_tool = float('$EVAL_THRESHOLD_TOOL_USE')
+
+          passed = accuracy >= threshold_acc and tool_use >= threshold_tool
+          print(f'Accuracy: {accuracy:.3f} (threshold: {threshold_acc})')
+          print(f'Tool Use: {tool_use:.3f} (threshold: {threshold_tool})')
+          print(f'Gate: {\"PASSED\" if passed else \"FAILED\"}')
+
+          if not passed:
+              print('::error::Evaluation gate FAILED')
+              sys.exit(1)
+          "
+          echo "passed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Upload eval report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-report-\${{ steps.version.outputs.hash }}
+          path: eval_results.json
+
+  # ── Canary Deploy ────────────────────────────────────
+  canary-deploy:
+    needs: eval-gate
+    runs-on: ubuntu-latest
+    if: needs.eval-gate.outputs.eval_passed == 'true'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build and push container
+        run: |
+          docker build -t $AGENT_IMAGE:\${{ github.sha }} .
+          docker push $AGENT_IMAGE:\${{ github.sha }}
+
+      - name: Deploy canary (5% traffic)
+        run: |
+          kubectl set image deployment/agent-canary \
+            agent=$AGENT_IMAGE:\${{ github.sha }}
+          kubectl annotate deployment/agent-canary \
+            prompt-hash=\${{ needs.eval-gate.outputs.prompt_hash }} \
+            --overwrite
+
+      - name: Monitor canary
+        run: |
+          python scripts/monitor_canary.py \
+            --duration-minutes $CANARY_DURATION_MINUTES \
+            --error-rate-threshold 0.05 \
+            --latency-p99-threshold 30.0
+          # Exits non-zero if canary metrics are unhealthy
+
+      - name: Promote to full rollout
+        run: |
+          kubectl set image deployment/agent-production \
+            agent=$AGENT_IMAGE:\${{ github.sha }}
+          echo "Full rollout complete: \${{ github.sha }}"
+
+      - name: Rollback on failure
+        if: failure()
+        run: |
+          kubectl rollout undo deployment/agent-canary
+          echo "::error::Canary failed -- rolled back"
+`} language="yaml" filename=".github/workflows/agent-ci-cd.yaml" />
+
+There are several details worth highlighting in this workflow. The eval gate runs the benchmark **three times** (`--runs 3`) to reduce noise from non-deterministic outputs. The prompt hash is computed and attached to the deployment as an annotation, making it easy to trace which prompt version is running in production. And the canary step includes an automatic rollback on failure -- if the monitoring script detects elevated error rates or latency, the deployment reverts without human intervention.
+
+## Canary Deployments for Agents
+
+**Canary deployments** route a small percentage of traffic to the new version while the rest continues hitting the stable version. For agents, this is especially valuable because evaluation benchmarks cannot catch every failure mode -- some issues only appear under real user traffic with real data.
+
+The canary monitoring period should check three dimensions:
+
+- **Error rate** -- are more requests failing or timing out compared to the stable version?
+- **Latency** -- is the new version slower, possibly due to a longer prompt or a different model?
+- **Behavioral metrics** -- are tool call patterns different? Is the agent making more API calls per request, or using tools it should not be using?
+
+A typical canary progression looks like: 5% for 15 minutes, then 25% for 15 minutes, then 100%. At each stage, compare metrics against the stable version. If any metric degrades beyond the threshold, roll back immediately.
+
+## Rollback Strategies
+
+When something goes wrong in production, you need to roll back fast. Agent systems have three rollback dimensions corresponding to the three versioning axes:
+
+- **Code rollback** -- revert the container image to the previous tag. This is standard Kubernetes rollback.
+- **Prompt rollback** -- if prompts are baked into the container, this happens with the code rollback. If prompts are loaded from a registry at startup, update the prompt pointer to the previous version hash.
+- **Model rollback** -- if you updated the pinned model version and behavior degraded, revert the model ID in your configuration. This is why model pinning matters -- without it, you cannot "roll back" a model change you did not explicitly make.
+
+The fastest rollback strategy is to keep the previous deployment manifest (the file that pins all three versions) and redeploy it. This is why the manifest should be an immutable, versioned artifact -- not a mutable configuration that gets edited in place.
+
+## A/B Testing Agents
+
+Sometimes you do not want to replace the old agent -- you want to run both versions simultaneously and compare their performance on real traffic. **A/B testing** for agents works the same way as for traditional applications, with one critical addition: you need to measure *behavioral quality*, not just click-through rates.
+
+An agent A/B test requires:
+
+- **Traffic splitting** -- route a percentage of users to variant A and the rest to variant B, ensuring consistent routing per user session
+- **Evaluation metrics** -- define what "better" means: task completion rate, user satisfaction scores, average number of tool calls, error rate, latency
+- **Statistical rigor** -- run the test long enough to reach statistical significance before declaring a winner. Agent behavior is noisy, so you typically need more samples than a UI A/B test
+- **Safety bounds** -- set automatic kill switches that end the test early if either variant shows unacceptable error rates
+
+> **Practical tip:** Start with canary deployments before attempting A/B tests. Canary is simpler (one decision: promote or rollback) and catches the most dangerous regressions. A/B testing is valuable for comparing two viable approaches, not for validating basic correctness.
+
+## Summary
+
+CI/CD for agent systems extends traditional pipelines with three innovations that address the unique challenges of non-deterministic, multi-artifact systems:
+
+- **Three versioning axes** -- prompts, models, and tools must all be independently versioned and pinned. The deployment manifest combines them into a single reproducible configuration.
+- **Evaluation gates** connect your eval harness (Module 10) to your deployment pipeline, blocking changes that degrade benchmark scores below defined thresholds.
+- **Canary deployments** catch regressions that benchmarks miss by routing a small percentage of real traffic to the new version and monitoring error rates, latency, and behavioral metrics.
+- **Rollback strategies** must cover all three axes -- code, prompt, and model -- and the fastest path is redeploying a previous immutable deployment manifest.
+- **A/B testing** enables comparing two viable agent versions on real traffic, but requires statistical rigor and safety bounds to be meaningful.
+
+In the next lesson, we will explore **reliability patterns** -- retries, fallbacks, circuit breakers, and graceful degradation -- that keep your deployed agents running smoothly even when individual components fail.

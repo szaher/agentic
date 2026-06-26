@@ -1,0 +1,439 @@
+---
+title: "Designing Effective Tool Interfaces"
+quiz:
+  - question: "Why should tool descriptions explain WHEN to use the tool, not just what it does?"
+    options:
+      - "Because LLMs cannot read the tool name"
+      - "Because the description is the primary signal the LLM uses to decide whether to select a tool for a given task"
+      - "Because descriptions are displayed to the end user"
+      - "Because longer descriptions always improve accuracy"
+    correctIndex: 1
+  - question: "What is the main problem with a tool that accepts 12 optional parameters?"
+    options:
+      - "It makes the API slower to execute"
+      - "It requires more server memory"
+      - "It increases the chance the LLM will hallucinate parameter values or use the wrong combination"
+      - "It violates the JSON Schema specification"
+    correctIndex: 2
+  - question: "Which of the following is the best tool name?"
+    options:
+      - "handleData"
+      - "do_thing"
+      - "search_knowledge_base"
+      - "util_v2_final"
+    correctIndex: 2
+  - question: "Why is it better to use an enum type instead of a free-text string for a 'priority' parameter?"
+    options:
+      - "Enums are faster to parse than strings"
+      - "Enums use less memory in the JSON payload"
+      - "Enums constrain the LLM to valid values, eliminating an entire class of errors"
+      - "Enums are required by the OpenAPI specification"
+    correctIndex: 2
+---
+
+## Overview
+
+In the previous lesson, you learned how function calling works at the protocol level -- how the LLM receives tool definitions, selects a tool, and generates a structured call. But there is a critical question that protocol knowledge alone does not answer: **why does the LLM pick the right tool sometimes and the wrong tool other times?**
+
+The answer almost always comes down to **interface design**. The tool's name, description, and parameter schema are not just documentation for human developers -- they are the *entire* signal the LLM uses to decide what to call and how to call it. A poorly named tool with a vague description and a sprawling parameter list will confuse the model, leading to wrong tool selections, hallucinated parameter values, and cascading failures.
+
+This lesson covers the principles of **tool interface design** -- the art of crafting tool definitions that LLMs can use reliably. These principles apply whether you are building tools for function calling, the Model Context Protocol (Module 3, Lesson 5), or any agent framework.
+
+> Think of tool design like API design, but your consumer is a language model, not a human developer. The model cannot look at examples, read a tutorial, or ask a colleague. It has only the schema.
+
+## The LLM's Perspective
+
+Before diving into principles, it helps to understand what the LLM actually sees when it decides whether to call a tool. At inference time, the model receives a list of tool definitions -- typically as JSON Schema objects -- injected into its context. Each definition contains:
+
+1. A **name** (e.g., `search_documents`)
+2. A **description** (a natural language string)
+3. A **parameters** schema (types, constraints, required fields)
+
+The model must use *only* these three signals to make two decisions: **which tool** to call (or whether to call one at all), and **what arguments** to pass. There is no Stack Overflow, no README, no example call. The schema is the entire interface.
+
+This means every ambiguity in your tool definition becomes a decision the LLM must guess at. And guessing means errors.
+
+## Good Design vs. Bad Design
+
+Let us start with a concrete comparison. Suppose you want to give an agent the ability to look up information in a company knowledge base.
+
+<MermaidDiagram chart={`graph LR
+    subgraph Bad["Poorly Designed Tool"]
+        direction TB
+        B1["<b>Name:</b> query"]
+        B2["<b>Description:</b> Queries data"]
+        B3["<b>Params:</b> q, type, fmt,<br/>limit, offset, sort,<br/>filter, include_meta,<br/>v, callback"]
+    end
+
+    subgraph Good["Well-Designed Tool"]
+        direction TB
+        G1["<b>Name:</b> search_knowledge_base"]
+        G2["<b>Description:</b> Search the internal<br/>knowledge base for articles<br/>matching a natural language<br/>query. Use when the user<br/>asks about company policies,<br/>procedures, or documentation."]
+        G3["<b>Params:</b> query <i>(required)</i>,<br/>max_results <i>(optional, default 5)</i>"]
+    end
+
+    Bad -. "LLM confused:<br/>Which 'query'?<br/>What params needed?" .-> Result1["Wrong tool selected<br/>or bad arguments"]
+    Good -. "LLM confident:<br/>clear purpose,<br/>minimal params" .-> Result2["Correct selection<br/>and valid call"]
+
+    style Bad fill:#fff5f5,stroke:#fc8181
+    style Good fill:#f0fff4,stroke:#68d391
+    style Result1 fill:#fed7d7,stroke:#fc8181
+    style Result2 fill:#c6f6d5,stroke:#68d391
+`} />
+
+The poorly designed tool fails on every dimension: the name is generic, the description says nothing about *when* to use it, and the parameter list is overwhelming. The well-designed tool is self-documenting: the name tells you what it searches, the description tells the LLM when to reach for it, and the parameters are minimal.
+
+## Principle 1: Clear, Verb-First Naming
+
+The tool name is the first signal the LLM processes. It should immediately communicate the **action** and the **target**.
+
+**Pattern:** `verb_noun` or `verb_noun_qualifier`
+
+Good names:
+- `search_web` -- action is clear, scope is clear
+- `get_weather` -- retrieves weather data
+- `create_calendar_event` -- creates an event in a calendar
+- `delete_file` -- removes a file
+- `send_email` -- sends an email
+
+Bad names:
+- `doStuff` -- what stuff?
+- `handle` -- handle what?
+- `query` -- query what data source?
+- `process_v2` -- what does it process? What happened to v1?
+- `utils` -- a tool called "utils" is a tool the LLM will never use correctly
+
+**Verb-first naming** matters because LLMs are language models -- they parse tool names as natural language tokens. A name like `search_documents` activates the same semantic understanding as the phrase "search documents." A name like `ds_qry_v3` does not.
+
+## Principle 2: Descriptions That Explain When, Not Just What
+
+The description is your most powerful lever. Most developers write descriptions that explain **what** the tool does ("Queries the database"). Effective descriptions explain **when** the LLM should use it.
+
+Compare these two descriptions for the same tool:
+
+> **Weak:** "Gets user information."
+>
+> **Strong:** "Retrieve profile details for a specific user by their user ID. Use this tool when the user asks about account information, profile settings, or membership status. Do NOT use this for authentication or login -- use verify_credentials instead."
+
+The strong description does three things the weak one does not:
+
+1. **Specifies the input** -- "by their user ID" tells the LLM what argument is expected
+2. **Gives usage context** -- "when the user asks about account information" helps the LLM match user intent to tool selection
+3. **Disambiguates** -- "Do NOT use this for authentication" prevents confusion with similar tools
+
+When you have multiple tools with overlapping domains, disambiguation in descriptions becomes essential. Without it, the LLM will pick whichever tool name happens to have the closest semantic match to the user's request, which may not be the right one.
+
+## Principle 3: Minimal Parameters
+
+Every parameter you add is a decision the LLM must make. More decisions means more chances for errors. The principle is simple: **require only what is necessary, and default everything else.**
+
+<CodeBlock code={`# BAD: Too many parameters, most optional, unclear purposes
+tools = [{
+    "name": "search_documents",
+    "description": "Search documents.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "q": {"type": "string", "description": "Query"},
+            "type": {"type": "string", "description": "Type"},
+            "format": {"type": "string", "description": "Format"},
+            "limit": {"type": "integer", "description": "Limit"},
+            "offset": {"type": "integer", "description": "Offset"},
+            "sort_by": {"type": "string", "description": "Sort field"},
+            "sort_order": {"type": "string", "description": "Sort order"},
+            "filter_date_start": {"type": "string", "description": "Start date"},
+            "filter_date_end": {"type": "string", "description": "End date"},
+            "filter_author": {"type": "string", "description": "Author"},
+            "include_metadata": {"type": "boolean", "description": "Include metadata"},
+            "include_snippets": {"type": "boolean", "description": "Include snippets"},
+        },
+        "required": ["q"]
+    }
+}]
+`} language="python" filename="bad_tool_definition.py" />
+
+<CodeBlock code={`# GOOD: Minimal parameters, clear descriptions, sensible defaults
+tools = [{
+    "name": "search_documents",
+    "description": (
+        "Search the company document repository using a natural language query. "
+        "Returns the top matching documents with titles and summaries. "
+        "Use when the user asks about internal documentation, policies, or procedures."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "Natural language search query describing what to find"
+            },
+            "max_results": {
+                "type": "integer",
+                "description": "Maximum number of results to return (default: 5, max: 20)",
+                "default": 5
+            }
+        },
+        "required": ["query"]
+    }
+}]
+`} language="python" filename="good_tool_definition.py" />
+
+The bad definition has 12 parameters with single-word descriptions. The LLM must guess what "Type" means, what valid values for "Format" are, and whether "Limit" refers to results or characters. The good definition has two parameters, both with clear descriptions and a sensible default for the optional one.
+
+**Rule of thumb:** if a parameter can be handled server-side with a reasonable default, do not expose it to the LLM. You can always add parameters later if the agent genuinely needs them.
+
+## Principle 4: Constrained Types
+
+When a parameter has a finite set of valid values, use an **enum** instead of a free-text string. This eliminates an entire class of errors where the LLM invents plausible-but-invalid values.
+
+<CodeBlock code={`# BAD: Free-text string -- the LLM might generate "urgent", "CRITICAL",
+# "p0", "very high", or any other plausible-sounding value
+{
+    "name": "priority",
+    "type": "string",
+    "description": "The priority level"
+}
+
+# GOOD: Enum constrains to valid values -- the LLM picks from the list
+{
+    "name": "priority",
+    "type": "string",
+    "enum": ["low", "medium", "high", "critical"],
+    "description": "Priority level for the ticket"
+}
+`} language="python" filename="enum_vs_freetext.py" />
+
+The same principle applies to other types:
+
+- Use `integer` with `minimum` / `maximum` instead of unbounded numbers
+- Use `boolean` for yes/no flags instead of strings like "true" or "yes"
+- Use specific `format` hints like `"format": "date"` or `"format": "email"` when applicable
+- Mark parameters as `required` only when the tool truly cannot function without them
+
+Every constraint you add is one fewer hallucination the LLM can produce. Think of it as **guardrails at the schema level** -- far cheaper than catching errors after execution.
+
+## Principle 5: One Tool Per Action
+
+A common mistake is building **mega-tools** -- a single tool that does many different things based on a mode or action parameter. This forces the LLM to understand a complex internal routing system.
+
+<CodeBlock code={`# BAD: Mega-tool with an "action" parameter
+{
+    "name": "manage_users",
+    "description": "Manage users in the system",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "action": {
+                "type": "string",
+                "enum": ["create", "read", "update", "delete", "list", "search"],
+                "description": "The action to perform"
+            },
+            "user_id": {"type": "string", "description": "User ID (for read/update/delete)"},
+            "name": {"type": "string", "description": "User name (for create/update)"},
+            "email": {"type": "string", "description": "Email (for create/update)"},
+            "query": {"type": "string", "description": "Search query (for search)"},
+            "filters": {"type": "object", "description": "Filters (for list)"}
+        },
+        "required": ["action"]
+    }
+}
+
+# GOOD: Separate tools with focused interfaces
+tools = [
+    {
+        "name": "create_user",
+        "description": "Create a new user account. Use when the user asks to add or register someone.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "Full name of the new user"},
+                "email": {"type": "string", "format": "email", "description": "Email address"}
+            },
+            "required": ["name", "email"]
+        }
+    },
+    {
+        "name": "get_user",
+        "description": "Retrieve details for a specific user by ID. Use when the user asks about a particular person's account.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "user_id": {"type": "string", "description": "The unique user identifier"}
+            },
+            "required": ["user_id"]
+        }
+    },
+    {
+        "name": "search_users",
+        "description": "Search for users by name or email. Use when the user wants to find someone but does not have their ID.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Name or email to search for"}
+            },
+            "required": ["query"]
+        }
+    }
+]
+`} language="python" filename="granularity.py" />
+
+With the mega-tool, the LLM must understand that `user_id` is only relevant for certain actions, that `name` and `email` are only for create/update, and so on. With separate tools, each tool's parameters are always relevant, and the LLM's job reduces to a simple question: "Does this tool match the user's intent?"
+
+**The tradeoff:** more tools means more entries in the context window. If you have hundreds of tools, you may need to use tool filtering or dynamic tool selection to keep the list manageable. But for most agents with 5-30 tools, granularity wins.
+
+## Principle 6: Consistent Return Formats
+
+While tool definitions focus on inputs, the **output format** matters just as much for the LLM's ability to reason about results. If one tool returns a list of objects and another returns a raw string, and a third returns nested XML, the LLM must adapt its parsing strategy for each one.
+
+Adopt a consistent return format across all your tools:
+
+<CodeBlock code={`# Consistent return format for all tools
+def make_tool_response(success: bool, data=None, error=None):
+    """Wrap every tool result in a consistent envelope."""
+    response = {"success": success}
+    if data is not None:
+        response["data"] = data
+    if error is not None:
+        response["error"] = error
+    return response
+
+# Usage in tool implementations
+def search_documents(query: str, max_results: int = 5):
+    try:
+        results = db.search(query, limit=max_results)
+        return make_tool_response(
+            success=True,
+            data={
+                "results": [
+                    {"title": r.title, "summary": r.summary, "id": r.id}
+                    for r in results
+                ],
+                "total_found": len(results)
+            }
+        )
+    except Exception as e:
+        return make_tool_response(
+            success=False,
+            error=f"Search failed: {str(e)}"
+        )
+`} language="python" filename="consistent_returns.py" />
+
+When every tool returns `{"success": true/false, "data": ..., "error": ...}`, the LLM learns the pattern quickly and can reliably check for errors, extract data, and chain tool calls together. This consistency becomes especially important in the error handling patterns you will study in the next lesson.
+
+## Common Mistakes
+
+Even with these principles in mind, several mistakes appear repeatedly in practice:
+
+**Ambiguous names with overlapping scope.** If you have `search_docs` and `find_documents` and `query_knowledge`, the LLM has no reliable way to pick between them. Each tool name should be unique in both verb and noun.
+
+**Descriptions that assume context.** "Use this for the main flow" or "Handles the standard case" tells the LLM nothing. Descriptions must be self-contained -- the LLM has no knowledge of your system's internal terminology unless you define it.
+
+**Missing required fields.** If a tool cannot function without a parameter, mark it as `required`. Otherwise the LLM may omit it, and you will get a cryptic runtime error instead of a schema validation failure.
+
+**Exposing internal identifiers.** If a tool requires an internal database ID that the user would never know, the LLM will hallucinate one. Instead, provide a lookup tool (like `search_users`) that returns IDs, and have the LLM chain calls: search first, then act on the result.
+
+**Ignoring the tool count.** Research shows that LLM accuracy on tool selection degrades as the number of available tools increases. If your agent has 50 tools, consider organizing them into categories and loading only the relevant subset per turn. The **tool registry pattern** you will encounter in Module 5 (Design Patterns) builds directly on this idea.
+
+## Putting It All Together
+
+Here is a complete, well-designed tool set for a simple customer support agent. Notice how each tool follows all six principles:
+
+<CodeBlock code={`customer_support_tools = [
+    {
+        "name": "lookup_customer",
+        "description": (
+            "Look up a customer by email address or phone number. Returns the "
+            "customer's name, account ID, and plan type. Use this as the first "
+            "step when a user asks about their account, billing, or subscription."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "email": {
+                    "type": "string",
+                    "format": "email",
+                    "description": "Customer's email address"
+                },
+                "phone": {
+                    "type": "string",
+                    "description": "Customer's phone number (e.g., +1-555-123-4567)"
+                }
+            },
+            "required": []  # At least one should be provided
+        }
+    },
+    {
+        "name": "get_recent_orders",
+        "description": (
+            "Retrieve the most recent orders for a customer. Requires the "
+            "customer's account ID (use lookup_customer first to get this). "
+            "Use when the user asks about order status, shipping, or purchases."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "account_id": {
+                    "type": "string",
+                    "description": "Customer account ID from lookup_customer"
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Number of recent orders to return (default: 3)",
+                    "default": 3,
+                    "minimum": 1,
+                    "maximum": 10
+                }
+            },
+            "required": ["account_id"]
+        }
+    },
+    {
+        "name": "create_support_ticket",
+        "description": (
+            "Create a support ticket for an issue that cannot be resolved in "
+            "this conversation. Use when the problem requires escalation to a "
+            "human agent, a refund over $50, or a technical investigation."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "account_id": {
+                    "type": "string",
+                    "description": "Customer account ID"
+                },
+                "subject": {
+                    "type": "string",
+                    "description": "Brief summary of the issue (under 100 characters)"
+                },
+                "priority": {
+                    "type": "string",
+                    "enum": ["low", "medium", "high"],
+                    "description": "Ticket priority based on urgency and impact"
+                }
+            },
+            "required": ["account_id", "subject", "priority"]
+        }
+    }
+]
+`} language="python" filename="complete_toolset.py" />
+
+Notice the design choices:
+
+- **Names** are verb-first and unambiguous: `lookup_customer`, `get_recent_orders`, `create_support_ticket`
+- **Descriptions** specify when to use each tool and how they chain together ("use `lookup_customer` first")
+- **Parameters** are minimal -- only what is truly needed, with defaults for optional values
+- **Types** are constrained -- `format: "email"`, `minimum/maximum` on integers, `enum` on priority
+- **Dependencies** are documented -- `get_recent_orders` explains it needs an `account_id` from `lookup_customer`
+
+## Summary
+
+Tool interface design is the single highest-leverage activity when building reliable agents. The LLM has no documentation, no examples, and no ability to ask clarifying questions -- it has only the tool schema. Every principle in this lesson reduces ambiguity in that schema:
+
+1. **Verb-first names** make purpose immediately clear
+2. **When-not-just-what descriptions** guide tool selection
+3. **Minimal parameters** reduce decision points and errors
+4. **Constrained types** eliminate invalid values at the schema level
+5. **One tool per action** keeps interfaces focused and predictable
+6. **Consistent return formats** let the LLM reason reliably about results
+
+These principles are not theoretical -- they directly affect whether your agent succeeds or fails. In the next lesson, **Error Handling and Retries**, you will learn what happens when tools fail despite good design, and how agents can recover gracefully. And in Module 5, the **tool registry pattern** will show you how to manage large tool sets by dynamically selecting which tools to expose based on context.

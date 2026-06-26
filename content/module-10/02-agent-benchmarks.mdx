@@ -1,0 +1,241 @@
+---
+title: "Agent Benchmarks"
+quiz:
+  - question: "What does SWE-Bench primarily measure about an agent?"
+    options:
+      - "Its ability to answer multiple-choice trivia questions"
+      - "Its ability to locate and edit code in real repositories to resolve GitHub issues"
+      - "Its ability to browse the web and extract structured data"
+      - "Its ability to generate syntactically correct code from docstrings"
+    correctIndex: 1
+  - question: "Why is GAIA considered a benchmark for 'general' AI assistants?"
+    options:
+      - "It only tests text generation fluency across many languages"
+      - "It tests a narrow set of coding tasks at increasing difficulty levels"
+      - "It requires combining web browsing, file handling, reasoning, and tool use to answer real-world questions"
+      - "It measures how quickly a model can respond to simple prompts"
+    correctIndex: 2
+  - question: "Which of the following is a common anti-pattern when using benchmarks to evaluate agents?"
+    options:
+      - "Optimizing the agent's prompts and tools specifically to maximize a single benchmark score"
+      - "Running a benchmark suite as part of regression testing after prompt changes"
+      - "Using multiple benchmarks to assess different capabilities"
+      - "Comparing your agent's scores to published baselines"
+    correctIndex: 0
+  - question: "What is a key limitation shared by most current agent benchmarks?"
+    options:
+      - "They are too easy for modern LLMs"
+      - "They do not produce numerical scores"
+      - "They use static, fixed task sets that cannot capture the open-ended nature of real-world agent use"
+      - "They require proprietary hardware to run"
+    correctIndex: 2
+---
+
+## Overview
+
+In the previous lesson, we explored why evaluating agents is fundamentally harder than evaluating static LLM calls. But acknowledging the difficulty is only the first step -- we also need concrete yardsticks. That is where **benchmarks** come in.
+
+A benchmark is a standardized set of tasks with known correct answers (or grading criteria) that lets you measure how well a system performs a specific capability. For agents, benchmarks serve three critical purposes: comparing models and architectures, detecting regressions when you change prompts or tools, and understanding which capabilities your agent actually has versus which ones you assume it has.
+
+This lesson surveys the major benchmarks used to evaluate LLM agents today, explains what each one measures and how scoring works, and -- just as importantly -- discusses the pitfalls of relying on benchmarks too heavily.
+
+> Benchmarks tell you how well your agent performs on **their** tasks. Your job is to determine how much that correlates with **your** tasks.
+
+## The Benchmark Landscape
+
+Agent benchmarks can be organized by the primary capability they test. Some focus on a single skill (code generation, knowledge recall), while others demand multi-step, multi-tool reasoning that more closely resembles real agent workflows.
+
+<MermaidDiagram chart={`graph TD
+    subgraph Coding["Coding Benchmarks"]
+        SWE["SWE-Bench<br/><i>Code editing in real repos</i>"]
+        HE["HumanEval<br/><i>Function-level generation</i>"]
+    end
+    subgraph Web["Web Interaction"]
+        WA["WebArena<br/><i>Browser-based tasks</i>"]
+    end
+    subgraph Knowledge["Knowledge & Reasoning"]
+        MMLU["MMLU<br/><i>Multi-domain knowledge</i>"]
+    end
+    subgraph General["General Agent Capability"]
+        GAIA["GAIA<br/><i>Real-world assistant tasks</i>"]
+        AB["AgentBench<br/><i>Multi-domain environments</i>"]
+    end
+    style Coding fill:#ebf8ff,stroke:#3182ce
+    style Web fill:#fefcbf,stroke:#d69e2e
+    style Knowledge fill:#fed7d7,stroke:#e53e3e
+    style General fill:#c6f6d5,stroke:#38a169
+`} />
+
+The diagram above groups benchmarks into four categories. Notice that the "General Agent Capability" benchmarks on the right are the most demanding -- they require the agent to combine multiple skills (browsing, coding, reasoning, tool use) within a single evaluation. Let us walk through each benchmark in detail.
+
+## SWE-Bench: Real-World Code Editing
+
+**SWE-Bench** evaluates an agent's ability to resolve real GitHub issues by editing code in actual open-source repositories. Unlike toy coding problems, SWE-Bench tasks require the agent to navigate large codebases, understand existing architecture, locate the relevant files, and produce a patch that fixes the issue and passes the project's test suite.
+
+**What it tests:** End-to-end software engineering -- reading issue descriptions, exploring repository structure, understanding existing code, writing a correct fix, and ensuring tests pass.
+
+**How scoring works:** A task is scored as **resolved** (1) or **unresolved** (0). The agent's patch is applied to the repository and the project's test suite is run. If the previously-failing tests now pass (and no previously-passing tests break), the task is resolved. The benchmark reports a **resolve rate** -- the percentage of issues successfully fixed.
+
+**The task set:** The original SWE-Bench contains 2,294 tasks from 12 popular Python repositories (Django, Flask, scikit-learn, sympy, and others). **SWE-Bench Verified** is a human-validated subset of 500 tasks that filters out ambiguous or under-specified issues.
+
+**Current SOTA results:** As of early 2025, top agentic systems achieve resolve rates around 50-60% on SWE-Bench Verified. This is a dramatic improvement from the initial baselines of under 5%, but it also means nearly half of real software engineering tasks remain unsolved.
+
+**Limitations:**
+- Restricted to Python repositories, so results may not generalize to other languages
+- Tasks are drawn from a fixed set of repositories, so agents can potentially memorize patterns
+- Does not test the broader software engineering workflow (design decisions, code review, deployment)
+- Binary pass/fail scoring misses partial credit for nearly-correct solutions
+
+## HumanEval: Function-Level Code Generation
+
+**HumanEval** is one of the earliest and most widely-cited code benchmarks. It consists of 164 hand-written Python programming problems, each with a function signature, docstring, and a set of unit tests.
+
+**What it tests:** The ability to generate a correct function body given a specification. This is **code generation** in isolation -- no repository navigation, no debugging, no multi-file editing.
+
+**How scoring works:** The standard metric is **pass@k** -- the probability that at least one of *k* generated samples passes all unit tests. **Pass@1** (a single attempt) is the most commonly reported figure.
+
+**Current SOTA results:** Top models now exceed 90% pass@1 on HumanEval, effectively saturating the benchmark. This has led to successors like **HumanEval+** (with more rigorous test cases) and **MBPP** (Mostly Basic Python Problems) for additional coverage.
+
+**Limitations:**
+- Tasks are short, self-contained functions -- far simpler than real software engineering
+- The benchmark is effectively saturated, limiting its ability to differentiate between top models
+- Only tests Python
+- Does not assess whether the agent can use tools, read documentation, or reason about existing code
+
+> HumanEval is useful for measuring raw code generation ability, but an agent that scores 95% on HumanEval may still fail at real coding tasks that require navigation, context gathering, and multi-step reasoning.
+
+## GAIA: General AI Assistants
+
+**GAIA** (General AI Assistants) is designed to test whether an AI system can act as a capable general-purpose assistant. Tasks are real-world questions that a human could answer using a web browser, a calculator, and common sense -- but that require combining multiple steps and tools.
+
+**What it tests:** Multi-step reasoning, web browsing, file handling (PDFs, spreadsheets, images), arithmetic, and the ability to synthesize information from multiple sources.
+
+**How scoring works:** Each task has a single, unambiguous correct answer (a number, a name, a date). Scoring is **exact match** -- the agent either produces the correct answer or it does not. Tasks are divided into three difficulty levels:
+- **Level 1:** Straightforward questions requiring 1-2 steps
+- **Level 2:** Questions requiring 3-5 steps and multiple tools
+- **Level 3:** Questions requiring complex multi-step reasoning chains
+
+**Current SOTA results:** Top agentic systems score around 70-75% on Level 1 tasks but drop to 30-40% on Level 3 tasks. Human performance is above 90% at all levels, highlighting the gap that remains.
+
+**Limitations:**
+- Some tasks depend on web content that may change over time, creating reproducibility challenges
+- The exact-match scoring is brittle -- a correct answer phrased differently may be marked wrong
+- The task set is relatively small (around 450 questions), limiting statistical power
+
+## WebArena: Browser-Based Agent Tasks
+
+**WebArena** evaluates agents that interact with realistic web applications through a browser. The benchmark provides self-hosted instances of real web applications (an e-commerce site, a forum, a content management system, a code repository, and a map application) and asks the agent to complete tasks by navigating, clicking, filling forms, and extracting information.
+
+**What it tests:** Web navigation, form interaction, information extraction from dynamic web pages, and multi-step task completion in realistic web environments.
+
+**How scoring works:** Each task has a programmatic **success check** -- a function that verifies whether the desired state change occurred (e.g., "Was the item added to the cart?", "Was the forum post created with the correct title?"). The metric is **task success rate**.
+
+**Current SOTA results:** Top agents achieve around 35-40% success rate, making WebArena one of the most challenging benchmarks. The low scores reflect the difficulty of reliable web interaction -- agents struggle with dynamic page layouts, pop-ups, authentication flows, and multi-tab navigation.
+
+**Limitations:**
+- Self-hosting the environments requires significant infrastructure
+- Web UIs change frequently, so the benchmark can become stale
+- Does not test interaction with real production websites (with CAPTCHAs, rate limits, etc.)
+- Binary success/fail does not capture partial task completion
+
+## MMLU: Multi-Domain Knowledge
+
+**MMLU** (Massive Multitask Language Understanding) is not an agent benchmark per se, but it is widely used to assess the foundational knowledge that underpins agent reasoning. It covers 57 subjects spanning STEM, humanities, social sciences, and professional domains.
+
+**What it tests:** Breadth and depth of knowledge across academic and professional domains, using multiple-choice questions at varying difficulty levels (elementary through advanced professional).
+
+**How scoring works:** Standard multiple-choice accuracy -- the percentage of questions answered correctly. Scores are typically reported per-subject and as an overall average.
+
+**Current SOTA results:** Top models now score above 90% overall, with some subjects approaching ceiling performance. This has prompted successors like **MMLU-Pro** (harder questions with 10 answer choices instead of 4) and **GPQA** (graduate-level questions written by domain experts).
+
+**Limitations:**
+- Multiple-choice format is far removed from how agents actually use knowledge
+- High scores do not guarantee the model can *apply* knowledge in multi-step reasoning
+- Does not test tool use, planning, or action-taking
+- Subject coverage reflects academic curricula, not necessarily the knowledge agents need in practice
+
+## AgentBench: Multi-Domain Agent Evaluation
+
+**AgentBench** is one of the first benchmarks designed specifically to evaluate LLM agents across multiple interactive environments. It includes eight distinct environments: operating system interaction, database querying, knowledge graph reasoning, digital card games, lateral thinking puzzles, web shopping, web browsing, and household tasks.
+
+**What it tests:** The ability of an LLM to act as an agent across diverse domains, each requiring different skills -- from shell commands to SQL queries to strategic reasoning.
+
+**How scoring works:** Each environment has its own scoring metric (success rate, reward score, or accuracy), and results are reported per-environment. An overall score aggregates across all domains.
+
+**Current SOTA results:** Performance varies dramatically by environment. Agents perform well on structured tasks (database queries, simple OS commands) but struggle with open-ended environments (web shopping, household tasks). The benchmark reveals that no single model dominates across all domains.
+
+**Limitations:**
+- The breadth of environments makes it expensive and complex to run
+- Some environments are simplified simulations, not real-world systems
+- Aggregating scores across very different domains can obscure important patterns
+- The benchmark has not been as widely adopted as SWE-Bench or GAIA
+
+## Comparing the Benchmarks
+
+The following diagram summarizes how these benchmarks compare along two axes: **task complexity** (single-step versus multi-step) and **domain specificity** (narrow versus broad).
+
+<MermaidDiagram chart={`graph LR
+    subgraph SingleStep["Single-Step / Narrow"]
+        HE2["HumanEval<br/>Code generation"]
+        MMLU2["MMLU<br/>Knowledge recall"]
+    end
+    subgraph MultiNarrow["Multi-Step / Narrow"]
+        SWE2["SWE-Bench<br/>Code editing"]
+        WA2["WebArena<br/>Web navigation"]
+    end
+    subgraph MultiBroad["Multi-Step / Broad"]
+        GAIA2["GAIA<br/>General assistant"]
+        AB2["AgentBench<br/>Multi-domain"]
+    end
+    SingleStep --> MultiNarrow --> MultiBroad
+    style SingleStep fill:#fed7d7,stroke:#e53e3e
+    style MultiNarrow fill:#fefcbf,stroke:#d69e2e
+    style MultiBroad fill:#c6f6d5,stroke:#38a169
+`} />
+
+As you move from left to right, the benchmarks become more representative of real agent workloads -- but also harder to run, harder to score, and harder to interpret. There is no single "best" benchmark; the right choice depends on what capability you are trying to measure.
+
+## Using Benchmarks Effectively
+
+Benchmarks are tools, not goals. Here is how to use them well:
+
+**For model selection:** Run your candidate models on the benchmarks most relevant to your use case. If your agent primarily writes code, SWE-Bench and HumanEval matter most. If it browses the web, WebArena is essential. Do not pick a model just because it tops a leaderboard on an irrelevant benchmark.
+
+**For regression testing:** After changing prompts, tools, or model versions, re-run your benchmark suite to check for regressions. A 5% drop on SWE-Bench after a prompt change is a signal worth investigating, even if the change improved other behaviors.
+
+**For capability assessment:** Use benchmarks to identify capability gaps. If your agent scores well on HumanEval but poorly on SWE-Bench, the bottleneck is not code generation -- it is repository navigation and contextual understanding. This diagnosis tells you where to focus your engineering effort.
+
+**For setting expectations:** Benchmark scores help you communicate realistic expectations to stakeholders. If the best systems achieve 55% on SWE-Bench Verified, promising 95% issue resolution for your coding agent is not credible.
+
+## Anti-Patterns: How Benchmarks Mislead
+
+Benchmarks are indispensable, but they come with well-documented failure modes. Being aware of these anti-patterns is just as important as knowing the benchmarks themselves.
+
+**Benchmark overfitting** occurs when you tune your agent's prompts, tools, or architecture specifically to maximize a benchmark score rather than to improve real-world performance. The agent learns to exploit patterns in the benchmark tasks that do not generalize. For example, a SWE-Bench-optimized agent might learn repository-specific patterns (like Django's testing conventions) that fail on repositories outside the benchmark.
+
+**Leaderboard chasing** is the organizational version of overfitting. Teams focus engineering effort on climbing a public leaderboard rather than solving their users' actual problems. A model that ranks #1 on MMLU may still be the wrong choice for your agent if your tasks require tool use and multi-step reasoning.
+
+**Narrow evaluation** means relying on a single benchmark as a proxy for overall agent quality. An agent can score well on HumanEval while being unable to navigate a real codebase, or excel at WebArena while struggling with arithmetic. Always evaluate across multiple benchmarks covering different capabilities.
+
+**Ignoring task distribution mismatch** happens when you assume benchmark tasks represent your production workload. SWE-Bench tasks are drawn from popular open-source Python projects -- if your agent fixes bugs in proprietary Java codebases, the benchmark results may not transfer. Build **custom evaluation sets** drawn from your actual task distribution to complement public benchmarks.
+
+> The best evaluation strategy combines public benchmarks (for comparability) with private, domain-specific test sets (for relevance). Neither alone is sufficient.
+
+## The Road Ahead
+
+The benchmark landscape is evolving rapidly. Several trends are worth watching:
+
+- **Dynamic benchmarks** that generate new tasks continuously, preventing memorization (e.g., **SWE-Bench Live**, which draws from newly-created GitHub issues)
+- **Process-oriented evaluation** that scores not just the final answer but the quality of the agent's intermediate reasoning and actions
+- **Multi-agent benchmarks** that evaluate teams of agents collaborating on shared tasks
+- **Safety-focused benchmarks** that test whether agents refuse harmful instructions, avoid unintended side effects, and operate within their authorized scope
+
+As agents become more capable, benchmarks must keep pace -- measuring not just *what* agents can do, but *how safely and reliably* they do it.
+
+## Summary
+
+**Agent benchmarks** provide standardized yardsticks for measuring agent capabilities across coding, web interaction, knowledge, and general reasoning. The major benchmarks -- **SWE-Bench**, **HumanEval**, **GAIA**, **WebArena**, **MMLU**, and **AgentBench** -- each test different skills and use different scoring methodologies. No single benchmark captures the full range of agent behavior.
+
+Used well, benchmarks enable informed model selection, regression detection, and capability gap analysis. Used poorly, they lead to overfitting, leaderboard chasing, and false confidence. The most effective evaluation strategies combine public benchmarks for comparability with custom, domain-specific test sets that reflect your agent's actual workload.
+
+In the next lesson, we will move from measuring agents against fixed benchmarks to building your own **testing strategies** -- unit tests for tools, integration tests for agent loops, and end-to-end evaluations that catch failures before they reach production.

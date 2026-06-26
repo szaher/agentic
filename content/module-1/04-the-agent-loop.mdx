@@ -1,0 +1,243 @@
+---
+title: "The Agent Loop"
+quiz:
+  - question: "What are the three phases of the core agent loop, in order?"
+    options:
+      - "Plan, Execute, Evaluate"
+      - "Observe, Think, Act"
+      - "Prompt, Generate, Parse"
+      - "Input, Process, Output"
+    correctIndex: 1
+  - question: "Which of the following is NOT a typical termination condition for an agent loop?"
+    options:
+      - "The agent produces a final answer for the user"
+      - "The agent reaches a maximum iteration limit"
+      - "The LLM returns a response containing text"
+      - "The agent encounters an unrecoverable error"
+    correctIndex: 2
+  - question: "In a multi-turn agent loop, what happens to a tool's output after it executes?"
+    options:
+      - "It is discarded after the agent reads it"
+      - "It is returned directly to the user"
+      - "It is fed back into the LLM as a new observation for the next think step"
+      - "It replaces the original user prompt"
+    correctIndex: 2
+  - question: "What distinguishes a multi-turn agent loop from a single-turn LLM call?"
+    options:
+      - "Multi-turn loops use larger models"
+      - "Single-turn calls cannot use system prompts"
+      - "Multi-turn loops iterate through observe-think-act cycles until a goal is met"
+      - "Multi-turn loops always require human approval at each step"
+    correctIndex: 2
+---
+
+## Overview
+
+In the previous lessons, we defined what an agent is -- a system with perception, reasoning, and the ability to act in an environment. We also explored the LLM capabilities that make agents possible: instruction following, in-context learning, reasoning, and tool use. But how do these pieces actually fit together at runtime?
+
+The answer is the **agent loop** -- a continuous cycle of observing, thinking, and acting that drives every agentic system. This loop is the heartbeat of an agent. Whether the agent is answering a research question, writing code, or booking a flight, the same fundamental pattern repeats: observe the current state, reason about what to do next, take an action, and then observe the result.
+
+Understanding this loop deeply is essential. It is the single most important concept in this academy, and every architecture, pattern, and framework you will encounter in later modules is ultimately a variation of this cycle.
+
+## The Core Cycle: Observe, Think, Act
+
+At its simplest, the agent loop has three phases that repeat until the task is complete:
+
+1. **Observe** -- Gather information from the environment. This could be the user's initial request, the result of a tool call, an error message, or any new data that has appeared since the last cycle.
+
+2. **Think** -- The LLM processes all available observations and reasons about what to do next. This is where the model applies its instruction-following and reasoning capabilities to decide on the next step.
+
+3. **Act** -- The agent executes the chosen action. This might be calling a tool (like searching the web or running code), asking the user a clarifying question, or producing a final answer.
+
+After acting, the result of that action becomes a new observation, and the cycle begins again.
+
+<MermaidDiagram chart={`graph TD
+    START([User Request]) --> OBSERVE[Observe]
+    OBSERVE --> THINK[Think / Reason]
+    THINK --> DECIDE{Final Answer?}
+    DECIDE -->|No| ACT[Act / Use Tool]
+    ACT --> RESULT[Tool Result]
+    RESULT --> OBSERVE
+    DECIDE -->|Yes| RESPOND([Return Answer to User])
+
+    style START fill:#ebf8ff,stroke:#3182ce,color:#1a202c
+    style OBSERVE fill:#fefcbf,stroke:#d69e2e,color:#1a202c
+    style THINK fill:#fed7d7,stroke:#e53e3e,color:#1a202c
+    style DECIDE fill:#e9d8fd,stroke:#805ad5,color:#1a202c
+    style ACT fill:#c6f6d5,stroke:#38a169,color:#1a202c
+    style RESULT fill:#c6f6d5,stroke:#38a169,color:#1a202c
+    style RESPOND fill:#ebf8ff,stroke:#3182ce,color:#1a202c
+`} />
+
+Notice the **decision point** after the think step. On every iteration, the LLM must decide: "Do I have enough information to answer the user, or do I need to take another action first?" This decision is what separates an agent from a simple one-shot LLM call.
+
+## The Role of the LLM in the Think Step
+
+The think step is where the LLM earns its place as the "brain" of the agent. During this phase, the model receives the full conversation history -- the original user request, any system instructions, and all prior observations and actions -- and produces a structured response.
+
+The LLM's output at the think step typically falls into one of two categories:
+
+- **A tool call**: The model decides it needs more information or needs to perform an action. It outputs a structured request (like a function call) specifying which tool to use and what arguments to pass.
+- **A final response**: The model decides it has enough information to answer. It outputs a natural-language response for the user.
+
+This is exactly the "tool use" capability we explored in lesson 3. The agent loop is the runtime machinery that wraps around that capability, turning it from a one-shot feature into a persistent, goal-directed process.
+
+## How Tool Results Feed Back as Observations
+
+A critical detail of the agent loop is the **feedback mechanism**. When the agent calls a tool -- say, a web search -- the result of that tool call does not go directly to the user. Instead, it is appended to the conversation history and fed back to the LLM as a new observation.
+
+This means the LLM sees the full trajectory of its reasoning:
+
+1. The user's original question
+2. Its first reasoning and tool call
+3. The tool's result
+4. Its second reasoning and next tool call
+5. That tool's result
+6. ...and so on
+
+Each iteration adds to the context, giving the LLM richer information to reason over. The following sequence diagram shows this in action with a concrete example:
+
+<MermaidDiagram chart={`sequenceDiagram
+    participant U as User
+    participant A as Agent (LLM)
+    participant S as Search Tool
+    participant C as Calculator Tool
+
+    U->>A: "What is the GDP per capita of France?"
+    Note over A: Think: I need France's GDP and population
+
+    A->>S: search("France GDP 2025")
+    S-->>A: "France GDP: $3.1 trillion"
+    Note over A: Think: Now I need the population
+
+    A->>S: search("France population 2025")
+    S-->>A: "Population: 68.2 million"
+    Note over A: Think: Now I can calculate
+
+    A->>C: calculate("3.1e12 / 68.2e6")
+    C-->>A: "45,454.55"
+    Note over A: Think: I have the answer
+
+    A->>U: "The GDP per capita of France is approximately $45,455."
+`} />
+
+The agent went through **three full iterations** of the loop before producing a final answer. Each tool result became a new observation that informed the next think step. The user only sees the final result -- the intermediate steps are internal to the agent.
+
+## Single-Turn vs. Multi-Turn Loops
+
+Not every agent interaction requires multiple iterations. It is useful to distinguish between two modes:
+
+**Single-turn** interactions are cases where the LLM can answer directly without any tool calls. The loop runs exactly once: observe the user's question, think, and produce a final answer. This is essentially a normal LLM call -- no looping occurs.
+
+**Multi-turn** interactions are cases where the agent needs one or more tool calls before it can answer. The loop runs multiple times: observe, think, act, observe the result, think again, potentially act again, and so on until the agent reaches a final answer.
+
+The power of agents comes from multi-turn loops. A single LLM call is limited to what the model already knows and can reason about in one pass. A multi-turn loop lets the agent gather new information, verify its reasoning, perform calculations, and build up a complete answer step by step.
+
+> **Key insight:** The number of loop iterations is not fixed in advance. The agent dynamically decides when to continue and when to stop, based on whether it has achieved the user's goal.
+
+## Termination Conditions
+
+A loop that never stops is a bug, not an agent. Every well-designed agent loop includes **termination conditions** -- rules that determine when the loop should end:
+
+- **Goal achieved**: The agent has gathered enough information and produced a final answer. This is the happy path -- the LLM decides to return a response instead of making another tool call.
+
+- **Maximum iterations reached**: A safety limit that prevents runaway loops. If the agent has not converged after N iterations (commonly 5-25, depending on the task), the loop is halted and the agent returns whatever partial answer it has.
+
+- **Error encountered**: An unrecoverable error occurs -- a required tool is unavailable, the API returns an authentication failure, or the agent enters a state it cannot reason about.
+
+- **User interruption**: The user cancels the request or the system times out.
+
+- **Budget exhausted**: The agent has consumed its allocated tokens, API calls, or compute budget.
+
+In practice, the maximum iteration limit is the most important safety mechanism. Without it, a confused agent could loop forever, burning tokens and compute.
+
+## The Agent Loop in Code
+
+Let's make this concrete with a Python implementation. The following code shows the skeleton of an agent loop -- the same fundamental structure used by production agent frameworks:
+
+<CodeBlock code={`import json
+
+def agent_loop(user_message, tools, llm, max_iterations=10):
+    """The core agent loop: observe, think, act, repeat."""
+
+    # Initialize conversation with the user's request
+    messages = [
+        {"role": "system", "content": "You are a helpful assistant with access to tools."},
+        {"role": "user", "content": user_message},
+    ]
+
+    for i in range(max_iterations):
+        # THINK: Send the full conversation to the LLM
+        response = llm.chat(messages, tools=tools)
+
+        # DECIDE: Did the LLM produce a final answer or a tool call?
+        if response.has_tool_call:
+            # ACT: Execute the tool
+            tool_name = response.tool_call.name
+            tool_args = response.tool_call.arguments
+            print(f"  [Iteration {i+1}] Calling tool: {tool_name}({tool_args})")
+
+            tool_result = execute_tool(tool_name, tool_args, tools)
+
+            # OBSERVE: Append the action and result to conversation history
+            messages.append({"role": "assistant", "content": response.raw})
+            messages.append({
+                "role": "tool",
+                "tool_call_id": response.tool_call.id,
+                "content": json.dumps(tool_result),
+            })
+        else:
+            # GOAL ACHIEVED: Return the final answer
+            print(f"  [Iteration {i+1}] Final answer reached.")
+            return response.text
+
+    # SAFETY: Maximum iterations reached
+    return "I was unable to complete the task within the allowed number of steps."
+
+
+def execute_tool(name, arguments, tools):
+    """Look up and execute the named tool."""
+    for tool in tools:
+        if tool.name == name:
+            return tool.function(**arguments)
+    return {"error": f"Unknown tool: {name}"}
+`} language="python" filename="agent_loop.py" />
+
+Study this code carefully. Despite its simplicity, it captures the essential structure of every agent:
+
+1. **The conversation history** (`messages`) accumulates all observations over time
+2. **The for-loop** with `max_iterations` provides the termination safety net
+3. **The if/else branch** is the decision point: tool call or final answer
+4. **Tool results are appended** back into the conversation as new observations
+
+This is the exact pattern you will implement hands-on in lesson 6, "Your First Agent."
+
+## Variations on the Loop
+
+The loop we have described is the simplest version -- sometimes called a **ReAct-style loop** (Reasoning + Acting). But it is not the only way to structure an agent. In Module 4 (Agent Architectures), you will encounter several variations:
+
+- **ReAct**: The agent explicitly writes out its reasoning ("Thought") before each action. This makes the think step visible and debuggable.
+- **Plan-and-Execute**: The agent first creates a full plan of all steps, then executes them one by one. The loop still exists, but the think step in the first iteration produces a multi-step plan rather than a single action.
+- **Reflection loops**: After producing an answer, the agent critiques its own output and iterates to improve it. The "observation" in this case is the agent's own prior response.
+- **Hierarchical loops**: An outer loop manages high-level planning while inner loops handle sub-tasks. Loops within loops.
+
+All of these are variations of the same observe-think-act cycle. The core pattern remains the same; what changes is the complexity of the think step and the structure of the decision logic.
+
+## Why the Loop Matters
+
+The agent loop is what transforms a stateless LLM into a stateful, goal-directed system. Without the loop:
+
+- The LLM can only answer from its training data -- it cannot look up current information
+- The LLM cannot verify its own outputs or correct mistakes
+- The LLM cannot break complex tasks into steps and execute them sequentially
+- The LLM is limited to a single pass of reasoning
+
+With the loop, an agent can persist across multiple reasoning steps, gather information from the real world, adapt its strategy based on intermediate results, and ultimately solve problems that no single LLM call could handle.
+
+## Summary
+
+The **agent loop** is the core runtime pattern that powers every agentic system. It cycles through three phases -- **observe** the current state, **think** about what to do next, and **act** on that decision -- repeating until the goal is achieved or a termination condition is met. The LLM serves as the reasoning engine in the think step, deciding whether to call a tool or return a final answer. Tool results feed back into the conversation as new observations, giving the agent an ever-richer context to reason over.
+
+This loop is deceptively simple in structure but extraordinarily powerful in practice. Every framework, architecture, and design pattern you will encounter in the rest of this academy is built on top of it.
+
+In the next lessons, we will explore the broader agent ecosystem (lesson 5), and then you will implement this loop yourself from scratch in lesson 6.

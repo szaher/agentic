@@ -1,0 +1,264 @@
+---
+title: "LLM Capabilities That Enable Agents"
+quiz:
+  - question: "Which LLM capability allows a model to adapt its behavior based on examples provided in the prompt, without updating its weights?"
+    options:
+      - "Instruction following"
+      - "In-context learning"
+      - "Chain-of-thought reasoning"
+      - "Reinforcement learning from human feedback"
+    correctIndex: 1
+  - question: "What is the primary purpose of structured output and function calling in agent systems?"
+    options:
+      - "To make the model's responses easier for humans to read"
+      - "To reduce the number of tokens the model generates"
+      - "To produce machine-parseable responses that external tools and systems can act on"
+      - "To improve the model's internal training accuracy"
+    correctIndex: 2
+  - question: "Chain-of-thought prompting improves agent performance primarily because it:"
+    options:
+      - "Forces the model to break complex problems into intermediate reasoning steps before answering"
+      - "Reduces the total number of API calls needed"
+      - "Eliminates the need for tool use entirely"
+    correctIndex: 0
+  - question: "Which combination of LLM capabilities is MOST essential for an autonomous agent?"
+    options:
+      - "Text summarization, translation, and sentiment analysis"
+      - "Code generation and autocomplete"
+      - "Instruction following, reasoning, and tool use working together"
+      - "Named entity recognition and text classification"
+    correctIndex: 2
+---
+
+## Overview
+
+In the previous lesson, we defined an agent as a system that perceives its environment, reasons about what to do, and takes actions to achieve goals. But what makes a large language model -- a system originally trained to predict the next token -- capable of serving as the "brain" of an agent?
+
+Not all LLMs are equally suited for agentic tasks. The capabilities that separate a general-purpose text generator from an **agent-ready foundation model** have emerged through advances in training, alignment, and architecture. In this lesson, we examine four critical capabilities that enable LLMs to power agents: **instruction following**, **in-context learning**, **reasoning**, and **tool use**.
+
+Understanding these capabilities will help you choose the right model for your agent and design prompts that leverage each capability effectively -- topics we will explore in depth in Module 2 (Prompting & Reasoning) and Module 3 (Tool Use & Function Calling).
+
+## From Text Prediction to Agent Foundations
+
+A **base LLM** -- one trained only on next-token prediction -- can generate fluent text, but it struggles to follow precise instructions, reason through multi-step problems, or interact with external systems. The journey from base model to agent-ready model involves several stages of capability development.
+
+<MermaidDiagram chart={`graph LR
+    subgraph Base["Base LLM"]
+        A1["Text completion"] --> A2["Pattern matching"]
+        A2 --> A3["Knowledge recall"]
+    end
+    subgraph AgentReady["Agent-Ready LLM"]
+        B1["Instruction following"] --> B2["In-context learning"]
+        B2 --> B3["Chain-of-thought reasoning"]
+        B3 --> B4["Tool use & function calling"]
+    end
+    Base -->|"Instruction tuning + RLHF"| AgentReady
+    style Base fill:#fff5f5,stroke:#fc8181
+    style AgentReady fill:#f0fff4,stroke:#68d391
+`} />
+
+A base model can recall facts and complete text patterns, but those abilities alone do not make an agent. The four capabilities on the right side of this diagram are what close the gap. Let us examine each one.
+
+## Capability 1: Instruction Following
+
+**Instruction following** is the ability to understand and execute complex, multi-step directives expressed in natural language. This is the most fundamental capability an agent needs -- without it, the LLM cannot reliably carry out the tasks assigned to it.
+
+Base models generate plausible continuations of text, but they do not reliably *do what you ask*. Through **instruction tuning** (training on input-output pairs where the input is an instruction and the output is the desired response) and **reinforcement learning from human feedback (RLHF)**, models learn to treat prompts as directives rather than text to continue.
+
+For agents, instruction following means the model can:
+
+- Parse a **system prompt** that defines the agent's role, constraints, and goals
+- Follow multi-step procedures: "First check the database, then validate the result, then format the response"
+- Respect constraints: "Always respond in JSON" or "Never execute destructive actions without confirmation"
+- Handle conditional logic: "If the user provides a file path, read the file; otherwise, ask for one"
+
+> **Key insight:** The quality of instruction following directly determines how reliably your agent behaves. A model with weak instruction following will drift off-task, ignore constraints, and produce inconsistent outputs -- no amount of clever prompting can fully compensate.
+
+## Capability 2: In-Context Learning
+
+**In-context learning (ICL)** is the ability to learn new tasks or adapt behavior based on examples provided in the prompt -- without any updates to the model's weights. This is fundamentally different from traditional machine learning, where learning requires a training phase.
+
+When you provide an LLM with a few examples of input-output pairs (known as **few-shot prompting**), the model generalizes the pattern and applies it to new inputs. This is enormously valuable for agents because it means you can teach the agent new behaviors at runtime, just by changing the prompt.
+
+<CodeBlock code={`# In-context learning: teaching the model a custom classification
+# schema by providing examples directly in the prompt
+
+messages = [
+    {
+        "role": "system",
+        "content": "You are a task classifier for an agent system."
+    },
+    {
+        "role": "user",
+        "content": """Classify each task into a category and identify required tools.
+Follow the format shown in the examples exactly.
+
+Examples:
+Task: "Send an email to the team about the meeting"
+Category: communication
+Confidence: high
+Tools: [email]
+
+Task: "What's the weather in Tokyo?"
+Category: information_retrieval
+Confidence: high
+Tools: [weather_api]
+
+Task: "Refactor the login module and write tests"
+Category: software_engineering
+Confidence: medium
+Tools: [code_editor, test_runner]
+
+Now classify this task:
+Task: "Book a flight to London for next Tuesday and add it to my calendar"
+"""
+    }
+]
+
+# The model learns the classification schema, output format,
+# and tool-assignment pattern from examples alone --
+# no fine-tuning required. It will produce:
+#
+# Category: scheduling
+# Confidence: high
+# Tools: [flight_booking, calendar]
+`} language="python" filename="in_context_learning.py" />
+
+For agents, in-context learning enables:
+
+- **Rapid adaptation** -- changing the agent's behavior by updating the prompt, not retraining the model
+- **Format enforcement** -- teaching the model to produce specific output structures through examples
+- **Domain specialization** -- making a general model behave like a domain expert by providing relevant examples in the system prompt
+- **Error correction** -- showing the model examples of common mistakes alongside correct responses
+
+## Capability 3: Reasoning
+
+**Reasoning** is the ability to break down complex problems into intermediate steps, evaluate options, and arrive at justified conclusions. For agents, reasoning is the bridge between perception ("I see the user's request and the current state of the environment") and action ("I should call this specific tool with these arguments").
+
+The breakthrough technique here is **chain-of-thought (CoT) prompting**, where the model is encouraged to "think step by step" before producing a final answer. This dramatically improves performance on tasks requiring logic, math, planning, and multi-step problem solving.
+
+Consider the difference. Without chain-of-thought, an agent asked to "find and fix the bug in the authentication module" might jump immediately to generating a code patch -- and get it wrong. With chain-of-thought, the agent reasons through the problem:
+
+1. First, I need to understand the symptoms of the bug
+2. Then I should read the authentication module code
+3. I will trace the logic to identify where the failure occurs
+4. Once I understand the root cause, I can generate a targeted fix
+5. Finally, I should run the tests to verify the fix works
+
+Modern reasoning capabilities relevant to agents include:
+
+- **Planning** -- decomposing a high-level goal into a sequence of concrete steps
+- **Self-reflection** -- evaluating whether a plan or action is likely to succeed before executing it
+- **Error recovery** -- recognizing when something went wrong and adjusting the approach
+- **Trade-off analysis** -- weighing multiple options against criteria to choose the best action
+
+> **Why this matters for agents:** Without reasoning, an agent can only follow rigid scripts. With reasoning, an agent can handle novel situations by thinking through what to do -- much like the human reasoning process we discussed in the previous lesson's perception-reasoning-action loop.
+
+We will explore reasoning strategies extensively in Module 2, including chain-of-thought, tree-of-thought, self-consistency, and the **ReAct** (Reasoning + Acting) pattern.
+
+## Capability 4: Tool Use and Function Calling
+
+**Tool use** (also called **function calling**) is the capability that transforms an LLM from a text generator into a system that can *act on the world*. Instead of only producing natural language, the model generates structured calls to external tools -- APIs, databases, code interpreters, file systems, or any other system you connect.
+
+This capability is what closes the agent loop. Recall from our definition in the previous lesson: an agent must be able to take **actions** that affect its **environment**. Tool use is the mechanism by which the LLM translates its reasoning into concrete actions.
+
+Here is how function calling works in practice with the Anthropic API:
+
+<CodeBlock code={`import anthropic
+
+client = anthropic.Anthropic()
+
+# Define tools the agent can use -- each tool has a name,
+# description, and a JSON Schema for its inputs
+tools = [
+    {
+        "name": "search_knowledge_base",
+        "description": "Search the internal knowledge base for relevant documents.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "The search query"
+                },
+                "max_results": {
+                    "type": "integer",
+                    "description": "Maximum number of results to return",
+                    "default": 5
+                }
+            },
+            "required": ["query"]
+        }
+    },
+    {
+        "name": "send_email",
+        "description": "Send an email to a specified recipient.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "to": {
+                    "type": "string",
+                    "description": "Recipient email address"
+                },
+                "subject": {"type": "string"},
+                "body": {"type": "string"}
+            },
+            "required": ["to", "subject", "body"]
+        }
+    }
+]
+
+# The model decides WHICH tool to call and WITH WHAT arguments
+response = client.messages.create(
+    model="claude-sonnet-4-20250514",
+    max_tokens=1024,
+    tools=tools,
+    messages=[
+        {
+            "role": "user",
+            "content": "Find our refund policy and email a summary to support@example.com"
+        }
+    ]
+)
+
+# The model returns structured tool_use blocks -- not free-form text
+for block in response.content:
+    if block.type == "tool_use":
+        print(f"Tool: {block.name}")
+        print(f"Input: {block.input}")
+        # Output:
+        # Tool: search_knowledge_base
+        # Input: {"query": "refund policy", "max_results": 3}
+`} language="python" filename="tool_use_example.py" />
+
+Notice what is happening here: the model receives a natural language request, *reasons* about what needs to be done (search first, then email), and produces a **structured tool call** with the correct argument types and values. The response is not free-form text -- it is machine-parseable JSON that your application code can execute.
+
+This example combines all four capabilities:
+
+- **Instruction following** -- the model understands it should use the available tools
+- **In-context learning** -- it learns what each tool does from the descriptions and schemas
+- **Reasoning** -- it determines the correct order of operations (search before email)
+- **Tool use** -- it generates the structured call with appropriate arguments
+
+Module 3 will cover tool use and function calling in comprehensive detail, including error handling, multi-turn tool chains, and designing effective tool schemas.
+
+## How the Capabilities Work Together
+
+These four capabilities do not operate in isolation. In a working agent, they form an integrated pipeline that executes on every iteration of the agent loop:
+
+1. **Instruction following** ensures the agent adheres to its system prompt, role definition, and safety constraints
+2. **In-context learning** lets the agent adapt to new tasks using examples, conversation history, and retrieved context
+3. **Reasoning** enables the agent to plan what to do next, evaluate options, and decide on the best course of action
+4. **Tool use** translates decisions into concrete actions that affect the environment
+
+This is why **model selection** matters for agents. A model might excel at creative text generation but lack reliable tool use. Another might reason well but struggle with complex multi-step instructions. When building agents, you need a model that is strong across *all four* capabilities -- weakness in any one of them becomes a bottleneck for the entire system.
+
+> **Practical tip:** When evaluating models for agent use, test each capability independently. Can it follow a complex system prompt consistently? Does it learn from few-shot examples? Can it reason through multi-step problems? Does it generate valid, well-structured tool calls? A model that scores well on general benchmarks may still fail at one of these agent-critical capabilities.
+
+## Summary
+
+In this lesson, we examined the four key LLM capabilities that make agentic systems possible. **Instruction following** allows agents to reliably execute complex directives and respect constraints. **In-context learning** enables rapid adaptation to new tasks without retraining. **Reasoning** -- particularly chain-of-thought -- powers the planning, self-reflection, and decision-making that agents need to handle novel situations. **Tool use** closes the agent loop by letting the model take concrete actions in the real world through structured function calls.
+
+These capabilities did not exist in early language models. They emerged through advances in model scale, training methodology (instruction tuning, RLHF), and architecture design. Every design decision you make when building an agent -- from prompt engineering to tool schema design -- is ultimately about leveraging these four capabilities effectively.
+
+In the next lesson, we will see how these capabilities come together in **the agent loop** -- the core observe-think-act cycle where an agent perceives its environment, reasons about what to do, takes action, and observes the results before repeating.

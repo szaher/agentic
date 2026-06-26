@@ -1,0 +1,489 @@
+---
+title: "Your First Agent"
+---
+
+## Overview
+
+You have learned what agents are, why they matter, and how the **observe-think-act loop** drives every agentic system. Now it is time to build one.
+
+In this lesson, you will construct a working agent from scratch using raw API calls. No frameworks, no abstractions, just Python and the Anthropic SDK. By the end, you will have a calculator agent that takes natural language math questions, reasons about which operations to perform, and returns the final answer.
+
+Why start from scratch? Because every framework you will encounter in Module 7 and beyond is built on top of exactly these primitives. Understanding them now means you will never be confused by what a framework does under the hood.
+
+## What We Are Building
+
+Our agent will take a natural language question like "What is 25 multiplied by 4, then add 10?" and figure out the steps to solve it. The agent has access to four arithmetic **tools** and uses the LLM to decide which tool to call, in what order, and when the task is done.
+
+<MermaidDiagram chart={`graph TD
+    A["User asks a math question"] --> B["Send question + tools to LLM"]
+    B --> C{"LLM responds"}
+    C -->|"tool_use"| D["Extract tool name + arguments"]
+    D --> E["Execute the tool function"]
+    E --> F["Send tool result back to LLM"]
+    F --> C
+    C -->|"end_turn"| G["Return final answer to user"]
+    style A fill:#ebf8ff,stroke:#3182ce
+    style G fill:#c6f6d5,stroke:#38a169
+    subgraph AgentLoop["The Agent Loop"]
+        B
+        C
+        D
+        E
+        F
+    end
+    style AgentLoop fill:#f7fafc,stroke:#a0aec0
+`} />
+
+This is the observe-think-act cycle from lesson 04 made concrete. The LLM **observes** the question and any tool results, **thinks** about what to do next, and **acts** by either calling a tool or returning a final answer.
+
+## Step 1: Define the Tools
+
+Tools are plain Python functions. Each one does a single arithmetic operation and returns the result as a string. We also create a list of **tool definitions** that describe each tool to the LLM using JSON Schema. These definitions are how the model knows what tools are available and what arguments they accept.
+
+<CodeBlock code={`import json
+
+# --- Tool implementations ---
+
+def add(a: float, b: float) -> str:
+    """Add two numbers together."""
+    result = a + b
+    return json.dumps({"result": result})
+
+def subtract(a: float, b: float) -> str:
+    """Subtract b from a."""
+    result = a - b
+    return json.dumps({"result": result})
+
+def multiply(a: float, b: float) -> str:
+    """Multiply two numbers together."""
+    result = a * b
+    return json.dumps({"result": result})
+
+def divide(a: float, b: float) -> str:
+    """Divide a by b."""
+    if b == 0:
+        return json.dumps({"error": "Cannot divide by zero"})
+    result = a / b
+    return json.dumps({"result": result})
+
+# A lookup table so we can call tools by name
+tool_functions = {
+    "add": add,
+    "subtract": subtract,
+    "multiply": multiply,
+    "divide": divide,
+}
+`} language="python" filename="tools.py" />
+
+Notice the functions return JSON strings rather than raw numbers. This is a common pattern: tool results are sent back to the LLM as text, so returning structured JSON makes it easy for the model to parse the output.
+
+## Step 2: Create Tool Definitions for the API
+
+The Anthropic API needs a structured description of each tool so the model knows when and how to use them. Each definition includes a **name**, a **description** that tells the model what the tool does, and an **input_schema** that specifies the required parameters.
+
+<CodeBlock code={`# --- Tool definitions for the API ---
+
+tools = [
+    {
+        "name": "add",
+        "description": "Add two numbers together. Use this when you need to find the sum of two values.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "a": {
+                    "type": "number",
+                    "description": "The first number"
+                },
+                "b": {
+                    "type": "number",
+                    "description": "The second number"
+                }
+            },
+            "required": ["a", "b"]
+        }
+    },
+    {
+        "name": "subtract",
+        "description": "Subtract the second number from the first. Use this when you need to find the difference between two values.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "a": {
+                    "type": "number",
+                    "description": "The number to subtract from"
+                },
+                "b": {
+                    "type": "number",
+                    "description": "The number to subtract"
+                }
+            },
+            "required": ["a", "b"]
+        }
+    },
+    {
+        "name": "multiply",
+        "description": "Multiply two numbers together. Use this when you need to find the product of two values.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "a": {
+                    "type": "number",
+                    "description": "The first number"
+                },
+                "b": {
+                    "type": "number",
+                    "description": "The second number"
+                }
+            },
+            "required": ["a", "b"]
+        }
+    },
+    {
+        "name": "divide",
+        "description": "Divide the first number by the second. Use this when you need to find the quotient of two values.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "a": {
+                    "type": "number",
+                    "description": "The dividend (number to be divided)"
+                },
+                "b": {
+                    "type": "number",
+                    "description": "The divisor (number to divide by)"
+                }
+            },
+            "required": ["a", "b"]
+        }
+    }
+]
+`} language="python" filename="tool_definitions.py" />
+
+Good descriptions are critical. The LLM reads these descriptions to decide **which** tool to call and **when**. Vague descriptions lead to wrong tool choices. Notice how each description explains not just what the tool does, but when to use it.
+
+## Step 3: Set Up the LLM Client
+
+Now we initialize the Anthropic client. The SDK reads your API key from the `ANTHROPIC_API_KEY` environment variable automatically.
+
+<CodeBlock code={`import anthropic
+
+# The client reads ANTHROPIC_API_KEY from the environment
+client = anthropic.Anthropic()
+
+# We will use Claude Sonnet for our agent — a good balance of
+# speed and intelligence for tool-use tasks
+MODEL = "claude-sonnet-4-6"
+`} language="python" filename="client.py" />
+
+> **Setting up your API key:** Before running this code, set your API key in your terminal with `export ANTHROPIC_API_KEY="your-key-here"`. You can get a key from [console.anthropic.com](https://console.anthropic.com). Never hardcode API keys in your source code.
+
+## Step 4: Implement the Agent Loop
+
+This is the core of the agent. The loop sends the user's question to the LLM along with the tool definitions, then checks what the model wants to do:
+
+- If the model returns a **tool_use** block, we execute the requested tool and send the result back.
+- If the model returns **end_turn**, it has finished reasoning and we extract the final answer.
+
+This loop continues until the model decides it has enough information to answer the question.
+
+<CodeBlock code={`def run_agent(user_question: str) -> str:
+    """Run the calculator agent on a user question."""
+
+    print(f"\\nQuestion: {user_question}")
+    print("-" * 50)
+
+    # Start the conversation with the user's question
+    messages = [
+        {"role": "user", "content": user_question}
+    ]
+
+    # The agent loop: keep going until the model stops calling tools
+    while True:
+        # Send the conversation (with tools) to the LLM
+        response = client.messages.create(
+            model=MODEL,
+            max_tokens=1024,
+            system="You are a calculator assistant. Use the provided tools to solve math problems step by step. Always use tools for calculations rather than computing in your head.",
+            tools=tools,
+            messages=messages
+        )
+
+        print(f"\\nStop reason: {response.stop_reason}")
+
+        # Check if the model is done
+        if response.stop_reason == "end_turn":
+            # Extract the final text response
+            for block in response.content:
+                if block.type == "text":
+                    print(f"\\nAnswer: {block.text}")
+                    return block.text
+
+        # The model wants to use a tool
+        if response.stop_reason == "tool_use":
+            # Append the assistant's response (includes tool_use blocks)
+            messages.append({
+                "role": "assistant",
+                "content": response.content
+            })
+
+            # Process each tool call
+            tool_results = []
+            for block in response.content:
+                if block.type == "tool_use":
+                    tool_name = block.name
+                    tool_input = block.input
+
+                    print(f"  Calling tool: {tool_name}({tool_input})")
+
+                    # Execute the tool
+                    if tool_name in tool_functions:
+                        result = tool_functions[tool_name](**tool_input)
+                    else:
+                        result = json.dumps({"error": f"Unknown tool: {tool_name}"})
+
+                    print(f"  Result: {result}")
+
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": result
+                    })
+
+            # Send tool results back to the model
+            messages.append({
+                "role": "user",
+                "content": tool_results
+            })
+`} language="python" filename="agent_loop.py" />
+
+Let's walk through the key parts of this loop:
+
+- **System prompt** tells the model it should use the tools rather than trying to compute answers itself. This is important because LLMs can do basic arithmetic, but we want to demonstrate the tool-use pattern.
+- **response.stop_reason** tells us what the model wants to do next. A value of `"tool_use"` means it wants to call a tool. A value of `"end_turn"` means it is done.
+- **response.content** contains a list of content blocks. When the model calls a tool, you will find blocks with `type == "tool_use"` that include the `name` of the tool and the `input` arguments.
+- **tool_use_id** is critical. When we send results back, each result must include the `tool_use_id` from the corresponding `tool_use` block so the model can match results to requests.
+- **Messages grow over time.** Each iteration appends the assistant's response and our tool results. The full conversation history is sent with every API call, giving the model the context it needs to reason about multi-step problems.
+
+## Step 5: Run the Agent
+
+Let's put it all together and test with a multi-step math question.
+
+<CodeBlock code={`# --- Run the agent ---
+
+if __name__ == "__main__":
+    # A simple question requiring one tool call
+    run_agent("What is 42 plus 17?")
+
+    print("\\n" + "=" * 50 + "\\n")
+
+    # A multi-step question requiring multiple tool calls
+    run_agent("What is 25 multiplied by 4, then add 10 to the result?")
+
+    print("\\n" + "=" * 50 + "\\n")
+
+    # A more complex question
+    run_agent("I have 100 cookies. I divide them equally among 8 people. How many does each person get, and how many are left over?")
+`} language="python" filename="run_agent.py" />
+
+When you run this, you will see output like:
+
+<CodeBlock code={`Question: What is 25 multiplied by 4, then add 10 to the result?
+--------------------------------------------------
+
+Stop reason: tool_use
+  Calling tool: multiply({'a': 25, 'b': 4})
+  Result: {"result": 100}
+
+Stop reason: tool_use
+  Calling tool: add({'a': 100, 'b': 10})
+  Result: {"result": 110}
+
+Stop reason: end_turn
+
+Answer: 25 multiplied by 4 is 100, and adding 10 gives you **110**.
+`} language="text" filename="output" />
+
+Notice how the agent made **two** trips through the loop. First it called `multiply`, got back 100, then called `add` with 100 and 10 to get 110. The model decided the order of operations, chose the right tools, and chained the results together -- all from a natural language question.
+
+## The Complete Agent
+
+Here is the full working code in a single file that you can copy and run.
+
+<CodeBlock code={`"""
+A simple calculator agent built with raw Anthropic API calls.
+
+Usage:
+    export ANTHROPIC_API_KEY="your-key-here"
+    python calculator_agent.py
+"""
+
+import json
+import anthropic
+
+# --- Tool implementations ---
+
+def add(a: float, b: float) -> str:
+    result = a + b
+    return json.dumps({"result": result})
+
+def subtract(a: float, b: float) -> str:
+    result = a - b
+    return json.dumps({"result": result})
+
+def multiply(a: float, b: float) -> str:
+    result = a * b
+    return json.dumps({"result": result})
+
+def divide(a: float, b: float) -> str:
+    if b == 0:
+        return json.dumps({"error": "Cannot divide by zero"})
+    result = a / b
+    return json.dumps({"result": result})
+
+tool_functions = {
+    "add": add,
+    "subtract": subtract,
+    "multiply": multiply,
+    "divide": divide,
+}
+
+# --- Tool definitions for the API ---
+
+tools = [
+    {
+        "name": "add",
+        "description": "Add two numbers together. Use this when you need to find the sum.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "a": {"type": "number", "description": "The first number"},
+                "b": {"type": "number", "description": "The second number"}
+            },
+            "required": ["a", "b"]
+        }
+    },
+    {
+        "name": "subtract",
+        "description": "Subtract the second number from the first.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "a": {"type": "number", "description": "The number to subtract from"},
+                "b": {"type": "number", "description": "The number to subtract"}
+            },
+            "required": ["a", "b"]
+        }
+    },
+    {
+        "name": "multiply",
+        "description": "Multiply two numbers together.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "a": {"type": "number", "description": "The first number"},
+                "b": {"type": "number", "description": "The second number"}
+            },
+            "required": ["a", "b"]
+        }
+    },
+    {
+        "name": "divide",
+        "description": "Divide the first number by the second.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "a": {"type": "number", "description": "The dividend"},
+                "b": {"type": "number", "description": "The divisor"}
+            },
+            "required": ["a", "b"]
+        }
+    }
+]
+
+# --- LLM client ---
+
+client = anthropic.Anthropic()
+MODEL = "claude-sonnet-4-6"
+
+# --- Agent loop ---
+
+def run_agent(user_question: str) -> str:
+    print(f"\\nQuestion: {user_question}")
+    print("-" * 50)
+
+    messages = [{"role": "user", "content": user_question}]
+
+    while True:
+        response = client.messages.create(
+            model=MODEL,
+            max_tokens=1024,
+            system="You are a calculator assistant. Use the provided tools to solve math problems step by step. Always use tools for calculations rather than computing in your head.",
+            tools=tools,
+            messages=messages
+        )
+
+        print(f"\\nStop reason: {response.stop_reason}")
+
+        if response.stop_reason == "end_turn":
+            for block in response.content:
+                if block.type == "text":
+                    print(f"\\nAnswer: {block.text}")
+                    return block.text
+
+        if response.stop_reason == "tool_use":
+            messages.append({"role": "assistant", "content": response.content})
+
+            tool_results = []
+            for block in response.content:
+                if block.type == "tool_use":
+                    tool_name = block.name
+                    tool_input = block.input
+                    print(f"  Calling tool: {tool_name}({tool_input})")
+
+                    if tool_name in tool_functions:
+                        result = tool_functions[tool_name](**tool_input)
+                    else:
+                        result = json.dumps({"error": f"Unknown tool: {tool_name}"})
+
+                    print(f"  Result: {result}")
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": result
+                    })
+
+            messages.append({"role": "user", "content": tool_results})
+
+if __name__ == "__main__":
+    run_agent("What is 25 multiplied by 4, then add 10 to the result?")
+`} language="python" filename="calculator_agent.py" />
+
+## What Makes This an Agent?
+
+Compare what we just built to a simple API call:
+
+- A **single API call** sends a prompt and gets a response. One turn, done.
+- An **agent** runs a loop. It sends a prompt, gets a response, potentially acts on it, sends the results back, and repeats. The model drives the control flow by deciding when to call tools and when to stop.
+
+The three properties from lesson 02 are all present here:
+
+1. **Autonomy** -- the model decides which tools to call and in what order, without us specifying the steps.
+2. **Tool use** -- the model interacts with external functions to perform computations.
+3. **Goal-directed behavior** -- the model works toward answering the user's question, chaining tool calls until it has enough information.
+
+## What Comes Next
+
+This hand-rolled loop is exactly what agent frameworks automate for you. In Module 7, you will see how tools like LangGraph provide the same loop with built-in features like state management, error handling, retries, and streaming. But they all reduce to this same pattern: send a message, check if the model wants to call a tool, execute it, send results back, repeat.
+
+> Understanding the raw loop first means you will always be able to debug a framework when something goes wrong, extend it when it does not do what you need, or build your own when no framework fits.
+
+## Summary
+
+You built a working agent from scratch using the Anthropic Python SDK. The key components are:
+
+- **Tool definitions** that describe capabilities to the LLM using JSON Schema
+- **An LLM client** that sends messages and tool definitions to the API
+- **An agent loop** that cycles until the model's `stop_reason` is `end_turn`, executing tool calls and feeding results back along the way
+- **Tool results** that must include the `tool_use_id` to match each result with its corresponding request
+
+Every agent, no matter how sophisticated, builds on this foundation. The difference between this calculator and a production agent is the complexity of the tools and the robustness of the loop, not the underlying pattern.

@@ -1,0 +1,469 @@
+---
+title: "Error Handling and Retries"
+quiz:
+  - question: "When a tool call fails, what is the recommended way to handle the error in an agent system?"
+    options:
+      - "Crash the agent immediately so the user knows something went wrong"
+      - "Silently ignore the error and continue with the next step"
+      - "Return a structured error message to the LLM so it can reason about the failure and adapt"
+      - "Automatically retry the exact same call indefinitely until it succeeds"
+    correctIndex: 2
+  - question: "Why is exponential backoff preferred over fixed-interval retries when handling rate limit errors?"
+    options:
+      - "It makes the code more readable"
+      - "It spaces retries further apart with each attempt, reducing pressure on the overloaded service and improving the chance of success"
+      - "It always guarantees the retry will succeed on the second attempt"
+      - "It is required by all API providers and will cause authentication errors otherwise"
+    correctIndex: 1
+  - question: "What is the purpose of setting a maximum retry limit in an agent's tool execution loop?"
+    options:
+      - "To reduce the cost of API calls by limiting total usage"
+      - "To ensure the agent always succeeds within a fixed number of attempts"
+      - "To prevent infinite loops where the agent repeatedly retries a permanently failing tool"
+      - "To comply with rate limiting requirements from the LLM provider"
+    correctIndex: 2
+  - question: "In the fallback tool pattern, what happens when a primary tool fails?"
+    options:
+      - "The agent tries an alternative tool that can achieve the same goal through a different method"
+      - "The agent immediately asks the user for help"
+      - "The agent switches to a different LLM model"
+      - "The agent clears its context window and starts over"
+    correctIndex: 0
+---
+
+## Overview
+
+In the previous lessons, you learned how LLMs call functions, how to design clean tool interfaces, and how schemas guide the model toward correct parameter usage. But there is a truth that every production agent builder discovers quickly: **tools will fail**. APIs time out. Rate limits kick in. The LLM generates invalid parameters. Network connections drop. Permissions expire.
+
+The difference between a toy demo and a production agent is not whether failures happen -- it is how the agent handles them. A brittle agent crashes on the first error. A robust agent treats errors as information, reasons about what went wrong, and adapts its strategy.
+
+This lesson covers the patterns that make agents resilient: returning errors to the LLM instead of crashing, retrying with backoff, falling back to alternative tools, and structuring error responses so the model can make intelligent recovery decisions.
+
+## Why Tools Fail
+
+Before diving into solutions, it helps to understand the taxonomy of tool failures. Not all errors are created equal, and different error types demand different recovery strategies.
+
+**Tool execution errors** occur when the tool itself breaks -- an API returns a 500 status, a database query fails, or a file is not found. These are the most common failures in production, and they are often transient.
+
+**Invalid parameters from the LLM** happen when the model generates arguments that do not match what the tool expects -- a malformed date string, an ID that does not exist, or a missing required field. Schema validation catches some of these, but not all.
+
+**Timeouts** occur when a tool takes too long to respond. A web search that hangs, an API call to a slow service, or a database query scanning millions of rows can all exceed reasonable time limits.
+
+**Rate limiting** happens when you hit the usage cap on an external API. The service returns a 429 status code, telling you to slow down. This is particularly common with search APIs, LLM APIs themselves, and third-party data services.
+
+**Permission denied** errors occur when credentials expire, API keys are rotated, or the agent tries to access a resource it does not have authorization for.
+
+<MermaidDiagram chart={`flowchart TD
+    FAIL[Tool Call Fails] --> CLASSIFY{Classify Error}
+
+    CLASSIFY -->|Transient| RETRY{Retryable?}
+    CLASSIFY -->|Invalid Params| FIX[Return Error to LLM<br/>Let it fix parameters]
+    CLASSIFY -->|Permission Denied| ESCALATE[Escalate to User]
+    CLASSIFY -->|Rate Limited| BACKOFF[Wait with<br/>Exponential Backoff]
+
+    RETRY -->|Yes| ATTEMPT{Under Max<br/>Retries?}
+    RETRY -->|No| FALLBACK{Fallback<br/>Available?}
+
+    ATTEMPT -->|Yes| WAIT[Retry with Backoff]
+    ATTEMPT -->|No| FALLBACK
+
+    WAIT --> RESULT{Success?}
+    RESULT -->|Yes| DONE[Return Result to LLM]
+    RESULT -->|No| ATTEMPT
+
+    FALLBACK -->|Yes| ALT[Try Fallback Tool]
+    FALLBACK -->|No| REPORT[Return Structured Error<br/>to LLM for Reasoning]
+
+    BACKOFF --> ATTEMPT
+
+    ALT --> RESULT2{Success?}
+    RESULT2 -->|Yes| DONE
+    RESULT2 -->|No| REPORT
+
+    FIX --> DONE
+
+    style FAIL fill:#fed7d7,stroke:#e53e3e,color:#1a202c
+    style CLASSIFY fill:#fefcbf,stroke:#d69e2e,color:#1a202c
+    style DONE fill:#c6f6d5,stroke:#38a169,color:#1a202c
+    style ESCALATE fill:#fed7d7,stroke:#e53e3e,color:#1a202c
+    style REPORT fill:#ebf8ff,stroke:#3182ce,color:#1a202c
+    style FIX fill:#ebf8ff,stroke:#3182ce,color:#1a202c
+    style RETRY fill:#fefcbf,stroke:#d69e2e,color:#1a202c
+    style ATTEMPT fill:#fefcbf,stroke:#d69e2e,color:#1a202c
+    style FALLBACK fill:#fefcbf,stroke:#d69e2e,color:#1a202c
+    style WAIT fill:#e9d8fd,stroke:#805ad5,color:#1a202c
+    style BACKOFF fill:#e9d8fd,stroke:#805ad5,color:#1a202c
+    style ALT fill:#e9d8fd,stroke:#805ad5,color:#1a202c
+    style RESULT fill:#fefcbf,stroke:#d69e2e,color:#1a202c
+    style RESULT2 fill:#fefcbf,stroke:#d69e2e,color:#1a202c
+`} />
+
+This decision tree captures the core principle: **classify the error first, then choose the appropriate recovery strategy**. Transient errors get retried. Parameter errors go back to the LLM for correction. Permission failures escalate to the user. And if all recovery paths are exhausted, a structured error report goes to the LLM so it can reason about alternatives.
+
+## Pattern 1: Return Errors to the LLM
+
+The most important pattern -- and the one that distinguishes agent error handling from traditional software error handling -- is this: **do not crash on tool failures. Return the error to the LLM as a tool result and let it reason about what to do next.**
+
+In traditional software, an unhandled exception means the program stops. In an agent system, the LLM is the orchestrator. When a tool fails, the LLM needs to know *what* failed and *why*, so it can decide whether to retry, try a different approach, or inform the user.
+
+This is a fundamental shift in thinking. The error is not a bug to be hidden -- it is **information** that the agent uses to adapt its strategy.
+
+<MermaidDiagram chart={`sequenceDiagram
+    participant U as User
+    participant L as LLM
+    participant T1 as search_web
+    participant T2 as search_cached
+
+    U->>L: "Find the current price of Bitcoin"
+    L->>T1: search_web(query="Bitcoin price USD")
+
+    Note over T1: API returns 503<br/>Service Unavailable
+
+    T1-->>L: ERROR: search_web failed<br/>Status 503 - Service temporarily<br/>unavailable. This is a transient error.
+
+    Note over L: Reasoning: search_web is down.<br/>I have a fallback: search_cached<br/>may have recent data.
+
+    L->>T2: search_cached(query="Bitcoin price USD")
+    T2-->>L: Result: Bitcoin price $67,432<br/>(cached 5 minutes ago)
+
+    Note over L: The cached result is recent<br/>enough. I can use this.
+
+    L->>U: "Based on recently cached data,<br/>Bitcoin is trading at ~$67,432 USD.<br/>Note: this is from 5 minutes ago<br/>as the live search is temporarily<br/>unavailable."
+`} />
+
+Notice what happens in this sequence. The LLM does not just mechanically retry. It reasons: the web search is down, but there is a cached alternative. The cached data is recent enough to be useful. And it transparently tells the user that the data source was a fallback. This is the kind of adaptive behavior that only works when errors flow back to the LLM as structured information.
+
+## Pattern 2: Retry with Exponential Backoff
+
+Many tool failures are **transient** -- the service is momentarily overloaded, a network packet was dropped, or a rate limit window has not yet reset. For these, the correct strategy is to retry, but with increasing delays between attempts.
+
+**Exponential backoff** means each retry waits longer than the previous one: 1 second, then 2, then 4, then 8. This gives the failing service time to recover and prevents your agent from hammering an already-stressed endpoint. Adding a small random **jitter** (a random fraction of a second) prevents multiple agents from retrying in lockstep.
+
+## Pattern 3: Structured Error Responses
+
+When returning an error to the LLM, the format matters. A raw exception traceback gives the model little to work with. A structured error response gives it actionable information:
+
+<CodeBlock code={`import time
+import random
+import json
+import httpx
+from typing import Any
+
+
+def execute_tool_with_retry(
+    tool_name: str,
+    tool_fn: callable,
+    arguments: dict[str, Any],
+    max_retries: int = 3,
+    base_delay: float = 1.0,
+) -> dict:
+    """
+    Execute a tool with retry logic and structured error reporting.
+
+    Returns a dict that can be sent back to the LLM as a tool result,
+    whether the call succeeded or failed.
+    """
+    last_error = None
+
+    for attempt in range(1, max_retries + 1):
+        try:
+            result = tool_fn(**arguments)
+            return {
+                "status": "success",
+                "data": result,
+            }
+
+        except httpx.TimeoutException as e:
+            last_error = e
+            if attempt < max_retries:
+                delay = base_delay * (2 ** (attempt - 1))
+                jitter = random.uniform(0, delay * 0.1)
+                time.sleep(delay + jitter)
+                continue  # Retry -- timeouts are transient
+
+        except httpx.HTTPStatusError as e:
+            last_error = e
+            status_code = e.response.status_code
+
+            if status_code == 429:
+                # Rate limited -- respect Retry-After header if present
+                retry_after = e.response.headers.get("Retry-After", "5")
+                delay = float(retry_after)
+                if attempt < max_retries:
+                    time.sleep(delay)
+                    continue
+
+            elif status_code >= 500:
+                # Server error -- retry with backoff
+                if attempt < max_retries:
+                    delay = base_delay * (2 ** (attempt - 1))
+                    time.sleep(delay)
+                    continue
+
+            else:
+                # Client error (400, 403, 404) -- do not retry
+                break
+
+        except ValueError as e:
+            # Invalid parameters -- no point retrying the same bad input
+            return {
+                "status": "error",
+                "error_type": "invalid_parameters",
+                "message": str(e),
+                "tool_name": tool_name,
+                "suggestion": "Check the parameter values and try again "
+                              "with corrected arguments.",
+            }
+
+        except Exception as e:
+            last_error = e
+            break  # Unknown errors -- don't retry blindly
+
+    # All retries exhausted or non-retryable error
+    return {
+        "status": "error",
+        "error_type": _classify_error(last_error),
+        "message": str(last_error),
+        "tool_name": tool_name,
+        "attempts": attempt,
+        "suggestion": _suggest_recovery(last_error, tool_name),
+    }
+
+
+def _classify_error(error: Exception) -> str:
+    """Classify an error into a category the LLM can reason about."""
+    if isinstance(error, httpx.TimeoutException):
+        return "timeout"
+    if isinstance(error, httpx.HTTPStatusError):
+        code = error.response.status_code
+        if code == 429:
+            return "rate_limited"
+        if code == 403:
+            return "permission_denied"
+        if code >= 500:
+            return "server_error"
+        return "client_error"
+    return "unknown"
+
+
+def _suggest_recovery(error: Exception, tool_name: str) -> str:
+    """Generate a recovery suggestion for the LLM."""
+    error_type = _classify_error(error)
+    suggestions = {
+        "timeout": f"{tool_name} timed out after retries. Consider "
+                   f"using a cached alternative or simplifying the query.",
+        "rate_limited": f"{tool_name} is rate limited. Wait before "
+                        f"retrying, or use a different data source.",
+        "permission_denied": f"{tool_name} access was denied. This "
+                             f"may require user intervention.",
+        "server_error": f"{tool_name} service is experiencing issues. "
+                        f"Try a fallback tool if available.",
+    }
+    return suggestions.get(
+        error_type,
+        f"{tool_name} encountered an unexpected error. "
+        f"Consider an alternative approach.",
+    )
+`} language="python" filename="tool_executor.py" />
+
+There are several things to notice in this code. First, the function always returns a dictionary -- never raises an exception. This means the agent loop never crashes. Second, the error response includes an `error_type`, a human-readable `message`, and a `suggestion` field that gives the LLM a hint about recovery. Third, the retry logic differentiates between error types: timeouts and server errors get retried, rate limits respect the `Retry-After` header, and client errors like 400 or 403 are not retried because sending the same bad request again will produce the same result.
+
+## Pattern 4: Fallback Tools
+
+Sometimes the right response to a tool failure is not to retry the same tool but to **try a different tool that achieves the same goal through a different path**. This is the **fallback tool** pattern.
+
+The idea is simple: register tools in priority order. If the primary tool fails, try the next one. A web search can fall back to a cached search. A live database query can fall back to a recently-snapshotted read replica. A premium API can fall back to a free tier with fewer features.
+
+<CodeBlock code={`from typing import Any
+
+
+# Define fallback chains: primary tool -> list of alternatives
+FALLBACK_CHAINS: dict[str, list[str]] = {
+    "search_web": ["search_cached", "search_local_index"],
+    "get_stock_price": ["get_stock_price_delayed", "search_web"],
+    "query_database": ["query_read_replica", "search_cached"],
+}
+
+
+def execute_with_fallbacks(
+    tool_name: str,
+    tools: dict[str, callable],
+    arguments: dict[str, Any],
+    max_retries: int = 2,
+) -> dict:
+    """
+    Try the primary tool, then fall through to alternatives on failure.
+    Returns a structured result the LLM can reason about.
+    """
+    chain = [tool_name] + FALLBACK_CHAINS.get(tool_name, [])
+    errors_seen = []
+
+    for current_tool in chain:
+        if current_tool not in tools:
+            continue
+
+        result = execute_tool_with_retry(
+            tool_name=current_tool,
+            tool_fn=tools[current_tool],
+            arguments=arguments,
+            max_retries=max_retries,
+        )
+
+        if result["status"] == "success":
+            # Let the LLM know if a fallback was used
+            if current_tool != tool_name:
+                result["note"] = (
+                    f"Primary tool '{tool_name}' failed. "
+                    f"Result obtained from fallback '{current_tool}'."
+                )
+            return result
+
+        errors_seen.append({
+            "tool": current_tool,
+            "error": result["message"],
+        })
+
+    # All tools in the chain failed
+    return {
+        "status": "error",
+        "error_type": "all_fallbacks_exhausted",
+        "tool_name": tool_name,
+        "attempts": errors_seen,
+        "suggestion": (
+            "All available tools for this operation have failed. "
+            "Consider informing the user or trying a completely "
+            "different approach to the task."
+        ),
+    }
+`} language="python" filename="fallback_tools.py" />
+
+The fallback chain is transparent to the LLM -- when a fallback is used, the `note` field tells the model which tool actually provided the data. This lets the LLM communicate appropriately to the user (for example, noting that data came from a cache and may be slightly stale).
+
+## Pattern 5: Max Retry Limits
+
+Every retry mechanism needs a **ceiling**. Without a maximum retry count, an agent can enter an infinite loop: the tool fails, the LLM retries, the tool fails again, the LLM retries again, burning tokens and time indefinitely.
+
+The `max_retries` parameter in the examples above serves this purpose, but there is a subtler form of the problem that happens at the agent loop level. Consider an agent that calls a tool, gets an error, reasons about the error, decides to try again with different parameters, gets another error, reasons again, and so on. Each iteration consumes a full LLM call plus a tool call. Even if each individual retry is bounded, the agent-level loop can still spin.
+
+The solution is to track retry state across the entire agent loop, not just within a single tool execution:
+
+<CodeBlock code={`# Track retries at the agent loop level
+MAX_TOOL_RETRIES_PER_TURN = 3
+MAX_TOTAL_TOOL_CALLS = 15
+
+tool_retry_counts: dict[str, int] = {}  # tool_name -> retry count
+total_tool_calls = 0
+
+while not task_complete:
+    # Safety: hard limit on total tool calls
+    total_tool_calls += 1
+    if total_tool_calls > MAX_TOTAL_TOOL_CALLS:
+        # Force the agent to respond with what it has
+        messages.append({
+            "role": "user",
+            "content": "You have reached the maximum number of tool "
+                       "calls. Please respond with the best answer "
+                       "you can provide given the information gathered "
+                       "so far."
+        })
+        break
+
+    # Get the LLM's next action
+    response = get_llm_response(messages)
+
+    if response.stop_reason == "tool_use":
+        tool_name = response.tool_name
+
+        # Check per-tool retry limit
+        tool_retry_counts[tool_name] = (
+            tool_retry_counts.get(tool_name, 0) + 1
+        )
+
+        if tool_retry_counts[tool_name] > MAX_TOOL_RETRIES_PER_TURN:
+            # Tell the LLM to stop retrying this tool
+            messages.append({
+                "role": "tool",
+                "content": json.dumps({
+                    "status": "error",
+                    "error_type": "max_retries_exceeded",
+                    "message": f"'{tool_name}' has been attempted "
+                               f"{MAX_TOOL_RETRIES_PER_TURN} times "
+                               f"and keeps failing. Do NOT retry "
+                               f"this tool. Use an alternative "
+                               f"approach or inform the user.",
+                }),
+            })
+        else:
+            result = execute_with_fallbacks(
+                tool_name, tools, response.arguments
+            )
+            messages.append({
+                "role": "tool",
+                "content": json.dumps(result),
+            })
+`} language="python" filename="agent_loop_limits.py" />
+
+The two-level approach -- retry limits within `execute_tool_with_retry` for transient errors, and retry limits within the agent loop for repeated LLM-level attempts -- prevents both fast-spinning inner loops and slow-spinning outer loops.
+
+## Putting It All Together
+
+Here is how these patterns work together in a real agent interaction. The agent is asked to look up weather data, but the primary weather API is down:
+
+<MermaidDiagram chart={`sequenceDiagram
+    participant U as User
+    participant L as LLM Agent
+    participant E as Tool Executor
+    participant W1 as weather_api
+    participant W2 as weather_cached
+
+    U->>L: "What's the weather in Cairo?"
+    L->>E: Execute weather_api(city="Cairo")
+
+    E->>W1: GET /weather?city=Cairo
+    W1-->>E: 503 Service Unavailable
+
+    Note over E: Attempt 1 failed (503).<br/>Retryable. Backoff 1s.
+
+    E->>W1: GET /weather?city=Cairo
+    W1-->>E: 503 Service Unavailable
+
+    Note over E: Attempt 2 failed (503).<br/>Retryable. Backoff 2s.
+
+    E->>W1: GET /weather?city=Cairo
+    W1-->>E: 503 Service Unavailable
+
+    Note over E: Attempt 3 failed. Max retries<br/>exhausted. Try fallback.
+
+    E->>W2: GET /cached?city=Cairo
+    W2-->>E: 200 OK - Cached 12 min ago
+
+    E-->>L: status: success<br/>data: 34C, sunny<br/>note: Fallback used, cached 12 min ago
+
+    Note over L: Data is from cache but<br/>recent enough for weather.<br/>I should mention this.
+
+    L->>U: "It's currently around 34C and<br/>sunny in Cairo. Note: the live<br/>weather service is temporarily<br/>down, so this is from a recent<br/>cache (12 minutes ago)."
+`} />
+
+This is the full pipeline in action: the tool executor retries with backoff, falls through to a fallback tool when retries are exhausted, annotates the result with metadata about the fallback, and the LLM uses that metadata to craft an honest, transparent response to the user.
+
+## Common Mistakes
+
+There are several anti-patterns to avoid when building error handling into agents:
+
+**Swallowing errors silently.** If a tool fails and you return nothing or return a generic "success" message, the LLM will proceed as if the tool worked. This leads to hallucinated data -- the model will make up an answer because it thinks the tool gave it one.
+
+**Retrying without limits.** An agent stuck in a retry loop burns tokens, burns API quota, and blocks the user. Always set hard ceilings at both the tool level and the agent loop level.
+
+**Returning raw exception tracebacks.** A Python stack trace is information-dense for developers but noise for an LLM. Structured error responses with `error_type`, `message`, and `suggestion` fields give the model what it needs to make a recovery decision.
+
+**Retrying non-retryable errors.** A 403 Forbidden will not succeed no matter how many times you try. A malformed parameter will not fix itself. Classify errors before deciding whether to retry.
+
+> **Looking ahead:** The fallback and escalation patterns introduced here are instances of a broader design principle. In Module 5 (Design Patterns), you will see how these ideas generalize into full architectural patterns like circuit breakers and graceful degradation. And in Module 11 (Production), you will learn how to monitor tool failure rates, set up alerting on error spikes, and build dashboards that track agent reliability over time.
+
+## Summary
+
+Tools fail in production -- APIs time out, rate limits trigger, parameters go wrong, services go down. The key insight for agent systems is that **errors are information, not crashes**. By returning structured errors to the LLM instead of raising exceptions, you let the agent reason about failures and adapt its strategy.
+
+The five core patterns are: (1) **return errors to the LLM** with enough context for it to reason about recovery, (2) **retry with exponential backoff** for transient failures, (3) **use fallback tools** when the primary tool is unavailable, (4) **enforce max retry limits** at both the tool and agent loop levels to prevent infinite loops, and (5) **structure error responses** with error type, message, and recovery suggestions so the LLM can make informed decisions.
+
+Building resilient agents means accepting that failure is normal and designing your tool execution layer to handle it gracefully. In the next lesson, we will explore the **Model Context Protocol (MCP)** -- an open standard that brings structure and interoperability to the way agents connect to tools, data sources, and services.

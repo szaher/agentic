@@ -1,0 +1,373 @@
+---
+title: "Model Context Protocol (MCP)"
+quiz:
+  - question: "What problem does MCP primarily solve for the AI tool ecosystem?"
+    options:
+      - "It makes LLMs run faster by caching tool results"
+      - "It provides a single, open standard so tools can be written once and work across any compatible host application"
+      - "It replaces the need for API keys when connecting to external services"
+      - "It automatically generates tool implementations from natural language descriptions"
+    correctIndex: 1
+  - question: "In the MCP architecture, what is the role of the MCP Client?"
+    options:
+      - "It hosts the user interface and manages multiple client instances"
+      - "It exposes tools, resources, and prompts to the AI model"
+      - "It maintains a 1:1 connection with an MCP Server, handling protocol negotiation and message routing"
+      - "It stores conversation history and context windows"
+    correctIndex: 2
+  - question: "Which of the three MCP primitives represents model-controlled operations that perform actions and have side effects?"
+    options:
+      - "Resources"
+      - "Prompts"
+      - "Tools"
+      - "Transports"
+    correctIndex: 2
+  - question: "What happens during the MCP initialization handshake between client and server?"
+    options:
+      - "The client sends its API key and the server validates it against a registry"
+      - "The client and server exchange capabilities, agree on a protocol version, and the client discovers available tools, resources, and prompts"
+      - "The server pushes all available data to the client in a single batch transfer"
+      - "The client downloads and installs the server's source code locally"
+    correctIndex: 1
+---
+
+## Overview
+
+In the previous four lessons, you built tools from the ground up -- defining JSON schemas, wiring function calls, handling errors, and designing clean tool interfaces. All of that work used a single LLM provider's function calling format. But what happens when you want to share those tools across different AI applications? Or use tools someone else built? Or switch from one LLM host to another without rewriting every integration?
+
+You hit a wall. Every framework, every host application, and every LLM provider has its own format for defining and invoking tools. A tool built for one system cannot be used in another without rewriting the integration layer. If you have worked with hardware before the USB standard, you know this pain -- every device had its own proprietary connector, and your desk was buried in cables.
+
+The **Model Context Protocol (MCP)** is the solution. Created by Anthropic and released as an open standard, MCP defines a universal protocol for connecting AI agents to tools, data sources, and services. Write a tool once as an MCP server, and it works with any MCP-compatible host -- Claude Desktop, VS Code, custom agent frameworks, and more. MCP is to AI tools what USB-C is to hardware peripherals: one standard connector that replaces a dozen proprietary ones.
+
+## The Problem: N x M Integration
+
+Without a standard protocol, connecting AI applications to external tools is an **N x M problem**. If you have N host applications and M tool providers, you need N x M custom integrations. Each host speaks its own tool format. Each tool provider must write a separate adapter for every host it wants to support.
+
+<MermaidDiagram chart={`graph TD
+    subgraph Hosts["Host Applications"]
+        H1["Claude Desktop"]
+        H2["VS Code"]
+        H3["Custom Agent"]
+        H4["Cursor"]
+    end
+    subgraph Tools["Tool Providers"]
+        T1["GitHub"]
+        T2["Database"]
+        T3["Filesystem"]
+        T4["Slack"]
+    end
+    H1 -.->|"Custom integration"| T1
+    H1 -.->|"Custom integration"| T2
+    H1 -.->|"Custom integration"| T3
+    H1 -.->|"Custom integration"| T4
+    H2 -.->|"Custom integration"| T1
+    H2 -.->|"Custom integration"| T2
+    H2 -.->|"Custom integration"| T3
+    H2 -.->|"Custom integration"| T4
+    H3 -.->|"Custom integration"| T1
+    H3 -.->|"Custom integration"| T2
+    H4 -.->|"Custom integration"| T1
+    H4 -.->|"Custom integration"| T3
+    style Hosts fill:#fff5f5,stroke:#fc8181
+    style Tools fill:#fff5f5,stroke:#fc8181
+`} />
+
+This diagram is a mess on purpose -- it reflects reality. Four hosts and four tool providers already produce a tangled web of custom integrations. Scale to dozens of hosts and hundreds of tools, and the ecosystem becomes unsustainable. Every new host must negotiate with every tool provider. Every new tool must be adapted for every host.
+
+MCP collapses this N x M problem into **N + M**. Each host implements the MCP client protocol once. Each tool provider implements the MCP server protocol once. They all interoperate automatically.
+
+<MermaidDiagram chart={`graph TD
+    subgraph Hosts["Host Applications"]
+        H1["Claude Desktop"]
+        H2["VS Code"]
+        H3["Custom Agent"]
+        H4["Cursor"]
+    end
+    subgraph Protocol["MCP Standard Protocol"]
+        MCP["Model Context Protocol"]
+    end
+    subgraph Servers["MCP Servers"]
+        S1["GitHub Server"]
+        S2["Database Server"]
+        S3["Filesystem Server"]
+        S4["Slack Server"]
+    end
+    H1 --> MCP
+    H2 --> MCP
+    H3 --> MCP
+    H4 --> MCP
+    MCP --> S1
+    MCP --> S2
+    MCP --> S3
+    MCP --> S4
+    style Hosts fill:#f0fff4,stroke:#68d391
+    style Protocol fill:#ebf8ff,stroke:#3182ce
+    style Servers fill:#f0fff4,stroke:#68d391
+`} />
+
+Clean. Every host connects through the same protocol. Every server exposes its capabilities through the same protocol. Add a new host? It immediately works with every existing server. Add a new server? It immediately works with every existing host.
+
+## MCP Architecture: Host, Client, Server
+
+MCP defines three distinct roles that work together. Understanding this layered architecture is essential before you write any MCP code.
+
+<MermaidDiagram chart={`graph LR
+    subgraph HostApp["MCP Host (e.g., Claude Desktop)"]
+        LLM["LLM"]
+        subgraph Clients["MCP Clients"]
+            C1["Client 1"]
+            C2["Client 2"]
+            C3["Client 3"]
+        end
+        LLM --- C1
+        LLM --- C2
+        LLM --- C3
+    end
+    subgraph Servers["MCP Servers"]
+        S1["GitHub\nServer"]
+        S2["Database\nServer"]
+        S3["Filesystem\nServer"]
+    end
+    C1 <-->|"MCP Protocol"| S1
+    C2 <-->|"MCP Protocol"| S2
+    C3 <-->|"MCP Protocol"| S3
+    style HostApp fill:#ebf8ff,stroke:#3182ce
+    style Clients fill:#e6fffa,stroke:#38b2ac
+    style Servers fill:#fefcbf,stroke:#d69e2e
+`} />
+
+**MCP Host** is the application the user interacts with -- Claude Desktop, an IDE, or your custom agent. The host creates and manages MCP client instances, controls which clients connect to which servers, and enforces security policies. A single host can manage multiple clients simultaneously.
+
+**MCP Client** maintains a 1:1 connection with a single MCP server. Each client handles protocol negotiation, message routing, and capability tracking for its server. The host creates one client per server it wants to connect to. The client is the bridge between the LLM inside the host and the external server.
+
+**MCP Server** is a lightweight program that exposes specific capabilities -- tools, data, or prompt templates -- through the MCP protocol. Each server is focused: a GitHub server handles GitHub operations, a database server handles queries, a filesystem server handles file access. Servers run as separate processes, which provides natural isolation and security boundaries.
+
+The key insight is the **separation of concerns**. The host manages the user experience and the LLM. The client handles protocol mechanics. The server handles domain-specific logic. No layer needs to know the internals of the others.
+
+## The Three MCP Primitives
+
+MCP defines three types of capabilities that a server can expose. Each primitive serves a different purpose and is controlled differently.
+
+**Tools** are model-controlled operations that perform actions. They are the MCP equivalent of the function calling you have been building in the previous lessons. Tools can have side effects -- they can create files, send messages, query APIs, or modify data. The LLM decides when to call a tool based on the user's request, just like the function calling pattern you already know. Examples: `create_issue`, `run_query`, `send_message`.
+
+**Resources** are application-controlled data sources. They provide context to the LLM -- file contents, database records, API responses, live system data -- but the host application decides when and how to expose them, not the model. Think of resources as read-only data attachments. The host might automatically include relevant resources in the context, or let the user select them. Examples: `file://project/README.md`, `db://users/schema`, `api://weather/current`.
+
+**Prompts** are user-controlled templates. They are reusable prompt structures that servers can expose for common tasks -- a code review template, a SQL query generator, a bug report formatter. The user selects a prompt template, fills in the parameters, and the result is injected into the conversation. Examples: `review-code`, `explain-error`, `generate-migration`.
+
+<MermaidDiagram chart={`graph TD
+    subgraph Primitives["MCP Primitives"]
+        subgraph ToolBox["Tools"]
+            T["Model-controlled<br/>Actions with side effects<br/>LLM decides when to invoke"]
+        end
+        subgraph ResourceBox["Resources"]
+            R["Application-controlled<br/>Read-only data and context<br/>Host decides when to attach"]
+        end
+        subgraph PromptBox["Prompts"]
+            P["User-controlled<br/>Reusable templates<br/>User selects and fills in"]
+        end
+    end
+    T -.->|"Example"| T1["create_issue()"]
+    R -.->|"Example"| R1["file://config.yaml"]
+    P -.->|"Example"| P1["review-code template"]
+    style ToolBox fill:#fed7d7,stroke:#fc8181
+    style ResourceBox fill:#ebf8ff,stroke:#3182ce
+    style PromptBox fill:#fefcbf,stroke:#d69e2e
+`} />
+
+The distinction between these primitives matters for security and control. Tools can change the world, so the model must choose them carefully and the host can require user approval. Resources are read-only, so they are safer to expose broadly. Prompts are user-initiated, so they never fire without explicit human action.
+
+## The MCP Lifecycle: Handshake to Invocation
+
+When an MCP client connects to a server, they go through a structured lifecycle. Understanding this sequence helps you debug connection issues and design robust integrations.
+
+<MermaidDiagram chart={`sequenceDiagram
+    participant Host as MCP Host
+    participant Client as MCP Client
+    participant Server as MCP Server
+    Host->>Client: Create client instance
+    Client->>Server: initialize (protocol version, client capabilities)
+    Server-->>Client: initialize response (server capabilities, protocol version)
+    Client->>Server: initialized (confirmation)
+    Note over Client,Server: Connection established
+    Client->>Server: tools/list
+    Server-->>Client: List of available tools with schemas
+    Client->>Server: resources/list
+    Server-->>Client: List of available resources
+    Client->>Server: prompts/list
+    Server-->>Client: List of available prompt templates
+    Note over Client,Server: Discovery complete
+    Host->>Client: User request requires tool use
+    Client->>Server: tools/call (tool name, arguments)
+    Server-->>Client: Tool result (content)
+    Client->>Host: Return result to LLM
+    Note over Client,Server: Tool invocation complete
+`} />
+
+The lifecycle has three phases:
+
+**Initialization.** The client sends an `initialize` request with its protocol version and capabilities. The server responds with its own capabilities and the negotiated protocol version. The client confirms with an `initialized` notification. This handshake ensures both sides agree on what they support before any work begins.
+
+**Discovery.** The client queries the server to learn what tools, resources, and prompts are available. Each tool comes with a JSON Schema describing its parameters -- exactly like the function definitions you wrote in Lesson 02. The host uses this information to present tools to the LLM and to the user.
+
+**Invocation.** When the LLM decides to use a tool, the host routes the call through the client to the server. The server executes the tool, and the result flows back through the client to the host and into the LLM's context. This is the same call-and-response pattern you built by hand in the function calling lesson -- MCP just standardizes the wire format.
+
+## Transport: How Client and Server Communicate
+
+MCP is transport-agnostic -- it defines the messages, not how they travel. The protocol currently supports two primary transports.
+
+**stdio (Standard I/O)** is the simplest transport. The host launches the MCP server as a child process and communicates over stdin/stdout. This is ideal for local tools -- filesystem access, local databases, CLI wrappers. There is no network setup, no ports to configure, and the server's lifetime is tied to the host's. Most MCP servers you will encounter use stdio.
+
+**Streamable HTTP** (formerly called SSE) is the network transport. The server runs as an HTTP endpoint, and the client connects over HTTP with server-sent events for streaming responses. This is used for remote servers -- shared team tools, cloud-hosted services, or servers that need to persist across multiple host sessions.
+
+> **When to use which?** Start with stdio. It is simpler, faster, and works for the vast majority of use cases. Only move to Streamable HTTP when you need a server that runs independently of the host, serves multiple clients, or is deployed on a remote machine.
+
+## Using MCP in Python
+
+Let's see MCP in practice. The `mcp` Python SDK provides both client and server implementations. Here is how you connect to an MCP server, discover its tools, and call one.
+
+<CodeBlock code={`import asyncio
+from mcp import ClientSession, StdioServerParameters
+from mcp.client.stdio import stdio_client
+
+
+async def main():
+    # Define the server to connect to
+    # This launches "uvx mcp-server-filesystem" as a child process
+    server_params = StdioServerParameters(
+        command="uvx",
+        args=["mcp-server-filesystem", "--root", "/home/user/projects"],
+    )
+
+    # Connect to the server over stdio
+    async with stdio_client(server_params) as (read_stream, write_stream):
+        async with ClientSession(read_stream, write_stream) as session:
+            # Phase 1: Initialize the connection
+            await session.initialize()
+            print("Connected to MCP server")
+
+            # Phase 2: Discover available tools
+            tools = await session.list_tools()
+            print(f"\\nAvailable tools ({len(tools.tools)}):")
+            for tool in tools.tools:
+                print(f"  - {tool.name}: {tool.description}")
+
+            # Phase 3: Call a tool
+            result = await session.call_tool(
+                name="read_file",
+                arguments={"path": "/home/user/projects/README.md"},
+            )
+            print(f"\\nFile contents:\\n{result.content[0].text}")
+
+
+asyncio.run(main())
+`} language="python" filename="mcp_client_example.py" />
+
+Notice the three phases from the lifecycle diagram playing out in code: `initialize()` performs the handshake, `list_tools()` performs discovery, and `call_tool()` performs invocation. The MCP SDK handles all the protocol details -- JSON-RPC framing, capability negotiation, message routing -- so your code stays clean.
+
+The tool schemas you get back from `list_tools()` look exactly like the JSON Schema tool definitions you wrote by hand in Lesson 02. MCP did not invent a new format -- it standardized the one the ecosystem was already converging toward.
+
+## Integrating MCP Tools with an LLM
+
+Discovering and calling tools manually is useful for testing, but the real power of MCP is feeding those tools to an LLM so it can decide when to use them. Here is how you bridge MCP discovery into an LLM's tool-use loop.
+
+<CodeBlock code={`import anthropic
+from mcp import ClientSession
+
+
+async def build_tool_definitions(session: ClientSession) -> list[dict]:
+    """Convert MCP tools into the format the LLM expects."""
+    tools = await session.list_tools()
+    return [
+        {
+            "name": tool.name,
+            "description": tool.description,
+            "input_schema": tool.inputSchema,
+        }
+        for tool in tools.tools
+    ]
+
+
+async def agent_loop(session: ClientSession, user_message: str):
+    """Run an agent loop using MCP tools."""
+    client = anthropic.Anthropic()
+
+    # Convert MCP tool schemas to LLM tool definitions
+    tools = await build_tool_definitions(session)
+
+    messages = [{"role": "user", "content": user_message}]
+
+    while True:
+        response = client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=1024,
+            tools=tools,
+            messages=messages,
+        )
+
+        # If the model is done, return the final text
+        if response.stop_reason == "end_turn":
+            final = [b.text for b in response.content if b.type == "text"]
+            return "\\n".join(final)
+
+        # Process any tool calls
+        tool_results = []
+        for block in response.content:
+            if block.type == "tool_use":
+                # Route the tool call through MCP
+                result = await session.call_tool(
+                    name=block.name,
+                    arguments=block.input,
+                )
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": block.id,
+                    "content": result.content[0].text,
+                })
+
+        # Feed results back into the conversation
+        messages.append({"role": "assistant", "content": response.content})
+        messages.append({"role": "user", "content": tool_results})
+`} language="python" filename="mcp_agent_loop.py" />
+
+This is the same agent loop pattern from Lesson 02, but instead of hardcoded tool definitions and local function handlers, everything flows through MCP. The `build_tool_definitions` function converts MCP tool schemas into the format the LLM expects. The agent loop routes tool calls through `session.call_tool()` instead of dispatching to local functions. Swap the MCP server, and the agent gains entirely different capabilities -- without changing a single line of the agent loop.
+
+## The MCP Ecosystem
+
+One of MCP's greatest strengths is the rapidly growing ecosystem of pre-built servers. Instead of building every integration from scratch, you can connect to existing MCP servers that wrap popular services.
+
+Here are some widely used MCP servers:
+
+- **Filesystem** -- read, write, search, and manage local files and directories
+- **GitHub** -- create issues, open pull requests, search repositories, manage branches
+- **PostgreSQL / SQLite** -- run queries, inspect schemas, manage database operations
+- **Slack** -- send messages, read channels, search conversation history
+- **Google Drive** -- search, read, and organize documents
+- **Brave Search** -- web search with structured result parsing
+- **Docker** -- manage containers, images, and compose stacks
+- **Kubernetes** -- query cluster state, manage pods and deployments
+
+Each of these servers follows the same MCP protocol. Your agent connects to them identically -- the same `initialize`, `list_tools`, `call_tool` pattern works for all of them. Want your agent to search GitHub, query a database, and post a Slack summary? Connect three MCP servers and the agent has all three capabilities without you writing any integration code.
+
+> **The power of composition:** Because MCP servers are independent processes with a standard interface, you can compose any combination of them. An agent with access to a filesystem server, a GitHub server, and a database server can read local files, cross-reference them with GitHub issues, and log results to a database -- all through the same protocol.
+
+## MCP and Multi-Agent Systems
+
+MCP's standardized interface has implications beyond single-agent tool use. When you reach Module 9 (Multi-Agent Systems), you will see that MCP also enables **agents to share tools across a multi-agent system**. Because every tool is exposed through the same protocol, a supervisor agent can provision MCP servers for its worker agents dynamically. A research agent and a coding agent can connect to the same GitHub MCP server without either knowing about the other. The protocol becomes the shared infrastructure that makes multi-agent coordination practical.
+
+## What's Next
+
+You now understand what MCP is, why it exists, and how its architecture works. You have seen how an MCP client discovers and calls tools, and how those tools integrate into an LLM agent loop. But so far, you have only used existing MCP servers.
+
+In the next lesson, we will **build our own MCP server from scratch**. You will create a server that exposes custom tools and resources, register it with a host application, and watch your agent use it in real time. Everything you learned about tool design in Lesson 03 -- clear names, precise schemas, helpful descriptions -- applies directly to designing MCP server tools.
+
+## Summary
+
+The **Model Context Protocol (MCP)** is an open standard that solves the fragmentation problem in AI tool integration:
+
+- **The problem:** Without a standard, connecting N hosts to M tool providers requires N x M custom integrations. MCP reduces this to **N + M** by providing a universal protocol.
+- **The architecture** has three layers: **Hosts** (user-facing applications) create **Clients** (1:1 protocol bridges) that connect to **Servers** (capability providers).
+- **Three primitives** define what servers can expose: **Tools** (model-controlled actions), **Resources** (application-controlled data), and **Prompts** (user-controlled templates).
+- **The lifecycle** follows three phases: initialization (handshake), discovery (list capabilities), and invocation (call tools and get results).
+- **Two transports** are available: **stdio** for local servers (simple, start here) and **Streamable HTTP** for remote/shared servers.
+- **The ecosystem** provides pre-built servers for GitHub, databases, filesystems, Slack, and many more -- all usable through the same protocol.
+- MCP tool schemas are the same JSON Schema format you already know from function calling -- MCP standardized the pattern, not reinvented it.

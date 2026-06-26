@@ -1,0 +1,416 @@
+---
+title: "Function Calling Basics"
+quiz:
+  - question: "When the LLM wants to call a tool, what does it return in its response?"
+    options:
+      - "A Python function object that your code can invoke directly"
+      - "A tool_use content block containing the tool name and input arguments"
+      - "An HTTP request that the SDK sends to an external API automatically"
+      - "A shell command string that you run with subprocess"
+    correctIndex: 1
+  - question: "Why must each tool_result include a tool_use_id?"
+    options:
+      - "It is used as a cache key for deduplicating repeated calls"
+      - "The API uses it to bill each tool call separately"
+      - "It lets the LLM match each result back to the specific tool call that requested it"
+      - "It prevents the same tool from being called more than once per turn"
+    correctIndex: 2
+  - question: "What happens when the LLM returns multiple tool_use blocks in a single response?"
+    options:
+      - "Only the first tool_use block is executed; the rest are ignored"
+      - "The API automatically executes them in sequence and returns combined results"
+      - "Your code receives all of them and should execute each one, returning a tool_result for every block"
+      - "It indicates an error because the LLM can only call one tool at a time"
+    correctIndex: 2
+  - question: "Which field in a tool definition has the greatest impact on whether the LLM selects the right tool?"
+    options:
+      - "The name field, because the LLM only looks at tool names"
+      - "The input_schema, because JSON Schema types determine tool selection"
+      - "The description field, because it tells the LLM what the tool does and when to use it"
+      - "The required array, because missing parameters cause the LLM to skip the tool"
+    correctIndex: 2
+---
+
+## Overview
+
+In the previous lesson, you learned *why* tools matter -- they bridge the gap between what an LLM knows and what it can do. But how does an LLM actually call a function? It cannot execute code. It cannot make HTTP requests. All it can do is generate text.
+
+The answer is a protocol. You describe available tools using structured schemas, the LLM responds with structured output requesting a specific tool call, your code executes that call, and you feed the result back. This **function calling lifecycle** is the mechanical foundation beneath every tool-using agent -- including the calculator you built in Module 1.
+
+This lesson walks through the lifecycle step by step, shows you the anatomy of a tool definition, and demonstrates single, parallel, and sequential tool calls with working Python code.
+
+## The Function Calling Lifecycle
+
+Function calling follows a six-step cycle. Your application and the LLM take turns, with your code acting as the execution layer that the LLM cannot provide for itself.
+
+<MermaidDiagram chart={`sequenceDiagram
+    participant App as Your Application
+    participant LLM as Claude (LLM)
+    App->>LLM: User message + tool definitions
+    Note over LLM: Decides: answer directly<br/>or call a tool?
+    LLM-->>App: tool_use block (name + arguments)
+    Note over App: Executes the function<br/>with provided arguments
+    App->>LLM: tool_result (output of function)
+    Note over LLM: Incorporates result,<br/>decides next step
+    LLM-->>App: Final text response (or another tool_use)
+`} />
+
+Here is each step in plain language:
+
+1. **Define tools** -- you write JSON Schema descriptions of available functions: their names, what they do, and what parameters they accept.
+2. **Send to LLM** -- you include both the user's message and the tool definitions in a single API call.
+3. **LLM selects a tool** -- the model reads the descriptions, decides which tool (if any) to use, and generates a structured `tool_use` content block with the tool name and input arguments.
+4. **Your code executes** -- you extract the tool name and arguments from the response and run the actual function in your own environment.
+5. **Return the result** -- you send the function's output back to the LLM as a `tool_result` message.
+6. **LLM continues** -- the model reads the result and either generates a final answer or issues another tool call.
+
+This cycle repeats until the model decides it has enough information to respond directly. The model controls the *logic* (what to call and when), while your code controls the *execution* (actually running the function).
+
+## Text Response vs. Tool Call: How the LLM Decides
+
+Not every message triggers a tool call. The LLM evaluates each turn and makes a decision: can I answer this directly from my training data, or do I need to use a tool?
+
+<MermaidDiagram chart={`flowchart TD
+    A["Receive user message + tool definitions"] --> B{"Can I answer from<br/>my own knowledge?"}
+    B -->|"Yes"| C["Generate text response<br/>stop_reason: end_turn"]
+    B -->|"No, I need a tool"| D{"Which tool fits<br/>the task?"}
+    D --> E["Generate tool_use block<br/>stop_reason: tool_use"]
+    D --> F["Generate multiple tool_use blocks<br/>stop_reason: tool_use"]
+    E --> G["Your code executes the tool"]
+    F --> G
+    G --> H["Send tool_result back"]
+    H --> A
+    style C fill:#c6f6d5,stroke:#38a169
+    style E fill:#bee3f8,stroke:#3182ce
+    style F fill:#bee3f8,stroke:#3182ce
+    style G fill:#fefcbf,stroke:#d69e2e
+`} />
+
+The decision hinges on two factors:
+
+- **The tool descriptions** -- clear descriptions help the model recognize when a tool is relevant. If a user asks "What is the weather in Cairo?" and you provide a `get_weather` tool with a good description, the model will call it. Without that tool, the model will either say it cannot check live weather or answer from stale training data.
+- **The system prompt** -- you can bias the model toward or away from tool use. The calculator agent from Module 1 included the instruction "Always use tools for calculations rather than computing in your head," which pushed the model to call the arithmetic tools even for simple sums it could compute internally.
+
+## Anatomy of a Tool Definition
+
+Every tool definition has three required fields: **name**, **description**, and **input_schema**. Together, they form a contract between your application and the LLM.
+
+<CodeBlock code={`tool_definition = {
+    "name": "get_weather",
+    "description": (
+        "Get the current weather for a specific location. "
+        "Returns temperature, conditions, and humidity. "
+        "Use this when a user asks about current weather, "
+        "temperature, or atmospheric conditions in a city."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "location": {
+                "type": "string",
+                "description": "City name, e.g. 'London' or 'San Francisco, CA'"
+            },
+            "units": {
+                "type": "string",
+                "enum": ["celsius", "fahrenheit"],
+                "description": "Temperature unit. Defaults to celsius."
+            }
+        },
+        "required": ["location"]
+    }
+}
+`} language="python" filename="tool_definition.py" />
+
+Let's break down each field:
+
+- **name** -- a short, descriptive identifier. The LLM uses this in its `tool_use` response to specify which tool it wants. Use `snake_case` and keep names self-explanatory: `get_weather`, `search_database`, `send_email`.
+- **description** -- the most important field for tool selection. This is a natural language explanation that tells the model *what the tool does* and *when to use it*. A vague description like "weather tool" will cause misuse. A specific description like the one above gives the model clear guidance.
+- **input_schema** -- a **JSON Schema** object that defines the parameters the tool accepts. Each property has a `type`, an optional `description`, and optional constraints like `enum` for allowed values. The `required` array lists which parameters the LLM must always provide.
+
+> The LLM never sees your Python function. It only sees these three fields. The quality of your tool definition directly determines how reliably the model uses your tool. We will dig much deeper into this in the next lesson on tool interface design.
+
+## Making an API Call with Tools
+
+Here is a complete example showing how to send tools to the Anthropic API and handle the response. We will use a weather tool and a time tool to answer a question that requires both.
+
+<CodeBlock code={`import anthropic
+import json
+from datetime import datetime
+
+client = anthropic.Anthropic()
+
+# --- Tool implementations (your actual code) ---
+
+def get_weather(location: str, units: str = "celsius") -> dict:
+    """Simulate a weather lookup."""
+    # In production, this would call a real weather API
+    weather_data = {
+        "London": {"temp": 14, "conditions": "Cloudy", "humidity": 72},
+        "Cairo": {"temp": 36, "conditions": "Sunny", "humidity": 25},
+        "Tokyo": {"temp": 22, "conditions": "Partly cloudy", "humidity": 60},
+    }
+    data = weather_data.get(location, {"temp": 20, "conditions": "Unknown", "humidity": 50})
+    if units == "fahrenheit":
+        data["temp"] = round(data["temp"] * 9/5 + 32)
+    data["units"] = units
+    data["location"] = location
+    return data
+
+def get_current_time(timezone: str = "UTC") -> dict:
+    """Return the current time."""
+    return {"time": datetime.now().strftime("%H:%M"), "timezone": timezone}
+
+# --- Tool definitions for the API ---
+
+tools = [
+    {
+        "name": "get_weather",
+        "description": "Get current weather for a location. Returns temperature, conditions, and humidity.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "location": {
+                    "type": "string",
+                    "description": "City name, e.g. 'London' or 'Tokyo'"
+                },
+                "units": {
+                    "type": "string",
+                    "enum": ["celsius", "fahrenheit"],
+                    "description": "Temperature unit (default: celsius)"
+                }
+            },
+            "required": ["location"]
+        }
+    },
+    {
+        "name": "get_current_time",
+        "description": "Get the current time in a given timezone.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "timezone": {
+                    "type": "string",
+                    "description": "Timezone name, e.g. 'UTC', 'US/Eastern', 'Asia/Tokyo'"
+                }
+            },
+            "required": ["timezone"]
+        }
+    }
+]
+
+# --- Dispatch table ---
+
+tool_functions = {
+    "get_weather": get_weather,
+    "get_current_time": get_current_time,
+}
+`} language="python" filename="weather_agent.py" />
+
+With the tools defined, making the API call is straightforward -- pass the `tools` list alongside your messages:
+
+<CodeBlock code={`# --- Make the initial API call ---
+
+response = client.messages.create(
+    model="claude-sonnet-4-6",
+    max_tokens=1024,
+    tools=tools,
+    messages=[
+        {"role": "user", "content": "What's the weather like in Cairo right now?"}
+    ]
+)
+
+# --- Inspect the response ---
+
+print(f"Stop reason: {response.stop_reason}")
+# Output: Stop reason: tool_use
+
+for block in response.content:
+    if block.type == "tool_use":
+        print(f"Tool: {block.name}")
+        print(f"Input: {block.input}")
+        print(f"ID: {block.id}")
+        # Output:
+        # Tool: get_weather
+        # Input: {'location': 'Cairo'}
+        # ID: toolu_01ABC123...
+`} language="python" filename="api_call.py" />
+
+The response contains a `tool_use` **content block** with three key fields:
+
+- **name** -- which tool the LLM wants to call
+- **input** -- a dictionary of arguments matching the tool's `input_schema`
+- **id** -- a unique identifier for this specific tool call (the `tool_use_id`)
+
+## Handling Tool Results
+
+After your code executes the function, you send the result back to the LLM as a `tool_result` message. The conversation grows turn by turn: the assistant's response (containing the `tool_use` block) followed by a user message (containing the `tool_result`).
+
+<CodeBlock code={`# --- Execute the tool and return the result ---
+
+# Step 1: Add the assistant's response to the conversation
+messages = [
+    {"role": "user", "content": "What's the weather like in Cairo right now?"},
+    {"role": "assistant", "content": response.content},  # includes tool_use block
+]
+
+# Step 2: Execute each tool call and collect results
+tool_results = []
+for block in response.content:
+    if block.type == "tool_use":
+        # Call the actual function
+        result = tool_functions[block.name](**block.input)
+
+        tool_results.append({
+            "type": "tool_result",
+            "tool_use_id": block.id,   # Must match the tool_use block's id
+            "content": json.dumps(result)
+        })
+
+# Step 3: Send tool results back to the LLM
+messages.append({"role": "user", "content": tool_results})
+
+follow_up = client.messages.create(
+    model="claude-sonnet-4-6",
+    max_tokens=1024,
+    tools=tools,
+    messages=messages
+)
+
+# The LLM now has the weather data and can respond naturally
+for block in follow_up.content:
+    if block.type == "text":
+        print(block.text)
+        # Output: The current weather in Cairo is sunny with a temperature
+        #         of 36°C and humidity at 25%.
+`} language="python" filename="handle_results.py" />
+
+Two details are critical here:
+
+- **The `tool_use_id` must match.** Each `tool_result` references the exact `tool_use` block it responds to. If you send back the wrong ID, the LLM cannot correlate the result with its request.
+- **Results are strings.** The `content` field of a `tool_result` is a string (typically JSON). Your function can return any data structure internally, but you must serialize it before sending it back.
+
+## Parallel Tool Calls
+
+Sometimes the LLM determines it needs multiple pieces of information that are independent of each other. Rather than issuing one tool call, waiting for the result, and then issuing the next, the model can return **multiple tool_use blocks in a single response**. This is called a **parallel tool call**.
+
+<CodeBlock code={`# User asks a question that needs two independent lookups
+response = client.messages.create(
+    model="claude-sonnet-4-6",
+    max_tokens=1024,
+    tools=tools,
+    messages=[
+        {"role": "user", "content": "What's the weather in Cairo and what time is it in Tokyo?"}
+    ]
+)
+
+# The response may contain TWO tool_use blocks
+tool_calls = [b for b in response.content if b.type == "tool_use"]
+print(f"Number of tool calls: {len(tool_calls)}")
+# Output: Number of tool calls: 2
+
+for tc in tool_calls:
+    print(f"  {tc.name}({tc.input})")
+# Output:
+#   get_weather({'location': 'Cairo'})
+#   get_current_time({'timezone': 'Asia/Tokyo'})
+
+# Execute ALL tools and return ALL results in a single message
+tool_results = []
+for block in response.content:
+    if block.type == "tool_use":
+        result = tool_functions[block.name](**block.input)
+        tool_results.append({
+            "type": "tool_result",
+            "tool_use_id": block.id,
+            "content": json.dumps(result)
+        })
+
+# Send all results back at once
+messages = [
+    {"role": "user", "content": "What's the weather in Cairo and what time is it in Tokyo?"},
+    {"role": "assistant", "content": response.content},
+    {"role": "user", "content": tool_results},
+]
+`} language="python" filename="parallel_calls.py" />
+
+Your code must handle every `tool_use` block in the response and return a matching `tool_result` for each one. If you skip one, the LLM will not receive the data it needs and will either hallucinate or ask again.
+
+> Parallel tool calls are an optimization, not a separate mechanism. The same loop structure handles them naturally -- you iterate over all `tool_use` blocks regardless of whether there is one or several.
+
+## Sequential Tool Calls (Multi-Turn)
+
+**Sequential tool calls** happen when the output of one tool call feeds into the next. The LLM cannot issue both calls at once because the second depends on the first result. Instead, the conversation spans multiple turns.
+
+This is exactly what happened in the Module 1 calculator agent. When asked "What is 25 multiplied by 4, then add 10?", the model:
+
+1. Called `multiply(25, 4)` and got `100`
+2. Used that result to call `add(100, 10)` and got `110`
+3. Produced the final answer
+
+Each call required a full round trip through the lifecycle: the model issued a `tool_use`, your code executed and returned a `tool_result`, and then the model decided what to do next. This multi-turn pattern is what the **agent loop** handles -- the `while True` loop that keeps cycling until `stop_reason` is `end_turn`.
+
+<CodeBlock code={`def run_agent(user_message: str, tools: list, tool_functions: dict) -> str:
+    """A generic agent loop that handles single, parallel, and sequential calls."""
+    messages = [{"role": "user", "content": user_message}]
+
+    while True:
+        response = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=1024,
+            tools=tools,
+            messages=messages
+        )
+
+        # If the model is done, extract and return the text
+        if response.stop_reason == "end_turn":
+            return "".join(
+                block.text for block in response.content if block.type == "text"
+            )
+
+        # Otherwise, execute all tool calls in this turn
+        messages.append({"role": "assistant", "content": response.content})
+
+        tool_results = []
+        for block in response.content:
+            if block.type == "tool_use":
+                result = tool_functions[block.name](**block.input)
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": block.id,
+                    "content": json.dumps(result)
+                })
+
+        messages.append({"role": "user", "content": tool_results})
+`} language="python" filename="generic_agent_loop.py" />
+
+Notice that this is the same loop structure from the Module 1 calculator -- and it handles all three patterns (single, parallel, sequential) without any special-case logic. The loop iterates until `stop_reason` flips to `end_turn`, processing however many `tool_use` blocks appear in each turn.
+
+## Comparing the Three Patterns
+
+| Pattern | Tool calls per turn | Turns | When it happens |
+|---------|-------------------|-------|-----------------|
+| **Single** | 1 | 1 | A simple request that needs one piece of external data |
+| **Parallel** | 2+ | 1 | Independent lookups that do not depend on each other |
+| **Sequential** | 1 (or more) | 2+ | Each call depends on the result of a previous call |
+
+The LLM decides which pattern to use based on the user's request and the available tools. Your agent loop does not need to know which pattern is in play -- it handles all of them identically by iterating over content blocks and cycling until the model stops.
+
+## What Happens Under the Hood
+
+It is worth understanding that the LLM is not "calling" anything. When Claude returns a `tool_use` block, it is generating structured text that *describes* a function call. The actual execution happens entirely in your code. The model is acting as a **reasoning engine** that decides what to call and with what arguments, while your application acts as the **execution engine** that runs the code and returns results.
+
+This separation is what makes function calling safe and controllable. You can validate arguments before execution, restrict which tools are available, rate-limit calls, log everything, or reject calls that do not meet your criteria. The LLM proposes; your code disposes.
+
+## Summary
+
+Function calling is a structured protocol between your application and the LLM, not a magic capability built into the model. The lifecycle is always the same: define tools with JSON Schema, send them with your message, receive `tool_use` blocks, execute the functions, return `tool_result` messages, and repeat until the model produces a final answer.
+
+The three key concepts are:
+
+- **Tool definitions** -- name, description, and input_schema form the contract that tells the LLM what it can do and how to request it
+- **The tool_use / tool_result exchange** -- the LLM generates structured call requests and your code returns structured results, linked by `tool_use_id`
+- **The agent loop** -- a `while True` loop that naturally handles single, parallel, and sequential tool calls by iterating until `stop_reason` is `end_turn`
+
+The calculator agent you built in Module 1 used exactly this pattern. Every tool-using agent, from a simple calculator to a production system calling dozens of APIs, follows the same lifecycle. The difference is in the complexity of the tools and the robustness of the loop around them.
+
+> Next lesson: tool definitions are the contract between your code and the LLM. How you write them determines whether the model uses your tools correctly or fails in subtle ways. In **Designing Effective Tool Interfaces**, we will cover naming conventions, description strategies, and schema patterns that make tools reliable.

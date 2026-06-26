@@ -1,0 +1,357 @@
+---
+title: "CrewAI and AutoGen"
+quiz:
+  - question: "In CrewAI, what is the purpose of the 'backstory' field when defining an Agent?"
+    options:
+      - "It stores the agent's conversation history from previous runs"
+      - "It provides rich context that shapes how the agent approaches its tasks and what expertise it draws on"
+      - "It defines the output format that the agent must produce"
+      - "It specifies which tools the agent is allowed to use"
+    correctIndex: 1
+  - question: "What is the key difference between CrewAI's sequential and hierarchical process types?"
+    options:
+      - "Sequential processes are faster because they skip validation steps"
+      - "Hierarchical processes require fewer agents than sequential ones"
+      - "In a sequential process tasks execute in order, while in a hierarchical process a manager agent delegates and coordinates tasks dynamically"
+      - "Sequential processes support tool use but hierarchical processes do not"
+    correctIndex: 2
+  - question: "In AutoGen, what does the GroupChatManager do?"
+    options:
+      - "It manages API rate limits across all agents in the group"
+      - "It orchestrates turn-taking among agents, deciding which agent speaks next based on the conversation context"
+      - "It provides a shared memory store that all agents read from"
+      - "It compiles the final output from all agent responses into a single document"
+    correctIndex: 1
+  - question: "Which scenario would benefit MOST from using CrewAI or AutoGen over a single-agent framework?"
+    options:
+      - "A chatbot that answers frequently asked questions from a knowledge base"
+      - "A workflow where distinct specialists (researcher, analyst, writer) must collaborate and hand off work products to produce a final deliverable"
+      - "A simple data extraction pipeline that parses structured fields from invoices"
+      - "A classification task that labels support tickets by category"
+    correctIndex: 1
+---
+
+## Overview
+
+In the previous lessons, we explored the OpenAI Agents SDK, the Anthropic Claude Agent SDK, and LangGraph -- frameworks that give you fine-grained control over individual agent behavior, tool use, and workflow graphs. But what happens when your problem requires not one agent, but a **team** of agents, each with a distinct role, collaborating toward a shared goal?
+
+This is the domain of **role-based multi-agent frameworks**. Instead of building one powerful agent that does everything, you design a crew or group of specialized agents -- a researcher, a writer, an editor, a coder -- and let them collaborate. Two frameworks have emerged as leaders in this space: **CrewAI** and **AutoGen** (from Microsoft). Both take fundamentally different approaches to the same problem: how do you orchestrate conversations and task handoffs between multiple AI agents?
+
+This lesson explores both frameworks in depth, compares their architectures, and walks through building a working multi-agent system with CrewAI.
+
+## CrewAI: Role-Based Crews
+
+**CrewAI** is built around a simple but powerful metaphor: a crew of specialists working together on a project, just like a team in a company. The framework has four core abstractions that map directly to how real teams operate.
+
+<MermaidDiagram chart={`graph TD
+    subgraph CrewAI["CrewAI Architecture"]
+        Crew["Crew<br/>━━━━━━━━━━━<br/>Orchestrates the team<br/>Defines the process type"]
+
+        Crew --> Agent1["Agent: Researcher<br/>━━━━━━━━━━━<br/>role, goal, backstory<br/>tools: [SearchTool]"]
+        Crew --> Agent2["Agent: Writer<br/>━━━━━━━━━━━<br/>role, goal, backstory<br/>tools: []"]
+        Crew --> Agent3["Agent: Editor<br/>━━━━━━━━━━━<br/>role, goal, backstory<br/>tools: []"]
+
+        Crew --> Process["Process<br/>━━━━━━━━━━━<br/>sequential | hierarchical"]
+
+        Agent1 --> Task1["Task 1: Research<br/>━━━━━━━━━━━<br/>description, expected_output<br/>assigned to: Researcher"]
+        Agent2 --> Task2["Task 2: Write Draft<br/>━━━━━━━━━━━<br/>description, expected_output<br/>assigned to: Writer"]
+        Agent3 --> Task3["Task 3: Edit & Polish<br/>━━━━━━━━━━━<br/>description, expected_output<br/>assigned to: Editor"]
+
+        Task1 -->|output feeds into| Task2
+        Task2 -->|output feeds into| Task3
+
+        Task3 --> FinalOutput["Final Output"]
+    end
+
+    subgraph Tools["Tool Layer"]
+        SearchTool["SerperDevTool<br/>(Web Search)"]
+        ScrapeTool["ScrapeWebsiteTool<br/>(Web Scraping)"]
+        FileTool["FileReadTool<br/>(Local Files)"]
+    end
+
+    Agent1 -.->|uses| SearchTool
+    Agent1 -.->|uses| ScrapeTool
+
+    style CrewAI fill:#f0fff4,stroke:#276749,stroke-width:2px
+    style Tools fill:#ebf8ff,stroke:#3182ce,stroke-width:2px
+    style Crew fill:#c6f6d5,stroke:#276749
+    style Process fill:#c6f6d5,stroke:#276749
+    style Agent1 fill:#9ae6b4,stroke:#276749
+    style Agent2 fill:#9ae6b4,stroke:#276749
+    style Agent3 fill:#9ae6b4,stroke:#276749
+    style Task1 fill:#fefcbf,stroke:#d69e2e
+    style Task2 fill:#fefcbf,stroke:#d69e2e
+    style Task3 fill:#fefcbf,stroke:#d69e2e
+    style FinalOutput fill:#fed7d7,stroke:#c53030
+`} />
+
+### The Four Core Abstractions
+
+**Agent** is the fundamental unit. Each agent has a `role` (what it does), a `goal` (what it is trying to achieve), and a `backstory` (rich context that shapes its behavior). The backstory is where CrewAI shines -- it lets you give an agent a persona with domain expertise, working style, and priorities. An agent can also be assigned a set of **tools** it can use to interact with external systems.
+
+**Task** defines a specific unit of work. Each task has a `description` (what needs to be done), an `expected_output` (what the result should look like), and an `agent` assignment (who does the work). Tasks can reference the output of previous tasks, creating a chain where each specialist builds on what came before.
+
+**Tool** is any capability an agent can invoke -- web search, file reading, API calls, code execution. CrewAI provides built-in tools and lets you create custom ones. Critically, you assign tools to specific agents, not to the crew as a whole. The researcher gets search tools; the writer does not. This mirrors real teams where different specialists have different capabilities.
+
+**Crew** is the top-level orchestrator that brings agents and tasks together. When you create a crew, you specify which agents are on the team, which tasks they will perform, and what **process** type governs execution.
+
+### Process Types
+
+CrewAI supports two process types that determine how tasks flow through the crew:
+
+- **Sequential** -- tasks execute in the order you define them. Task 1 completes, its output is passed to Task 2, Task 2 completes, its output is passed to Task 3, and so on. This is the simplest model and works well when the workflow has a clear linear progression (research, then write, then edit).
+
+- **Hierarchical** -- a **manager agent** is automatically created (or you can provide your own) that receives all the tasks and decides which agent to delegate each task to, in what order, and when to request revisions. The manager acts as a project lead, dynamically coordinating the team. This is more flexible but harder to predict and debug.
+
+### Memory and Context Sharing
+
+CrewAI includes a **memory system** that allows agents to share context. **Short-term memory** persists within a single crew execution, so later agents can access findings from earlier agents even beyond what is explicitly passed through task outputs. **Long-term memory** can persist across runs, allowing the crew to learn and improve over time. **Entity memory** tracks key entities (people, companies, concepts) mentioned across tasks, helping agents maintain consistency.
+
+## AutoGen: Conversable Agents
+
+**AutoGen**, developed by Microsoft, takes a different approach. Instead of structured task assignments, AutoGen treats multi-agent collaboration as a **conversation**. Agents talk to each other, and the conversation itself is the coordination mechanism.
+
+The core abstraction in AutoGen is the **ConversableAgent** -- an agent that can send and receive messages. AutoGen provides specialized variants: **AssistantAgent** (backed by an LLM, good at reasoning and generating content), **UserProxyAgent** (represents a human or executes code on behalf of the user), and custom agents you define yourself.
+
+<MermaidDiagram chart={`sequenceDiagram
+    participant User as User
+    participant Manager as GroupChatManager
+    participant Planner as Planner Agent
+    participant Coder as Coder Agent
+    participant Critic as Critic Agent
+
+    User->>Manager: "Build a data pipeline<br/>that processes CSV files"
+
+    rect rgb(235, 248, 255)
+        Note over Manager: Manager selects Planner to speak first
+        Manager->>Planner: Route message
+        Planner->>Manager: "Step 1: Read CSV with pandas<br/>Step 2: Clean missing values<br/>Step 3: Transform columns<br/>Step 4: Write to Parquet"
+    end
+
+    rect rgb(198, 246, 213)
+        Note over Manager: Manager selects Coder
+        Manager->>Coder: Conversation + plan context
+        Coder->>Manager: Python code implementing<br/>the pipeline
+    end
+
+    rect rgb(254, 235, 200)
+        Note over Manager: Manager selects Critic
+        Manager->>Critic: Conversation + code context
+        Critic->>Manager: "Missing error handling<br/>for malformed CSV rows.<br/>Add try/except in step 1."
+    end
+
+    rect rgb(198, 246, 213)
+        Note over Manager: Manager routes back to Coder
+        Manager->>Coder: Conversation + critique
+        Coder->>Manager: Updated code with<br/>error handling added
+    end
+
+    rect rgb(254, 235, 200)
+        Note over Manager: Manager selects Critic for final review
+        Manager->>Critic: Updated conversation
+        Critic->>Manager: "LGTM. Code is ready."
+    end
+
+    Manager->>User: Final result with<br/>reviewed code
+`} />
+
+### Group Chat
+
+The most powerful pattern in AutoGen is the **GroupChat**. You place multiple agents in a shared conversation and use a **GroupChatManager** to orchestrate turn-taking. The manager decides which agent speaks next based on the conversation context, the agents' descriptions, and an optional speaker selection strategy.
+
+The conversation flows naturally: the planner proposes a plan, the coder implements it, the critic reviews it, and the coder revises based on feedback. The manager keeps the conversation on track, preventing agents from talking over each other or going in circles.
+
+### Code Execution
+
+A distinctive feature of AutoGen is its first-class support for **code execution**. The `UserProxyAgent` can be configured to automatically execute code blocks that appear in messages from other agents. When the coder agent writes Python code, the `UserProxyAgent` runs it in a sandboxed environment (using Docker containers by default) and feeds the output back into the conversation. This creates a tight generate-execute-debug loop that is especially powerful for data analysis and software engineering tasks.
+
+### Conversation Patterns
+
+AutoGen supports several **conversation patterns** beyond group chat:
+
+- **Two-agent chat** -- the simplest pattern, where two agents converse back and forth until a termination condition is met.
+- **Sequential chat** -- a series of two-agent conversations where the output of one conversation feeds into the next (similar to CrewAI's sequential process).
+- **Nested chat** -- an agent can trigger a sub-conversation with other agents as part of its response, enabling hierarchical workflows.
+
+## Building a Content Creation Crew with CrewAI
+
+Let us put CrewAI into practice by building a three-agent crew that researches a topic, writes an article, and edits it into a polished final draft. This example illustrates the full workflow: defining agents with roles, creating tasks with dependencies, and running the crew.
+
+<CodeBlock code={`from crewai import Agent, Task, Crew, Process
+from crewai_tools import SerperDevTool, ScrapeWebsiteTool
+
+# --- Tools ---
+search_tool = SerperDevTool()    # Web search via Serper API
+scrape_tool = ScrapeWebsiteTool()  # Extract content from web pages
+
+# --- Agents ---
+researcher = Agent(
+    role="Senior Research Analyst",
+    goal="Find comprehensive, accurate information about the given topic "
+         "and identify the most important points for a technical audience",
+    backstory=(
+        "You are a seasoned research analyst with 15 years of experience "
+        "in technology journalism. You are known for your ability to quickly "
+        "identify the most important developments in a field and separate "
+        "hype from substance. You always verify claims from multiple sources "
+        "and note when information is uncertain or contested."
+    ),
+    tools=[search_tool, scrape_tool],
+    verbose=True,
+    allow_delegation=False,  # This agent works alone, no sub-delegation
+)
+
+writer = Agent(
+    role="Technical Content Writer",
+    goal="Transform research findings into a clear, engaging article "
+         "that is accessible to developers with intermediate experience",
+    backstory=(
+        "You are a technical writer who has authored hundreds of articles "
+        "for developer publications. You excel at taking dense research "
+        "and turning it into narratives that are both accurate and readable. "
+        "You use concrete examples, avoid jargon without explanation, and "
+        "structure your writing with clear headings and logical flow."
+    ),
+    tools=[],  # Writer works with text only, no external tools
+    verbose=True,
+    allow_delegation=False,
+)
+
+editor = Agent(
+    role="Senior Editor",
+    goal="Polish the article for clarity, accuracy, and consistency, "
+         "ensuring it meets publication standards",
+    backstory=(
+        "You are a senior editor at a leading technology publication. "
+        "You have a sharp eye for logical gaps, unsupported claims, "
+        "awkward phrasing, and inconsistent terminology. You improve "
+        "writing without changing the author's voice. You also verify "
+        "that technical claims in the article are supported by the "
+        "research provided."
+    ),
+    tools=[],
+    verbose=True,
+    allow_delegation=False,
+)
+
+# --- Tasks (sequential: each builds on the previous) ---
+research_task = Task(
+    description=(
+        "Research the topic: '{topic}'. Find at least 5 credible sources. "
+        "Identify the key themes, recent developments, and any controversies. "
+        "Produce a structured research brief with citations."
+    ),
+    expected_output=(
+        "A detailed research brief with: "
+        "1) Executive summary (3-4 sentences), "
+        "2) Key findings organized by theme, "
+        "3) List of sources with URLs, "
+        "4) Any gaps or areas needing further investigation."
+    ),
+    agent=researcher,
+)
+
+writing_task = Task(
+    description=(
+        "Using the research brief provided, write a 1000-1500 word article "
+        "about '{topic}'. The article should have a compelling introduction, "
+        "3-4 main sections with clear headings, code examples where relevant, "
+        "and a conclusion with key takeaways. Target audience: developers "
+        "with 2-5 years of experience."
+    ),
+    expected_output=(
+        "A complete article in markdown format with: "
+        "title, introduction, 3-4 sections with ## headings, "
+        "at least one code example, and a conclusion."
+    ),
+    agent=writer,
+    context=[research_task],  # Writer receives researcher's output
+)
+
+editing_task = Task(
+    description=(
+        "Review and edit the article about '{topic}'. Check for: "
+        "1) Technical accuracy against the research brief, "
+        "2) Logical flow and clear transitions between sections, "
+        "3) Consistent terminology and tone, "
+        "4) Grammar and style issues. "
+        "Make direct edits rather than just suggesting changes."
+    ),
+    expected_output=(
+        "The final polished article in markdown format, ready for "
+        "publication. Include a brief editor's note at the end listing "
+        "the major changes made."
+    ),
+    agent=editor,
+    context=[research_task, writing_task],  # Editor sees both research and draft
+)
+
+# --- Crew ---
+content_crew = Crew(
+    agents=[researcher, writer, editor],
+    tasks=[research_task, writing_task, editing_task],
+    process=Process.sequential,  # Tasks run in defined order
+    verbose=True,
+)
+
+# --- Run ---
+result = content_crew.kickoff(
+    inputs={"topic": "LLM-based autonomous agents in production"}
+)
+
+print("=== Final Article ===")
+print(result.raw)
+`} language="python" filename="content_crew.py" />
+
+There are several design decisions worth noting in this code:
+
+- **Backstories are detailed and specific.** The researcher is told they have 15 years of experience and are known for separating hype from substance. This is not decoration -- it meaningfully shapes how the LLM approaches the task. Vague backstories produce vague work.
+
+- **Tools are scoped per agent.** Only the researcher has search and scraping tools. The writer and editor work purely with text. This prevents agents from going off-script -- the writer cannot start doing its own research instead of using the research brief.
+
+- **`allow_delegation=False`** prevents agents from delegating their tasks to other agents in the crew. In a sequential process, you typically want each agent to do its own work. Delegation is more useful in hierarchical processes where the manager assigns work dynamically.
+
+- **`context` links tasks together.** The writing task receives the output of the research task. The editing task receives both the research and the draft, so the editor can verify the article against the original sources.
+
+- **`inputs` enables reuse.** The `{topic}` placeholder in task descriptions is replaced at runtime, making this crew a reusable template for any topic.
+
+## CrewAI vs. AutoGen: When to Use Each
+
+Both frameworks solve the multi-agent coordination problem, but they make different tradeoffs that matter for different use cases.
+
+**CrewAI** excels when you have a **well-defined workflow** with clear roles and a predictable task sequence. It is structured, opinionated, and easy to reason about. You define who does what, in what order, and with what tools. The metaphor is a project team with assigned responsibilities.
+
+**AutoGen** excels when you need **emergent collaboration** -- when you cannot predict the exact sequence of actions in advance and want agents to figure it out through conversation. It is more flexible but harder to control. The metaphor is a group discussion where experts self-organize around a problem.
+
+| Dimension | CrewAI | AutoGen |
+|---|---|---|
+| Coordination model | Task assignment | Conversation |
+| Workflow structure | Defined upfront | Emergent |
+| Process types | Sequential, hierarchical | Two-agent, group chat, nested |
+| Code execution | Via tools | First-class (Docker sandbox) |
+| Best for | Structured pipelines | Open-ended collaboration |
+| Learning curve | Lower | Higher |
+| Predictability | Higher | Lower |
+| Debugging | Easier (clear task flow) | Harder (conversation can drift) |
+
+> **Practical tip:** if you can draw your workflow as a flowchart before building it, CrewAI is likely the better fit. If the workflow depends on runtime decisions and back-and-forth negotiation between agents, AutoGen gives you more room.
+
+## Common Pitfalls
+
+Both frameworks introduce failure modes that single-agent systems do not have:
+
+- **Role ambiguity.** If two agents have overlapping roles, they may duplicate work or produce contradictory outputs. Define roles with clear, non-overlapping boundaries.
+
+- **Context window exhaustion.** In a multi-agent conversation, the accumulated context grows quickly. By the time the fourth agent speaks, the conversation may be thousands of tokens long. Monitor total token usage and consider summarizing intermediate outputs.
+
+- **Infinite loops.** In AutoGen's group chat, agents can get stuck in a loop where the coder and critic keep revising without converging. Always set a `max_round` limit on group chats and define clear termination conditions.
+
+- **Over-engineering.** Not every problem needs multiple agents. A single agent with good tools often outperforms a poorly designed multi-agent crew. Start with one agent and add more only when you can articulate what distinct role each new agent fills.
+
+## Summary
+
+**CrewAI** and **AutoGen** represent two approaches to multi-agent orchestration. CrewAI uses a structured model of crews, agents with roles and backstories, tasks with dependencies, and sequential or hierarchical processes. It excels at well-defined workflows where you know the steps in advance. AutoGen uses a conversation-based model where agents collaborate through group chats, with a manager orchestrating turn-taking and optional code execution in sandboxed environments. It excels at open-ended problems that require emergent collaboration.
+
+The key insight from both frameworks is that **multi-agent systems succeed when roles are clearly defined and coordination is explicit**. Whether you use task assignment (CrewAI) or conversation management (AutoGen), the hard problem is not making agents talk -- it is making them talk *productively*.
+
+In the next lesson, *Framework Comparison and Selection*, we will put all five frameworks side by side and develop a decision framework for choosing the right tool for a given problem. In Module 9, *Multi-Agent Systems*, we will go deeper into orchestration patterns, agent communication protocols, and the challenges of scaling multi-agent architectures to production.

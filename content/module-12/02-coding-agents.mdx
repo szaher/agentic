@@ -1,0 +1,347 @@
+---
+title: "Coding Agents"
+quiz:
+  - question: "What is the key advantage of a test-driven coding agent over a generate-and-hope approach?"
+    options:
+      - "It writes code faster because it skips the planning phase"
+      - "It uses test results as a concrete feedback signal to guide iterative code refinement"
+      - "It does not need access to the existing codebase"
+      - "It guarantees bug-free code on the first attempt"
+    correctIndex: 1
+  - question: "In the SWE-agent workflow, what happens immediately after the agent edits a file?"
+    options:
+      - "The agent submits a pull request for human review"
+      - "The agent moves on to the next issue in the queue"
+      - "The agent runs the relevant test suite to verify the fix"
+      - "The agent rewrites the entire file from scratch"
+    correctIndex: 2
+  - question: "Which component of a coding agent architecture is responsible for deciding whether to retry or escalate after a test failure?"
+    options:
+      - "The error analysis and decision module"
+      - "The code generation module"
+      - "The test execution sandbox"
+      - "The task intake parser"
+    correctIndex: 0
+  - question: "Why do coding agents typically operate inside sandboxed environments?"
+    options:
+      - "Sandboxes make the LLM generate higher-quality code"
+      - "Sandboxes prevent generated code from causing harm to the host system during execution"
+      - "Sandboxes are required by all LLM providers as part of their terms of service"
+      - "Sandboxes eliminate the need for human oversight entirely"
+    correctIndex: 1
+---
+
+## Overview
+
+In the previous lesson, we explored **computer use agents** -- systems that see and interact with graphical interfaces. Now we turn to the domain where LLM agents have arguably had the most practical impact: writing, testing, and debugging code.
+
+**Coding agents** are systems that go beyond autocomplete. They accept a task description -- a bug report, a feature request, a failing test -- and autonomously navigate a codebase, generate or modify code, run tests, analyze failures, and iterate until the task is done. Where a code completion tool suggests the next line, a coding agent orchestrates the entire software engineering workflow.
+
+This shift from suggestion to execution is what makes coding agents genuinely agentic. They close the loop: they take action (write code), observe the result (run tests), reason about failures (analyze errors), and try again. That cycle -- generate, test, analyze, fix -- is the heartbeat of every coding agent, from research prototypes like SWE-agent to production tools like Claude Code.
+
+> Coding agents do not just write code. They **engineer** solutions -- planning, implementing, verifying, and iterating the way a human developer does.
+
+## The Coding Agent Architecture
+
+Every coding agent, regardless of its specific design, follows a common architectural pattern. A task arrives, the agent plans an approach, generates code, executes tests, and either succeeds or enters a diagnosis-and-fix loop.
+
+<MermaidDiagram chart={`graph TD
+    T["Task Input<br/><i>Bug report, feature request,<br/>or failing test</i>"] --> CL["Codebase Localization<br/><i>Find relevant files,<br/>understand context</i>"]
+    CL --> P["Plan Generation<br/><i>Decide what to change<br/>and in what order</i>"]
+    P --> CG["Code Generation<br/><i>Write or modify<br/>source files</i>"]
+    CG --> TE["Test Execution<br/><i>Run tests in a<br/>sandboxed environment</i>"]
+    TE --> EA{"Error Analysis"}
+    EA -- "Tests pass" --> S["Submit Solution<br/><i>PR, patch, or commit</i>"]
+    EA -- "Tests fail" --> D["Diagnosis<br/><i>Parse errors, stack traces,<br/>test output</i>"]
+    D --> CG
+    style T fill:#ebf8ff,stroke:#3182ce
+    style S fill:#c6f6d5,stroke:#38a169
+    style D fill:#fed7d7,stroke:#e53e3e
+    style EA fill:#fefcbf,stroke:#d69e2e
+`} />
+
+The critical insight is the **feedback loop** between code generation and test execution. Without this loop, the agent is just a code generator -- it writes something and hopes for the best. With the loop, it becomes an engineer: it writes something, checks whether it works, and fixes what does not.
+
+Let us examine each component:
+
+- **Codebase Localization** -- The agent searches the repository to find the files, functions, and classes relevant to the task. This might involve searching for error messages, reading import graphs, or examining test files to understand expected behavior.
+
+- **Plan Generation** -- Before writing code, the agent outlines its approach. This connects directly to the **Plan-and-Execute** architecture from Module 4: the agent creates a step-by-step plan, then executes each step. For coding tasks, the plan might be "add a validation function, update the handler to call it, add test cases for edge cases."
+
+- **Code Generation** -- The agent writes or modifies source code. This can range from single-line fixes to multi-file refactors.
+
+- **Test Execution** -- The agent runs the test suite (or specific test files) in a **sandboxed environment** to verify correctness. The sandbox prevents generated code from causing damage to the host system.
+
+- **Error Analysis** -- When tests fail, the agent parses error messages, stack traces, and test output to diagnose the problem. This is often the hardest part -- understanding *why* something failed requires reasoning about the relationship between the error and the code change.
+
+## The SWE-Agent Workflow
+
+**SWE-agent** is a research system from Princeton that demonstrated a principled approach to autonomous software engineering. It was designed to solve real GitHub issues from the **SWE-Bench** benchmark (which we covered in Module 10). The workflow it pioneered has become a template for production coding agents.
+
+<MermaidDiagram chart={`flowchart TD
+    I["GitHub Issue<br/><i>Bug report with<br/>reproduction steps</i>"] --> L["Localize<br/><i>Search codebase for<br/>relevant code</i>"]
+    L --> U["Understand<br/><i>Read surrounding code,<br/>tests, and docs</i>"]
+    U --> H{"Hypothesis<br/><i>Root cause<br/>identified?</i>"}
+    H -- "No" --> L
+    H -- "Yes" --> E["Edit<br/><i>Modify source files<br/>to fix the issue</i>"]
+    E --> T["Test<br/><i>Run test suite<br/>to verify fix</i>"]
+    T --> V{"Tests<br/>pass?"}
+    V -- "No" --> A["Analyze Failure<br/><i>Compare expected vs.<br/>actual output</i>"]
+    A --> E
+    V -- "Yes" --> R["Regression Check<br/><i>Run broader test suite<br/>to catch side effects</i>"]
+    R --> RV{"Regressions<br/>found?"}
+    RV -- "Yes" --> A
+    RV -- "No" --> S["Submit Patch<br/><i>Generate diff for<br/>human review</i>"]
+    style I fill:#ebf8ff,stroke:#3182ce
+    style S fill:#c6f6d5,stroke:#38a169
+    style A fill:#fed7d7,stroke:#e53e3e
+    style H fill:#fefcbf,stroke:#d69e2e
+    style V fill:#fefcbf,stroke:#d69e2e
+    style RV fill:#fefcbf,stroke:#d69e2e
+`} />
+
+Several design decisions in SWE-agent are worth highlighting:
+
+- **Custom shell interface** -- Rather than giving the LLM raw terminal access, SWE-agent provides a curated set of commands (`find_file`, `search_dir`, `open`, `edit`, `scroll_down`) that constrain the action space. This reduces errors and keeps the agent focused.
+
+- **Localization before editing** -- The agent spends significant effort *finding* the right code before *changing* it. Jumping to edits without understanding context is the most common failure mode.
+
+- **Regression testing** -- After fixing the target issue, the agent runs the broader test suite to ensure the fix does not break other functionality. This mirrors real-world engineering practice.
+
+- **Iteration budget** -- The agent has a limited number of edit-test cycles to prevent infinite loops. If it exhausts the budget, it submits its best attempt or reports failure.
+
+## Code Generation vs. Test-Driven Agents
+
+There are two fundamentally different strategies for how a coding agent approaches implementation.
+
+**Generate-first agents** write the solution code, then run tests to check if it works. This is the most common pattern and works well when the task is clearly specified and the agent can reason about correctness from the specification alone.
+
+**Test-driven agents** flip the order: they write or identify the test cases *first*, then generate code that passes those tests. This strategy has a major advantage -- the tests create a concrete, executable specification that the agent can iterate against. Instead of asking "does this code look right?", the agent asks "does this code pass the tests?" -- a question with an unambiguous answer.
+
+The test-driven approach is particularly powerful for agents because it converts a subjective quality judgment into an objective pass/fail signal. LLMs are unreliable judges of their own code quality, but test results do not lie.
+
+> Test-driven development is not just a methodology for humans. For agents, tests are the **feedback signal** that makes iterative refinement possible.
+
+## Building a Coding Agent
+
+Let us build a coding agent that accepts a function specification, generates an implementation, runs tests, and iterates on failures. This example demonstrates the core generate-test-fix loop.
+
+<CodeBlock code={`import anthropic
+import subprocess
+import tempfile
+import textwrap
+import os
+
+client = anthropic.Anthropic()
+
+SYSTEM_PROMPT = """You are a Python coding agent. When given a task:
+1. Analyze the requirements and any failing test output
+2. Write clean, correct Python code
+3. Include only the function implementation — no test code, no imports unless needed
+
+If you receive test failure output, analyze the error carefully and fix your code.
+Respond with ONLY the Python code, no markdown fences or explanation."""
+
+
+def generate_code(task: str, test_code: str, previous_error: str | None = None) -> str:
+    """Ask the LLM to generate or fix code based on the task and test feedback."""
+    messages = [
+        {
+            "role": "user",
+            "content": f"Task: {task}\\n\\nTests that must pass:\\n{test_code}"
+        }
+    ]
+    if previous_error:
+        messages.append({
+            "role": "user",
+            "content": f"Your previous code failed with this error:\\n{previous_error}\\n\\nFix the code."
+        })
+
+    response = client.messages.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=2048,
+        system=SYSTEM_PROMPT,
+        messages=messages,
+    )
+    return response.content[0].text
+
+
+def run_tests(code: str, test_code: str) -> tuple[bool, str]:
+    """Execute the generated code against test cases in an isolated environment."""
+    full_script = f"{code}\\n\\n{test_code}"
+
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".py", delete=False
+    ) as f:
+        f.write(full_script)
+        f.flush()
+        try:
+            result = subprocess.run(
+                ["python", f.name],
+                capture_output=True,
+                text=True,
+                timeout=30,  # Prevent infinite loops
+            )
+            if result.returncode == 0:
+                return True, result.stdout
+            else:
+                return False, result.stderr
+        finally:
+            os.unlink(f.name)
+
+
+def coding_agent(task: str, test_code: str, max_attempts: int = 5) -> dict:
+    """
+    Core agent loop: generate code, run tests, fix failures, repeat.
+
+    Returns a dict with the final code, success status, and attempt history.
+    """
+    history = []
+    previous_error = None
+
+    for attempt in range(1, max_attempts + 1):
+        print(f"\\n--- Attempt {attempt}/{max_attempts} ---")
+
+        # Generate or fix code
+        code = generate_code(task, test_code, previous_error)
+        print(f"Generated code:\\n{code[:200]}...")
+
+        # Run tests
+        passed, output = run_tests(code, test_code)
+        history.append({
+            "attempt": attempt,
+            "code": code,
+            "passed": passed,
+            "output": output,
+        })
+
+        if passed:
+            print(f"All tests passed on attempt {attempt}!")
+            return {"code": code, "passed": True, "attempts": history}
+
+        # Analyze failure for next iteration
+        print(f"Tests failed: {output[:300]}")
+        previous_error = output
+
+    print(f"Failed to pass tests after {max_attempts} attempts.")
+    return {"code": history[-1]["code"], "passed": False, "attempts": history}
+
+
+# --- Example usage ---
+task = """
+Write a function called 'parse_duration' that converts a human-readable
+duration string into total seconds. It should handle:
+- "30s" -> 30
+- "5m" -> 300
+- "2h" -> 7200
+- "1h30m" -> 5400
+- "1h30m45s" -> 5445
+- Invalid input should raise a ValueError.
+"""
+
+test_code = textwrap.dedent("""
+    # Test cases
+    assert parse_duration("30s") == 30
+    assert parse_duration("5m") == 300
+    assert parse_duration("2h") == 7200
+    assert parse_duration("1h30m") == 5400
+    assert parse_duration("1h30m45s") == 5445
+    assert parse_duration("0s") == 0
+    try:
+        parse_duration("invalid")
+        assert False, "Should have raised ValueError"
+    except ValueError:
+        pass
+    print("All tests passed!")
+""")
+
+result = coding_agent(task, test_code)
+print(f"\\nFinal result: {'SUCCESS' if result['passed'] else 'FAILURE'}")
+print(f"Total attempts: {len(result['attempts'])}")
+`} language="python" filename="coding_agent.py" />
+
+This agent demonstrates the fundamental loop, but production systems add several layers of sophistication. Let us look at what those look like.
+
+## Production Coding Agents: Claude Code and Cursor
+
+The architecture we just built is a simplified version of what production coding agents implement at scale. Two prominent examples illustrate different points in the design space.
+
+**Claude Code** operates as a terminal-based **agentic coding assistant**. It has full access to the filesystem, can run shell commands, search codebases, and edit files. Its architecture follows the same generate-test-fix loop, but with several critical additions:
+
+- **Rich codebase understanding** -- It reads files, searches for symbols, and builds context about the project structure before making changes.
+- **Tool use for verification** -- It runs linters, type checkers, and test suites as tools within its agent loop, using the results to guide its next action.
+- **Multi-file coordination** -- It can create, modify, and delete files across the entire repository in a single session, maintaining coherence across changes.
+- **Human-in-the-loop** -- It presents changes for approval before committing, allowing the developer to accept, reject, or refine the agent's work.
+
+**Cursor** and similar IDE-integrated agents take a different approach. They embed the agent loop directly into the editor, providing:
+
+- **Contextual awareness** -- The agent sees the file you are editing, your cursor position, and recent changes, which narrows the localization problem.
+- **Inline diff preview** -- Changes are shown as diffs within the editor, making review frictionless.
+- **Conversational refinement** -- You can iterate on the agent's output through follow-up instructions, creating a tight human-agent collaboration loop.
+
+**GitHub Copilot** represents yet another pattern -- an agent that operates asynchronously. When assigned a GitHub issue, Copilot creates a branch, makes changes, opens a pull request, and responds to review comments. This moves the agent from a synchronous pair-programming model to an asynchronous teammate model.
+
+## Debugging Agents
+
+A specialized class of coding agents focuses specifically on **debugging** -- finding and fixing bugs rather than implementing new features. Debugging is arguably harder for agents than feature implementation because it requires:
+
+- **Reproducing the bug** -- Understanding the reproduction steps and creating a minimal failing test case.
+- **Forming hypotheses** -- Reasoning about what *could* cause the observed behavior, which requires understanding the system's intended behavior.
+- **Narrowing the search space** -- Using techniques like binary search through git history (`git bisect`), adding logging, or simplifying the reproduction case.
+- **Verifying the fix** -- Confirming the fix resolves the bug without introducing regressions.
+
+Debugging agents excel when the bug manifests as a test failure, because the test provides both the reproduction case and the success criterion. They struggle with bugs that are hard to reproduce, require specific environmental conditions, or manifest only under load.
+
+## SWE-Bench and Real-World Performance
+
+How do we know whether coding agents actually work? **SWE-Bench** -- which we explored in detail in Module 10 -- provides the definitive benchmark. It consists of real GitHub issues from popular Python repositories, paired with the human-written patches that resolved them and the test cases that verify correctness.
+
+SWE-Bench performance has improved dramatically:
+
+- Early systems (2023) resolved roughly 2-4% of issues
+- SWE-agent with GPT-4 reached approximately 12%
+- Current best systems (2025) resolve 50% or more on the full benchmark and over 70% on SWE-Bench Verified (a curated, cleaner subset)
+
+These numbers reveal both the promise and the limits. Resolving 50% of real GitHub issues autonomously is remarkable -- but the other 50% still requires human judgment, domain knowledge, or creative problem-solving that agents cannot yet replicate.
+
+Key patterns from SWE-Bench analysis:
+
+- **Localization is the bottleneck** -- Agents that find the right files and functions to modify succeed far more often than those that struggle with localization.
+- **Simple fixes are disproportionately solved** -- Single-file, few-line changes are much easier for agents than multi-file refactors.
+- **Test quality matters** -- Agents perform better on issues with clear, specific test cases than on issues where correctness is ambiguous.
+
+## Design Patterns for Coding Agents
+
+Several patterns have emerged from building and deploying coding agents at scale:
+
+**Sandboxed execution** -- Always run generated code in an isolated environment. Docker containers, temporary directories, and process sandboxes prevent generated code from modifying the host system, deleting files, or making network requests.
+
+**Iteration budgets** -- Set a maximum number of generate-test-fix cycles. Without a budget, an agent can loop forever on an unsolvable problem. Typical budgets range from 3 to 10 attempts.
+
+**Context window management** -- Large codebases do not fit in a single prompt. Agents must strategically decide which files to include in context, prioritizing files that are directly relevant to the task over peripheral code.
+
+**Retrieval-augmented generation** -- Instead of trying to fit the entire codebase in context, agents retrieve relevant code snippets, documentation, and examples on demand. This connects to the RAG patterns from earlier modules.
+
+**Multi-step planning** -- Complex tasks benefit from explicit plan generation before code writing, just as we saw in the **Plan-and-Execute** architecture (Module 4). The agent outlines which files to modify, in what order, and what tests to add before writing a single line of code.
+
+## Limitations and Failure Modes
+
+Despite their impressive capabilities, coding agents have consistent failure modes:
+
+- **Hallucinated APIs** -- The agent calls functions, methods, or libraries that do not exist, especially for niche or recently updated packages.
+- **Incorrect localization** -- The agent modifies the wrong file or function, producing a "fix" that does not address the actual issue.
+- **Overfitting to test output** -- The agent patches the code to produce the expected output without actually fixing the underlying logic. For example, hardcoding a return value that happens to match the test expectation.
+- **Context loss on long tasks** -- As the conversation grows, earlier context falls out of the window, causing the agent to contradict its own previous changes.
+- **Inability to reason about concurrency** -- Race conditions, deadlocks, and timing-dependent bugs remain extremely difficult for agents to diagnose and fix.
+
+Understanding these failure modes is essential for designing effective human-agent collaboration. The developer's role shifts from writing all the code to reviewing and guiding the agent's work -- catching the mistakes that agents consistently make.
+
+## Summary
+
+Coding agents represent the most mature and practically impactful category of LLM agents today. Their power comes from a simple but effective pattern: generate code, run tests, analyze failures, and iterate. This feedback loop transforms an LLM from a code suggestion engine into an autonomous software engineer.
+
+The SWE-agent workflow -- localize, understand, hypothesize, edit, test, submit -- has become the standard template for coding agents. Whether the agent operates in a terminal (Claude Code), an IDE (Cursor), or asynchronously on GitHub (Copilot), the core loop remains the same. Test-driven approaches strengthen this loop by providing unambiguous feedback signals that guide iterative refinement.
+
+Production coding agents add layers of sophistication -- sandboxed execution, iteration budgets, context management, and retrieval-augmented generation -- but the fundamental architecture is the generate-test-fix loop we built in this lesson. As SWE-Bench scores continue to climb, these agents are moving from research curiosities to essential developer tools.
+
+In the next lesson, we will explore **research agents** -- systems that search, synthesize, and fact-check across multiple sources, applying similar iterative patterns to the domain of knowledge work.

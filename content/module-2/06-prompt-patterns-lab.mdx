@@ -1,0 +1,403 @@
+---
+title: "Prompt Patterns Lab"
+---
+
+## Overview
+
+You have spent this module learning the individual techniques that make agent prompts effective: **chain-of-thought reasoning**, **structured outputs**, **system prompt design**, and **extended thinking**. Each technique solves a specific problem. But how do they combine? And how much difference does each one actually make?
+
+In this hands-on lab, you will build a **fact-checker agent** from scratch, then improve it through five progressive versions. Each version adds one technique from this module, and you will see the output quality improve dramatically at every step. By the end, you will have a clear mental model for how to layer these patterns in your own agents.
+
+The claim we will fact-check throughout the lab:
+
+> "The Great Wall of China is visible from space with the naked eye."
+
+This is a widely repeated claim that sounds plausible but is actually false -- making it a perfect test case for evaluating reasoning quality.
+
+## The Progression
+
+Each version of our fact-checker adds one prompting technique on top of the previous one. Here is the roadmap:
+
+<MermaidDiagram chart={`graph LR
+    V1["V1: Naive Prompt"] -->|"+ CoT"| V2["V2: Chain-of-Thought"]
+    V2 -->|"+ JSON schema"| V3["V3: Structured Output"]
+    V3 -->|"+ role & rules"| V4["V4: Full System Prompt"]
+    V4 -->|"+ thinking"| V5["V5: Extended Thinking"]
+    style V1 fill:#fed7d7,stroke:#c53030
+    style V2 fill:#fefcbf,stroke:#b7791f
+    style V3 fill:#fefcbf,stroke:#b7791f
+    style V4 fill:#c6f6d5,stroke:#38a169
+    style V5 fill:#bee3f8,stroke:#3182ce
+`} />
+
+Every version uses the Anthropic Python SDK. Let's start with the setup code that all versions share.
+
+## Setup
+
+<CodeBlock code={`import anthropic
+import json
+
+client = anthropic.Anthropic()
+
+# The claim we will fact-check in every version
+CLAIM = "The Great Wall of China is visible from space with the naked eye."
+`} language="python" filename="setup.py" />
+
+## Version 1: The Naive Prompt
+
+The simplest possible approach. We ask the model a direct question with no guidance on how to reason, what format to use, or what role to play.
+
+<CodeBlock code={`def fact_check_v1(claim: str) -> str:
+    """Version 1: Naive prompt -- just ask if it's true."""
+    response = client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=1024,
+        messages=[
+            {
+                "role": "user",
+                "content": f"Is this true or false? '{claim}'"
+            }
+        ]
+    )
+    return response.content[0].text
+
+result = fact_check_v1(CLAIM)
+print(result)
+`} language="python" filename="v1_naive.py" />
+
+A typical response from Version 1:
+
+<CodeBlock code={`This is a common myth. While the Great Wall of China is very long, it's
+actually quite narrow (about 15-30 feet wide), making it difficult to
+see from space with the naked eye. Astronauts have confirmed that it's
+not visible from low Earth orbit without aid. So this statement is
+**false**.
+`} language="text" filename="v1_output.txt" />
+
+The model gets the right answer here -- but notice the problems. The response is free-form text with no consistent structure. It hedges with "difficult to see" rather than giving a clear verdict. There are no confidence levels, no explicit reasoning chain, and no cited evidence. If you were building a pipeline that consumes this output, you would have no reliable way to parse the verdict or assess the quality of the reasoning.
+
+## Version 2: Add Chain-of-Thought
+
+The first improvement is simple but powerful: we ask the model to **think step by step** before reaching a conclusion. This is the **zero-shot chain-of-thought** technique from lesson 02.
+
+<CodeBlock code={`def fact_check_v2(claim: str) -> str:
+    """Version 2: Add chain-of-thought reasoning."""
+    response = client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=2048,
+        messages=[
+            {
+                "role": "user",
+                "content": (
+                    f"Evaluate whether this claim is true or false: "
+                    f"'{claim}'\n\n"
+                    f"Think through this step by step:\n"
+                    f"1. What exactly is the claim stating?\n"
+                    f"2. What evidence supports or contradicts it?\n"
+                    f"3. What do authoritative sources say?\n"
+                    f"4. What is your final verdict?"
+                )
+            }
+        ]
+    )
+    return response.content[0].text
+
+result = fact_check_v2(CLAIM)
+print(result)
+`} language="python" filename="v2_cot.py" />
+
+What changed? We added a **numbered reasoning scaffold** that forces the model to decompose the problem before concluding. Instead of just "think step by step," we provide specific reasoning steps relevant to fact-checking. This is a domain-specific CoT template.
+
+The output is noticeably better. The model now separates the claim analysis from the evidence from the verdict. But the output is still unstructured text -- you would have to parse natural language to extract the verdict programmatically.
+
+## Version 3: Structured Output
+
+Now we force the model to return its analysis as **structured JSON** with explicit fields for each part of the assessment. This combines the CoT reasoning from Version 2 with the structured output techniques from lesson 03.
+
+<CodeBlock code={`def fact_check_v3(claim: str) -> dict:
+    """Version 3: Force structured JSON output."""
+    response = client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=2048,
+        messages=[
+            {
+                "role": "user",
+                "content": (
+                    f"Evaluate whether this claim is true or false: "
+                    f"'{claim}'\n\n"
+                    f"Think through this step by step, then respond "
+                    f"with ONLY a JSON object in this exact format:\n\n"
+                    f'{{\n'
+                    f'  "claim": "the original claim",\n'
+                    f'  "verdict": "TRUE" | "FALSE" | "PARTIALLY TRUE" '
+                    f'| "UNVERIFIABLE",\n'
+                    f'  "confidence": 0.0 to 1.0,\n'
+                    f'  "reasoning_steps": [\n'
+                    f'    "Step 1: ...",\n'
+                    f'    "Step 2: ...",\n'
+                    f'    "Step 3: ..."\n'
+                    f'  ],\n'
+                    f'  "evidence": [\n'
+                    f'    "Supporting or contradicting fact 1",\n'
+                    f'    "Supporting or contradicting fact 2"\n'
+                    f'  ],\n'
+                    f'  "summary": "One-sentence summary of the verdict"\n'
+                    f'}}\n\n'
+                    f"Respond with ONLY the JSON. No other text."
+                )
+            }
+        ]
+    )
+
+    # Parse the JSON response
+    text = response.content[0].text.strip()
+    # Handle models that wrap JSON in markdown code fences
+    fence = chr(96) * 3  # triple backtick
+    if text.startswith(fence):
+        text = text.split("\\n", 1)[1].rsplit(fence, 1)[0].strip()
+    return json.loads(text)
+
+result = fact_check_v3(CLAIM)
+print(json.dumps(result, indent=2))
+`} language="python" filename="v3_structured.py" />
+
+What changed? The model now returns machine-readable output. We can programmatically access `result["verdict"]`, check `result["confidence"]`, and iterate over `result["reasoning_steps"]`. This makes the fact-checker composable -- you could feed its output into a dashboard, a database, or another agent.
+
+Notice the defensive parsing at the end. Models sometimes wrap JSON in markdown code fences even when told not to. Always handle this in production code.
+
+## Version 4: Full System Prompt
+
+This is where the techniques compound. We add a comprehensive **system prompt** that defines the agent's role, behavioral constraints, reasoning methodology, and output format. This version applies the system prompt design principles from lesson 04.
+
+<CodeBlock code={`FACT_CHECKER_SYSTEM_PROMPT = """You are a rigorous fact-checking analyst.
+Your job is to evaluate claims for accuracy using careful, evidence-based
+reasoning.
+
+## Your Identity
+- You are skeptical by default -- popular beliefs are often wrong
+- You distinguish between "widely believed" and "actually true"
+- You never confuse correlation with causation
+- You acknowledge uncertainty honestly rather than guessing
+
+## Methodology
+For every claim, follow this exact process:
+1. PARSE the claim precisely -- what is it actually stating?
+2. IDENTIFY the key testable assertions within the claim
+3. EVALUATE each assertion against known evidence
+4. CONSIDER common misconceptions related to this topic
+5. SYNTHESIZE a verdict based on the weight of evidence
+
+## Confidence Calibration
+- 0.9-1.0: Established scientific consensus with strong evidence
+- 0.7-0.8: Well-supported by evidence with minor caveats
+- 0.5-0.6: Mixed evidence or depends on interpretation
+- 0.3-0.4: Mostly contradicted by evidence
+- 0.0-0.2: Definitively disproven
+
+## Output Rules
+- Always respond with a single JSON object
+- Never include text outside the JSON
+- The "verdict" must be exactly one of: TRUE, FALSE, PARTIALLY TRUE,
+  UNVERIFIABLE
+- Each reasoning step must be a complete sentence
+- Evidence items must be specific and verifiable facts
+- The summary must be one sentence, max 30 words"""
+
+
+def fact_check_v4(claim: str) -> dict:
+    """Version 4: Full system prompt with role, method, and rules."""
+    response = client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=2048,
+        system=FACT_CHECKER_SYSTEM_PROMPT,
+        messages=[
+            {
+                "role": "user",
+                "content": (
+                    f"Fact-check this claim: '{claim}'\n\n"
+                    f"Respond with JSON:\n"
+                    f'{{\n'
+                    f'  "claim": "string",\n'
+                    f'  "verdict": "TRUE | FALSE | PARTIALLY TRUE '
+                    f'| UNVERIFIABLE",\n'
+                    f'  "confidence": 0.0-1.0,\n'
+                    f'  "reasoning_steps": ["step1", "step2", ...],\n'
+                    f'  "evidence": ["fact1", "fact2", ...],\n'
+                    f'  "common_misconception": "string or null",\n'
+                    f'  "summary": "string"\n'
+                    f'}}'
+                )
+            }
+        ]
+    )
+
+    text = response.content[0].text.strip()
+    fence = chr(96) * 3  # triple backtick
+    if text.startswith(fence):
+        text = text.split("\\n", 1)[1].rsplit(fence, 1)[0].strip()
+    return json.loads(text)
+
+result = fact_check_v4(CLAIM)
+print(json.dumps(result, indent=2))
+`} language="python" filename="v4_system_prompt.py" />
+
+Here is the kind of output Version 4 produces:
+
+<CodeBlock code={`{
+  "claim": "The Great Wall of China is visible from space with the naked eye.",
+  "verdict": "FALSE",
+  "confidence": 0.95,
+  "reasoning_steps": [
+    "The claim states that the Great Wall is visible to the unaided human eye from space.",
+    "The Great Wall is approximately 21,196 km long but only 4.5-9 meters wide at most points.",
+    "At low Earth orbit altitude (about 400 km), an object must be much wider than 9 meters to be resolved by the human eye.",
+    "Multiple astronauts, including Chinese astronaut Yang Liwei, have stated they could not see the Wall from orbit.",
+    "NASA has explicitly addressed this myth, confirming the Wall is not visible from low Earth orbit without aid.",
+    "The Wall is a similar color to its surrounding terrain, further reducing contrast and visibility."
+  ],
+  "evidence": [
+    "The human eye can resolve objects with an angular size of about 1 arcminute; at 400 km altitude, this corresponds to roughly 116 meters -- far wider than the Wall.",
+    "Astronaut Chris Hadfield confirmed the Wall is not visible from the ISS.",
+    "A 2004 study published in the journal 'Science' used satellite imagery to confirm the Wall cannot be distinguished from orbit without magnification.",
+    "Yang Liwei, China's first astronaut, stated he could not see the Wall during his 2003 spaceflight."
+  ],
+  "common_misconception": "This myth has been repeated in textbooks and popular media for decades, possibly originating from a 1938 claim by Richard Halliburton, made before space travel was possible.",
+  "summary": "The Great Wall is far too narrow to be resolved by the human eye from orbital altitudes, as confirmed by astronauts and NASA."
+}
+`} language="text" filename="v4_output.json" />
+
+Compare this to Version 1. The reasoning is more rigorous, the evidence is specific and verifiable, the confidence is calibrated, and the model even identified the historical origin of the misconception. The system prompt did not just format the output -- it fundamentally changed how the model approached the problem by giving it a skeptical identity and a structured methodology.
+
+## Version 5: Extended Thinking
+
+For complex or ambiguous claims, we can go further by enabling **extended thinking**. This gives the model a private reasoning space where it can work through the problem before committing to an answer. This applies the technique from lesson 05.
+
+<CodeBlock code={`def fact_check_v5(claim: str) -> dict:
+    """Version 5: Extended thinking for deep analysis."""
+    response = client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=16000,
+        temperature=1,  # Required when using extended thinking
+        thinking={
+            "type": "enabled",
+            "budget_tokens": 10000
+        },
+        system=FACT_CHECKER_SYSTEM_PROMPT,
+        messages=[
+            {
+                "role": "user",
+                "content": (
+                    f"Fact-check this claim thoroughly: '{claim}'\n\n"
+                    f"This may be nuanced -- consider edge cases, "
+                    f"varying definitions, and partial truths.\n\n"
+                    f"Respond with JSON:\n"
+                    f'{{\n'
+                    f'  "claim": "string",\n'
+                    f'  "verdict": "TRUE | FALSE | PARTIALLY TRUE '
+                    f'| UNVERIFIABLE",\n'
+                    f'  "confidence": 0.0-1.0,\n'
+                    f'  "reasoning_steps": ["step1", "step2", ...],\n'
+                    f'  "evidence": ["fact1", "fact2", ...],\n'
+                    f'  "nuances": ["edge case or caveat 1", ...],\n'
+                    f'  "common_misconception": "string or null",\n'
+                    f'  "summary": "string"\n'
+                    f'}}'
+                )
+            }
+        ]
+    )
+
+    # With extended thinking, the response contains thinking blocks
+    # and text blocks. We need the text block with our JSON.
+    for block in response.content:
+        if block.type == "thinking":
+            print("--- Model's internal reasoning ---")
+            print(block.thinking[:500] + "...")
+            print("--- End of thinking ---\n")
+        elif block.type == "text":
+            text = block.text.strip()
+            # Strip markdown code fences if the model wraps JSON
+            fence = chr(96) * 3  # triple backtick
+            if text.startswith(fence):
+                text = text.split("\\n", 1)[1].rsplit(fence, 1)[0].strip()
+            return json.loads(text)
+
+result = fact_check_v5(CLAIM)
+print(json.dumps(result, indent=2))
+`} language="python" filename="v5_extended_thinking.py" />
+
+What changed? Three things:
+
+1. **`thinking` parameter** gives the model a private scratchpad with a budget of 10,000 tokens for internal reasoning before it produces the final answer.
+2. **`temperature=1`** is required when extended thinking is enabled.
+3. **`max_tokens=16000`** is increased to accommodate both the thinking tokens and the response.
+
+Extended thinking shines on genuinely ambiguous claims. Try changing `CLAIM` to something like "Humans only use 10% of their brains" or "Goldfish have a 3-second memory" -- claims where the answer depends on interpretation and nuance. The model's internal reasoning will explore multiple angles before committing to a verdict.
+
+> **When to use extended thinking:** Don't enable it for every call. It adds latency and cost. Use it when the claim is complex, when precision matters more than speed, or when you want the model to consider edge cases it might otherwise skip.
+
+## Comparing the Versions
+
+Here is a summary of what each version adds and the trade-off involved:
+
+| Version | Technique Added | What Improves | Trade-off |
+|---------|----------------|---------------|-----------|
+| V1 | None | Baseline | Unreliable format, shallow reasoning |
+| V2 | Chain-of-Thought | Deeper reasoning, fewer errors | Longer output, still unstructured |
+| V3 | Structured Output | Machine-readable, parseable | Slightly more prompt tokens |
+| V4 | System Prompt | Consistent persona, calibrated confidence | Needs careful prompt design |
+| V5 | Extended Thinking | Handles nuance and ambiguity | Higher latency and cost |
+
+The key insight is that these techniques are **additive**. You do not choose one -- you layer them. A production agent typically uses all of them: a system prompt defines the agent's role, CoT reasoning ensures thorough analysis, structured output makes the results usable, and extended thinking handles the hardest cases.
+
+## Try It Yourself
+
+Here are three exercises to deepen your understanding. Run each claim through all five versions and compare the outputs:
+
+**Exercise 1 -- Clear-cut false claim:**
+Change `CLAIM` to `"Lightning never strikes the same place twice."` Run all five versions. Even V1 should get this right, but observe how the reasoning quality improves with each version.
+
+**Exercise 2 -- Genuinely ambiguous claim:**
+Change `CLAIM` to `"Humans only use 10% of their brains."` This is partially true depending on interpretation. Watch how V5 with extended thinking handles the nuance compared to V1-V4.
+
+**Exercise 3 -- Multi-part claim:**
+Change `CLAIM` to `"Einstein failed math as a student and was considered a slow learner by his teachers."` This claim contains two assertions -- one false, one partially true. See which versions correctly identify the mixed verdict.
+
+## The Missing Piece
+
+Look back at Version 4's output. The evidence items reference astronaut statements, a published study, and NASA's position. But our fact-checker did not actually **verify** any of these. It is generating evidence from its training data, not looking anything up. The model might hallucinate a study that does not exist or misattribute a quote.
+
+This is the fundamental limitation of a reasoning-only agent: **it can think, but it cannot act**. It cannot search the web, query a database, or call an API to verify its claims. It is doing fact-checking without access to facts.
+
+<MermaidDiagram chart={`graph TD
+    subgraph CurrentAgent["What Our Agent Can Do (Module 2)"]
+        A["Receive a claim"] --> B["Reason about it"]
+        B --> C["Generate a verdict"]
+    end
+    subgraph FutureAgent["What It Needs (Module 3)"]
+        D["Search the web"] --> E["Verify sources"]
+        E --> F["Cross-reference data"]
+        F --> G["Cite real evidence"]
+    end
+    C -.->|"Cannot do yet"| D
+    style CurrentAgent fill:#c6f6d5,stroke:#38a169
+    style FutureAgent fill:#ebf8ff,stroke:#3182ce
+    style D fill:#bee3f8,stroke:#3182ce
+    style E fill:#bee3f8,stroke:#3182ce
+    style F fill:#bee3f8,stroke:#3182ce
+    style G fill:#bee3f8,stroke:#3182ce
+`} />
+
+Our fact-checker can only reason -- it cannot search the web or verify sources. In **Module 3: Tool Use and Function Calling**, we will give agents the ability to **act** by calling tools and APIs. You will learn how to connect an agent to web search, databases, and external services so it can ground its reasoning in real, verifiable data. The fact-checker we built here will become the reasoning core of a much more capable agent that can actually look things up.
+
+## Summary
+
+In this lab, you built a fact-checking agent and improved it through five iterations, each adding a technique from this module:
+
+- **Version 1 (Naive)** showed that a bare prompt produces shallow, unstructured output even when the model knows the right answer
+- **Version 2 (CoT)** demonstrated that step-by-step reasoning scaffolds produce more thorough and accurate analysis
+- **Version 3 (Structured Output)** made the output machine-readable and composable with other systems
+- **Version 4 (System Prompt)** gave the agent a consistent identity, methodology, and calibrated confidence
+- **Version 5 (Extended Thinking)** unlocked deeper reasoning for complex and ambiguous claims
+
+These techniques are not alternatives -- they are layers. A well-built agent combines all of them, choosing the right level of reasoning investment based on the complexity of the task at hand. With Module 2 complete, you have mastered the art of getting LLMs to **think** effectively. Next, you will learn how to make them **do**.

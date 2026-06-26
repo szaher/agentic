@@ -1,0 +1,382 @@
+---
+title: "ReAct: Reasoning + Acting"
+quiz:
+  - question: "What is the key innovation of the ReAct pattern compared to a simple tool-calling agent loop?"
+    options:
+      - "ReAct uses a different API format for tool calls"
+      - "ReAct requires the LLM to produce an explicit Thought step with reasoning before each Action"
+      - "ReAct eliminates the need for tool definitions"
+      - "ReAct always plans all steps upfront before executing any of them"
+    correctIndex: 1
+  - question: "In a ReAct trace, what does the Observation step represent?"
+    options:
+      - "The LLM's internal reasoning about what to do next"
+      - "The user's original question restated for clarity"
+      - "The result returned from executing the tool, fed back to the LLM"
+      - "A summary the LLM writes at the end of the task"
+    correctIndex: 2
+  - question: "Which of the following is a known weakness of the ReAct pattern?"
+    options:
+      - "It cannot use tools at all"
+      - "Its reasoning traces are invisible and cannot be debugged"
+      - "It reasons one step at a time and can get stuck in repetitive loops without planning ahead"
+      - "It requires a specialized model that supports ReAct natively"
+    correctIndex: 2
+  - question: "How does ReAct relate to Chain-of-Thought reasoning from Module 2?"
+    options:
+      - "ReAct replaces CoT entirely with a different reasoning method"
+      - "ReAct formalizes CoT into the agent loop by making the model produce a reasoning step before every action"
+      - "CoT and ReAct are unrelated techniques that solve different problems"
+      - "ReAct only uses CoT during the final answer, not during tool selection"
+    correctIndex: 1
+---
+
+## Overview
+
+In the previous lesson, you surveyed the landscape of agent architectures and saw that they differ in how they organize reasoning and action. Now we dive into the most foundational pattern of all: **ReAct**.
+
+Introduced by Yao et al. in their 2022 paper "ReAct: Synergizing Reasoning and Acting in Language Models," ReAct answered a deceptively simple question -- what happens if you force the LLM to *think out loud* before every tool call? The answer turned out to be transformative. By interleaving explicit **Thought**, **Action**, and **Observation** steps, ReAct produced agents that were more accurate, more interpretable, and more grounded than anything that came before.
+
+If you built the calculator agent in Module 1 and studied Chain-of-Thought reasoning in Module 2, you already have the pieces. ReAct is what happens when you combine them: it formalizes CoT reasoning directly into the agent loop, making the model's step-by-step thinking a first-class part of every decision cycle.
+
+## The Core Insight: Think Before You Act
+
+A basic tool-calling agent loop -- like the one from Module 3 -- works well for straightforward tasks. The LLM receives a question, decides which tool to call, gets a result, and continues. But for complex, multi-step tasks, that loop has a blind spot: the model's reasoning is implicit. You can see *what* it called, but not *why*. When things go wrong, debugging is guesswork.
+
+ReAct fixes this by adding a single constraint: **the model must produce an explicit reasoning trace before every action**. Each iteration of the loop has three labeled phases:
+
+- **Thought** -- the model reasons about what it knows so far, what it still needs, and what to do next
+- **Action** -- the model selects a tool and provides arguments, informed by its Thought
+- **Observation** -- the tool executes and the result is fed back to the model
+
+This three-phase cycle repeats until the model decides it has enough information to produce a final answer.
+
+<MermaidDiagram chart={`flowchart TD
+    Q["User Question"] --> T1["Thought 1: What do I need to find out first?"]
+    T1 --> A1["Action 1: Call tool with arguments"]
+    A1 --> O1["Observation 1: Tool returns result"]
+    O1 --> T2["Thought 2: Now I know X. I still need Y."]
+    T2 --> A2["Action 2: Call another tool"]
+    A2 --> O2["Observation 2: Tool returns result"]
+    O2 --> T3["Thought 3: I have all the information I need."]
+    T3 --> F["Final Answer"]
+    style T1 fill:#e9d8fd,stroke:#805ad5
+    style T2 fill:#e9d8fd,stroke:#805ad5
+    style T3 fill:#e9d8fd,stroke:#805ad5
+    style A1 fill:#bee3f8,stroke:#3182ce
+    style A2 fill:#bee3f8,stroke:#3182ce
+    style O1 fill:#c6f6d5,stroke:#38a169
+    style O2 fill:#c6f6d5,stroke:#38a169
+    style F fill:#fefcbf,stroke:#d69e2e
+`} />
+
+The purple nodes are the key difference. Without ReAct, those Thought steps either do not exist or are buried inside the model's hidden processing. With ReAct, they are visible, loggable, and debuggable.
+
+## A Complete ReAct Trace
+
+Let's watch ReAct solve a concrete multi-step question: *"Who is the CEO of the company that developed the Python programming language, and when was that company founded?"*
+
+This question requires two lookups -- first identifying the company, then finding its CEO and founding date. A simple loop might get the right answer, but with ReAct you can see the reasoning at every step.
+
+<MermaidDiagram chart={`sequenceDiagram
+    participant User
+    participant Agent as ReAct Agent
+    participant Tools as Tool Executor
+
+    User->>Agent: Who is the CEO of the company<br/>that developed Python, and<br/>when was it founded?
+
+    Note over Agent: Thought 1: I need to find which<br/>company developed Python.<br/>I'll search for that first.
+    Agent->>Tools: search("company that developed Python")
+    Tools-->>Agent: Observation: Python was created by<br/>Guido van Rossum. The Python<br/>Software Foundation (PSF) manages it.
+
+    Note over Agent: Thought 2: The PSF manages Python.<br/>Now I need to find who the<br/>current CEO/Executive Director is<br/>and when the PSF was founded.
+    Agent->>Tools: search("Python Software Foundation CEO founded")
+    Tools-->>Agent: Observation: The PSF was founded<br/>in 2001. Executive Director<br/>is Deb Nicholson.
+
+    Note over Agent: Thought 3: I now have all the<br/>information I need to answer<br/>the user's question.
+    Agent->>User: The Python Software Foundation<br/>manages Python. Its Executive<br/>Director is Deb Nicholson, and<br/>it was founded in 2001.
+`} />
+
+Notice the pattern: each Thought explicitly states what the agent knows and what it still needs. Each Action is directly motivated by the preceding Thought. Each Observation provides new information that feeds into the next Thought. The reasoning chain is fully transparent.
+
+## How ReAct Differs from the Simple Loop
+
+You already built a tool-calling loop in Module 3. Here is how that loop and a ReAct loop compare side by side:
+
+| Aspect | Simple Agent Loop | ReAct Agent Loop |
+|--------|-------------------|------------------|
+| **Reasoning** | Implicit -- hidden inside the model | Explicit -- Thought step before each Action |
+| **Debuggability** | You see tool calls and results only | You see *why* each tool was called |
+| **Grounding** | Model may hallucinate between calls | Each Thought references prior Observations |
+| **Verbosity** | Minimal output per turn | More tokens per turn (reasoning costs tokens) |
+| **Control flow** | LLM decides internally | LLM's decision process is visible and loggable |
+
+The simple loop from Module 3 cycles on `stop_reason` -- it runs tools whenever the LLM requests them and stops when the LLM says `end_turn`. That works, but you are trusting the model to reason correctly in its hidden state. ReAct externalizes that reasoning, which means you can log it, inspect it when things go wrong, and even use it for evaluation.
+
+## Implementing a ReAct Agent
+
+The implementation strategy is straightforward: use the **system prompt** to force the model into the Thought/Action/Observation format, then **parse** the model's output to extract the action. There are two common approaches:
+
+1. **Text-based parsing** -- the model outputs structured text that you parse with string matching or regex
+2. **Hybrid approach** -- the model outputs a Thought as text, then uses native tool calling for the Action
+
+We will implement the hybrid approach because it leverages the structured tool-calling you already learned in Module 3 while adding the explicit reasoning trace that makes ReAct powerful.
+
+<CodeBlock code={`import anthropic
+import json
+
+client = anthropic.Anthropic()
+
+# --- Tool definitions ---
+
+tools = [
+    {
+        "name": "search",
+        "description": "Search for information on a topic. Returns relevant text snippets.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "The search query"
+                }
+            },
+            "required": ["query"]
+        }
+    },
+    {
+        "name": "lookup",
+        "description": "Look up a specific fact about an entity (person, company, place).",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "entity": {
+                    "type": "string",
+                    "description": "The entity to look up"
+                },
+                "attribute": {
+                    "type": "string",
+                    "description": "The specific attribute to find, e.g. 'founding_date', 'ceo', 'population'"
+                }
+            },
+            "required": ["entity", "attribute"]
+        }
+    }
+]
+
+# --- Simulated tool implementations ---
+
+def search(query: str) -> str:
+    """Simulate a search tool."""
+    responses = {
+        "company that developed Python": "Python was created by Guido van Rossum in 1991. "
+            "The Python Software Foundation (PSF) manages its development.",
+        "Python Software Foundation": "The PSF is a non-profit founded in 2001. "
+            "It manages the open-source licensing for Python.",
+    }
+    for key, value in responses.items():
+        if key.lower() in query.lower():
+            return value
+    return f"No results found for: {query}"
+
+def lookup(entity: str, attribute: str) -> str:
+    """Simulate a fact lookup tool."""
+    facts = {
+        ("Python Software Foundation", "executive_director"): "Deb Nicholson",
+        ("Python Software Foundation", "founded"): "2001",
+    }
+    return facts.get((entity, attribute), f"Unknown: {entity}.{attribute}")
+
+tool_functions = {
+    "search": lambda **kwargs: search(**kwargs),
+    "lookup": lambda **kwargs: lookup(**kwargs),
+}
+`} language="python" filename="react_agent.py" />
+
+The key ingredient is the system prompt. It instructs the model to always produce a Thought before calling any tool:
+
+<CodeBlock code={`REACT_SYSTEM_PROMPT = """You are a research assistant that answers questions by searching for information.
+
+You MUST follow the ReAct pattern for every step:
+
+1. THOUGHT: Before taking any action, write a "Thought:" section where you:
+   - State what you currently know
+   - Identify what you still need to find out
+   - Explain which tool you will use and why
+
+2. ACTION: Then call the appropriate tool.
+
+3. After receiving the tool result (the Observation), write another Thought
+   before your next action.
+
+When you have enough information to answer the question fully, write a final
+Thought explaining that you have all the information, then provide your answer.
+
+Always ground your reasoning in the Observations you receive. Never guess at
+facts you have not verified through a tool call."""
+`} language="python" filename="react_system_prompt.py" />
+
+Now the agent loop. It is similar to the Module 3 loop, but we log each Thought and Observation to create a visible trace:
+
+<CodeBlock code={`def run_react_agent(question: str) -> str:
+    """Run a ReAct agent that interleaves Thought, Action, and Observation."""
+    messages = [{"role": "user", "content": question}]
+    step = 1
+
+    while True:
+        response = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=2048,
+            system=REACT_SYSTEM_PROMPT,
+            tools=tools,
+            messages=messages,
+        )
+
+        # --- Log the Thought (text blocks) and Action (tool_use blocks) ---
+        for block in response.content:
+            if block.type == "text":
+                print(f"\\n--- Step {step}: Thought ---")
+                print(block.text)
+            elif block.type == "tool_use":
+                print(f"\\n--- Step {step}: Action ---")
+                print(f"  Tool: {block.name}")
+                print(f"  Input: {json.dumps(block.input, indent=2)}")
+
+        # --- If the model is done, return the final answer ---
+        if response.stop_reason == "end_turn":
+            return "\\n".join(
+                block.text for block in response.content if block.type == "text"
+            )
+
+        # --- Execute tools and log Observations ---
+        messages.append({"role": "assistant", "content": response.content})
+
+        tool_results = []
+        for block in response.content:
+            if block.type == "tool_use":
+                result = tool_functions[block.name](**block.input)
+                result_str = result if isinstance(result, str) else json.dumps(result)
+                print(f"\\n--- Step {step}: Observation ---")
+                print(f"  {result_str}")
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": block.id,
+                    "content": result_str,
+                })
+
+        messages.append({"role": "user", "content": tool_results})
+        step += 1
+
+
+# --- Run it ---
+answer = run_react_agent(
+    "Who is the executive director of the organization that manages Python, "
+    "and when was it founded?"
+)
+print(f"\\n=== Final Answer ===\\n{answer}")
+`} language="python" filename="react_loop.py" />
+
+When you run this, the output looks something like:
+
+```
+--- Step 1: Thought ---
+Thought: I need to find which organization manages Python. Let me search for that.
+
+--- Step 1: Action ---
+  Tool: search
+  Input: {"query": "company that developed Python"}
+
+--- Step 1: Observation ---
+  Python was created by Guido van Rossum in 1991. The Python Software Foundation (PSF) manages its development.
+
+--- Step 2: Thought ---
+Thought: Now I know the Python Software Foundation manages Python. I need two more facts: the executive director and when the PSF was founded. Let me look those up.
+
+--- Step 2: Action ---
+  Tool: lookup
+  Input: {"entity": "Python Software Foundation", "attribute": "executive_director"}
+
+--- Step 2: Observation ---
+  Deb Nicholson
+
+...
+
+=== Final Answer ===
+The Python Software Foundation manages Python. Its Executive Director is Deb Nicholson, and it was founded in 2001.
+```
+
+Every decision the agent makes is visible. If it takes a wrong turn, you can see exactly which Thought led it astray.
+
+## Why the Reasoning Trace Matters
+
+The explicit Thought step is not just for developer convenience -- it materially improves the agent's behavior. There are three reasons:
+
+**Interpretability.** When an agent produces a wrong answer, the Thought trace tells you *where* the reasoning broke down. Was it a bad search query? A misinterpretation of the Observation? A premature conclusion? Without the trace, you are left guessing.
+
+**Grounding.** Each Thought references the preceding Observation, which forces the model to integrate real data into its reasoning. This reduces hallucination because the model cannot silently invent facts -- it must reason from evidence you can inspect.
+
+**Debuggability.** You can log the full Thought/Action/Observation trace and review it later. In production systems, these traces become your primary debugging tool. You can search traces for patterns, identify common failure modes, and build evaluation datasets from them.
+
+> If you recall from Module 2, Chain-of-Thought prompting improved accuracy by making the model show its work. ReAct takes that same principle and embeds it into the agent loop. CoT gives you better reasoning in a single prompt; ReAct gives you better reasoning across a multi-step task with real tools.
+
+## Strengths and Weaknesses
+
+ReAct is powerful, but it is not the right architecture for every problem. Understanding its trade-offs will help you decide when to use it and when to reach for something else.
+
+### Strengths
+
+- **Interpretable** -- every decision is justified by a visible Thought
+- **Debuggable** -- the full trace can be logged, searched, and replayed
+- **Grounded** -- reasoning is anchored in real Observations, not hallucinated context
+- **Simple to implement** -- it is a system prompt plus the same agent loop you already know
+- **Flexible** -- works with any set of tools, no specialized infrastructure required
+
+### Weaknesses
+
+- **Verbose** -- the Thought steps consume additional tokens on every iteration, increasing cost and latency
+- **No upfront planning** -- ReAct reasons one step at a time; it cannot look ahead to plan a multi-step strategy before starting execution
+- **Repetitive loops** -- the model can get stuck repeating the same Thought/Action cycle when it does not find what it expects, sometimes looping indefinitely without making progress
+- **Token window pressure** -- as the trace grows, older Thoughts and Observations push against the context window limit, and the model may lose track of earlier reasoning
+
+<MermaidDiagram chart={`flowchart LR
+    subgraph Strengths["Strengths"]
+        S1["Interpretable traces"]
+        S2["Grounded reasoning"]
+        S3["Easy to debug"]
+    end
+    subgraph Weaknesses["Weaknesses"]
+        W1["No upfront planning"]
+        W2["Can loop endlessly"]
+        W3["Verbose / costly"]
+    end
+    R["ReAct"] --> Strengths
+    R --> Weaknesses
+    W1 -->|"Addressed by"| PE["Plan-and-Execute<br/>(next lesson)"]
+    style Strengths fill:#c6f6d5,stroke:#38a169
+    style Weaknesses fill:#fed7d7,stroke:#e53e3e
+    style PE fill:#bee3f8,stroke:#3182ce
+`} />
+
+## When to Use ReAct
+
+ReAct is an excellent default choice for agents that need to answer questions by gathering information from tools. It shines in scenarios like:
+
+- **Research and question answering** -- where the agent needs to search, verify, and synthesize
+- **Debugging and troubleshooting** -- where you need a transparent reasoning trail
+- **Prototyping** -- when you want a working agent fast and plan to optimize later
+- **Any task where interpretability matters more than efficiency**
+
+It is less suited for tasks that require long-horizon planning (20+ steps), deterministic workflows, or minimal token usage. For those, the architectures in upcoming lessons will serve you better.
+
+## Summary
+
+**ReAct** is the foundational agent architecture that interleaves Thought, Action, and Observation in an explicit loop. Its key insight is simple but powerful: by forcing the LLM to reason out loud before every tool call, you get agents that are interpretable, debuggable, and grounded in real evidence.
+
+The pattern builds directly on two ideas you have already learned:
+
+- **Chain-of-Thought reasoning** from Module 2 -- ReAct formalizes CoT into the agent loop, making the model's step-by-step thinking a required part of each iteration rather than an optional prompting technique
+- **The tool-calling lifecycle** from Module 3 -- ReAct uses the same tool definitions, `tool_use`/`tool_result` exchange, and agent loop structure, adding only the Thought constraint on top
+
+ReAct's main limitation is that it reasons one step at a time. It does not plan ahead -- each Thought only considers the current state, not a strategy for reaching the goal. This works well for short tasks but can lead to inefficiency or loops on complex problems.
+
+> In the next lesson, **Plan-and-Execute** addresses this weakness directly. Instead of reasoning one step at a time, a Plan-and-Execute agent creates an explicit plan upfront, then executes each step while dynamically revising the plan as new information arrives. This gives agents the strategic foresight that ReAct lacks.

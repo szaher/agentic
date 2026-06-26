@@ -1,0 +1,916 @@
+---
+title: "Memory Lab"
+---
+
+## Overview
+
+Throughout Module 6, you learned the individual building blocks of agent memory: conversation buffers, summarization strategies, long-term storage, embeddings, vector stores, and advanced RAG patterns. Each lesson focused on one piece of the puzzle. In this lab, you will put every piece together.
+
+You are going to build a **knowledge-grounded agent** -- an agent that maintains conversation memory across turns, ingests documents into a vector store, retrieves relevant knowledge before answering, and combines all of this into a single coherent system. This is the architecture behind every serious AI assistant that needs to be both conversational and factually grounded.
+
+The build is progressive. You will start with a bare agent loop, then add conversation memory, then build a document ingestion pipeline, then wire up RAG retrieval as a tool, and finally combine everything into a complete memory-augmented agent. At each step, the agent still works -- you are layering capabilities, not doing a big-bang rewrite.
+
+By the end of this lab, you will have built from scratch what frameworks like LangChain and LangGraph provide out of the box. That is the point. When you understand the internals, you can make informed decisions about when to use a framework and when to build your own.
+
+## The Complete Architecture
+
+Before writing any code, let's look at the system you are going to build. Every component in this diagram corresponds to a class or function you will implement in this lab.
+
+<MermaidDiagram chart={`graph TD
+    User["User"] -->|"question"| Agent["Agent Loop"]
+
+    Agent -->|"check history"| ConvMem["Conversation Memory"]
+    ConvMem -->|"recent turns + summary"| Agent
+
+    Agent -->|"retrieve docs"| RAGTool["RAG Retrieval Tool"]
+    RAGTool -->|"query"| VectorStore["Vector Store<br/>(ChromaDB)"]
+    VectorStore -->|"relevant chunks"| RAGTool
+    RAGTool -->|"context"| Agent
+
+    Agent -->|"generate"| LLM["LLM API<br/>(Claude)"]
+    LLM -->|"response or tool_use"| Agent
+
+    Agent -->|"response"| User
+
+    Ingest["Document Ingestion<br/>Pipeline"] -->|"chunks + embeddings"| VectorStore
+
+    subgraph Memory["Memory Layer"]
+        ConvMem
+        VectorStore
+    end
+
+    subgraph Tools["Tool Layer"]
+        RAGTool
+        OtherTools["Other Tools<br/>(search, calculate, etc.)"]
+    end
+
+    Agent -->|"call"| OtherTools
+    OtherTools -->|"result"| Agent
+
+    style Memory fill:#ebf8ff,stroke:#3182ce
+    style Tools fill:#f0fff4,stroke:#38a169
+    style Agent fill:#fefcbf,stroke:#d69e2e
+    style LLM fill:#fed7e2,stroke:#d53f8c
+    style User fill:#e9d8fd,stroke:#805ad5
+    style Ingest fill:#feebc8,stroke:#dd6b20
+`} />
+
+The architecture has two memory systems working in parallel. **Conversation memory** tracks what the user and agent have said in the current session -- it handles the "what did we just talk about?" problem. **The vector store** holds pre-ingested documents -- it handles the "what do you know about X?" problem. The agent consults both before generating a response, giving it continuity within a conversation and grounding in external knowledge.
+
+## Step 1: Conversation Memory
+
+The first layer to add is **conversation memory**. You built the pieces in lessons 02 and 03 -- a buffer that stores recent turns and a summarizer that compresses older history. Here, you combine them into a single `ConversationMemory` class that the agent loop can use without thinking about the details.
+
+<CodeBlock code={`"""Conversation memory with buffer + summarization.
+
+Keeps the last N turns in full detail and summarizes older
+history into a running summary. The agent always sees both
+the summary and the recent turns, giving it continuity
+without blowing up the context window.
+"""
+
+import anthropic
+from dataclasses import dataclass, field
+
+
+@dataclass
+class ConversationMemory:
+    """Manages conversation history with automatic summarization.
+
+    When the buffer exceeds max_turns, older turns are compressed
+    into a running summary. The agent sees: system context about
+    the summary + the summary itself + recent full turns.
+    """
+
+    max_turns: int = 10
+    summary: str = ""
+    buffer: list[dict] = field(default_factory=list)
+    _client: anthropic.Anthropic | None = None
+    _model: str = "claude-sonnet-4-6"
+
+    def add_user_message(self, content: str) -> None:
+        """Record a user message."""
+        self.buffer.append({"role": "user", "content": content})
+        self._maybe_compress()
+
+    def add_assistant_message(self, content: str) -> None:
+        """Record an assistant response."""
+        self.buffer.append({"role": "assistant", "content": content})
+        self._maybe_compress()
+
+    def get_messages(self) -> list[dict]:
+        """Return the message list for the API call.
+
+        If a summary exists, it is prepended as context so the
+        model knows what happened before the visible turns.
+        """
+        messages = []
+
+        if self.summary:
+            messages.append({
+                "role": "user",
+                "content": (
+                    "[Summary of earlier conversation]\n"
+                    f"{self.summary}\n"
+                    "[End of summary. Recent messages follow.]"
+                ),
+            })
+            messages.append({
+                "role": "assistant",
+                "content": (
+                    "Understood. I have the context from our "
+                    "earlier conversation and will continue "
+                    "from here."
+                ),
+            })
+
+        messages.extend(self.buffer)
+        return messages
+
+    def _maybe_compress(self) -> None:
+        """Compress older turns into the summary if buffer is full."""
+        if len(self.buffer) <= self.max_turns:
+            return
+
+        # Split: older half gets summarized, recent half stays
+        midpoint = len(self.buffer) - self.max_turns // 2
+        old_turns = self.buffer[:midpoint]
+        self.buffer = self.buffer[midpoint:]
+
+        # Summarize the old turns
+        self.summary = self._summarize(old_turns)
+
+    def _summarize(self, turns: list[dict]) -> str:
+        """Use the LLM to compress turns into a summary."""
+        if not self._client:
+            self._client = anthropic.Anthropic()
+
+        # Build a readable transcript of the turns
+        transcript_parts = []
+        for turn in turns:
+            role = turn["role"]
+            content = turn.get("content", "")
+            if isinstance(content, str):
+                transcript_parts.append(f"{role}: {content[:500]}")
+
+        transcript = "\n\n".join(transcript_parts)
+
+        # Include existing summary for continuity
+        existing = ""
+        if self.summary:
+            existing = (
+                f"Previous summary:\n{self.summary}\n\n"
+                "New turns to incorporate:\n"
+            )
+
+        response = self._client.messages.create(
+            model=self._model,
+            max_tokens=400,
+            messages=[{
+                "role": "user",
+                "content": (
+                    "Produce a concise summary of this conversation. "
+                    "Preserve: key questions asked, answers given, "
+                    "decisions made, and any facts established. "
+                    "Omit pleasantries and filler.\n\n"
+                    f"{existing}{transcript}"
+                ),
+            }],
+        )
+        return response.content[0].text
+`} language="python" filename="conversation_memory.py" />
+
+The key design decision here is the **split between buffer and summary**. The buffer holds recent turns in full fidelity -- the model can see exact wording, nuances, and follow-up context. The summary compresses everything older into a paragraph. This gives the agent both precision (for the current thread) and context (for the broader conversation) without exceeding the context window.
+
+Notice that the summary is **incremental**. When new turns get compressed, the summarizer receives both the existing summary and the new turns, producing a single updated summary. This avoids the information loss you would get from re-summarizing a summary of a summary.
+
+## Step 2: Document Ingestion Pipeline
+
+The second layer is the **document ingestion pipeline** -- the system that takes raw documents, splits them into chunks, generates embeddings, and stores them in a vector database. This is the "write path" of your RAG system.
+
+<MermaidDiagram chart={`flowchart LR
+    Docs["Raw Documents<br/>(PDF, TXT, MD)"] --> Loader["Document<br/>Loader"]
+    Loader --> Chunker["Text Chunker<br/>(overlap strategy)"]
+    Chunker --> Embedder["Embedding<br/>Model"]
+    Embedder --> Store["Vector Store<br/>(ChromaDB)"]
+
+    subgraph Pipeline["Ingestion Pipeline"]
+        Loader
+        Chunker
+        Embedder
+    end
+
+    style Pipeline fill:#fefcbf,stroke:#d69e2e
+    style Store fill:#ebf8ff,stroke:#3182ce
+    style Docs fill:#e9d8fd,stroke:#805ad5
+`} />
+
+You covered chunking strategies in lesson 05 and embedding models in lesson 05. Here, you wire them together into a pipeline that can process a directory of documents in one call.
+
+<CodeBlock code={`"""Document ingestion pipeline.
+
+Loads documents, splits them into overlapping chunks,
+generates embeddings, and stores everything in ChromaDB.
+"""
+
+import os
+import hashlib
+from dataclasses import dataclass
+import chromadb
+from chromadb.utils import embedding_functions
+
+
+@dataclass
+class DocumentChunk:
+    """A chunk of text with its source metadata."""
+    text: str
+    source: str       # filename or URL
+    chunk_index: int   # position within the document
+    doc_id: str        # unique ID for deduplication
+
+
+class IngestionPipeline:
+    """Processes documents into a searchable vector store.
+
+    Uses ChromaDB with its built-in sentence-transformer
+    embeddings. Each chunk is stored with metadata about its
+    source and position, enabling citation in agent responses.
+    """
+
+    def __init__(
+        self,
+        collection_name: str = "knowledge_base",
+        persist_directory: str = "./vectorstore",
+        chunk_size: int = 500,
+        chunk_overlap: int = 50,
+    ):
+        self.chunk_size = chunk_size
+        self.chunk_overlap = chunk_overlap
+
+        # Initialize ChromaDB with persistence
+        self.chroma_client = chromadb.PersistentClient(
+            path=persist_directory
+        )
+
+        # Use a sentence-transformer for embeddings
+        embedding_fn = (
+            embedding_functions.SentenceTransformerEmbeddingFunction(
+                model_name="all-MiniLM-L6-v2"
+            )
+        )
+
+        self.collection = self.chroma_client.get_or_create_collection(
+            name=collection_name,
+            embedding_function=embedding_fn,
+            metadata={"hnsw:space": "cosine"},
+        )
+
+    def ingest_directory(self, directory: str) -> int:
+        """Ingest all supported files from a directory.
+
+        Returns the number of chunks stored.
+        """
+        total_chunks = 0
+        supported = (".txt", ".md", ".py", ".json")
+
+        for filename in sorted(os.listdir(directory)):
+            if not filename.endswith(supported):
+                continue
+
+            filepath = os.path.join(directory, filename)
+            with open(filepath, "r", encoding="utf-8") as f:
+                text = f.read()
+
+            chunks = self._chunk_text(text, source=filename)
+            self._store_chunks(chunks)
+            total_chunks += len(chunks)
+            print(f"  Ingested {filename}: {len(chunks)} chunks")
+
+        print(f"  Total: {total_chunks} chunks in collection "
+              f"'{self.collection.name}'")
+        return total_chunks
+
+    def ingest_text(self, text: str, source: str) -> int:
+        """Ingest a single text document.
+
+        Returns the number of chunks stored.
+        """
+        chunks = self._chunk_text(text, source=source)
+        self._store_chunks(chunks)
+        return len(chunks)
+
+    def _chunk_text(
+        self, text: str, source: str
+    ) -> list[DocumentChunk]:
+        """Split text into overlapping chunks.
+
+        Uses a simple character-based strategy with overlap.
+        Each chunk gets a deterministic ID based on source +
+        content hash for deduplication.
+        """
+        chunks = []
+        start = 0
+        chunk_index = 0
+
+        while start < len(text):
+            end = start + self.chunk_size
+
+            # Try to break at a sentence boundary
+            if end < len(text):
+                # Look for the last period, newline, or
+                # sentence-ending punctuation near the boundary
+                for boundary_char in ["\n\n", ".\n", ". ", "\n"]:
+                    boundary = text.rfind(
+                        boundary_char, start + self.chunk_size // 2, end
+                    )
+                    if boundary != -1:
+                        end = boundary + len(boundary_char)
+                        break
+
+            chunk_text = text[start:end].strip()
+            if chunk_text:
+                content_hash = hashlib.md5(
+                    chunk_text.encode()
+                ).hexdigest()[:8]
+                doc_id = f"{source}::chunk{chunk_index}::{content_hash}"
+
+                chunks.append(DocumentChunk(
+                    text=chunk_text,
+                    source=source,
+                    chunk_index=chunk_index,
+                    doc_id=doc_id,
+                ))
+                chunk_index += 1
+
+            # Move forward, accounting for overlap
+            start = end - self.chunk_overlap
+            if start <= 0 and chunk_index > 0:
+                break  # Prevent infinite loop on tiny texts
+
+        return chunks
+
+    def _store_chunks(self, chunks: list[DocumentChunk]) -> None:
+        """Store chunks in ChromaDB with metadata."""
+        if not chunks:
+            return
+
+        self.collection.upsert(
+            ids=[c.doc_id for c in chunks],
+            documents=[c.text for c in chunks],
+            metadatas=[
+                {
+                    "source": c.source,
+                    "chunk_index": c.chunk_index,
+                }
+                for c in chunks
+            ],
+        )
+`} language="python" filename="ingestion_pipeline.py" />
+
+Three design decisions worth noting. First, the chunker tries to break at sentence boundaries rather than cutting mid-sentence -- this produces chunks that are more coherent when retrieved. Second, each chunk gets a **deterministic ID** based on its source and content hash, which means re-ingesting the same document updates existing chunks via `upsert` rather than creating duplicates. Third, the pipeline stores **source metadata** with every chunk, which lets the agent cite where its knowledge came from.
+
+## Step 3: RAG Retrieval as a Tool
+
+The third layer turns your vector store into an **agent tool**. Instead of hardcoding retrieval into the agent loop, you expose it as a tool the agent can choose to call -- or not -- based on the question. This is the **agentic RAG** pattern from lesson 06: the agent decides when retrieval is helpful.
+
+<CodeBlock code={`"""RAG retrieval exposed as an agent tool.
+
+The agent decides when to search the knowledge base. This is
+agentic RAG -- the model controls retrieval, not a fixed pipeline.
+"""
+
+import json
+
+
+class KnowledgeRetriever:
+    """Retrieves relevant document chunks from the vector store.
+
+    Designed to be registered as an agent tool. The agent calls
+    this when it needs factual grounding for its response.
+    """
+
+    def __init__(self, pipeline: IngestionPipeline, top_k: int = 5):
+        self.collection = pipeline.collection
+        self.top_k = top_k
+
+    def search(self, query: str, n_results: int | None = None) -> str:
+        """Search the knowledge base for relevant information.
+
+        Args:
+            query: Natural language search query.
+            n_results: Number of results to return (default: 5).
+
+        Returns:
+            JSON string with matching document chunks and
+            their source metadata.
+        """
+        k = n_results or self.top_k
+
+        results = self.collection.query(
+            query_texts=[query],
+            n_results=k,
+        )
+
+        # Format results for the agent
+        chunks = []
+        if results["documents"] and results["documents"][0]:
+            for i, doc in enumerate(results["documents"][0]):
+                metadata = results["metadatas"][0][i]
+                distance = results["distances"][0][i]
+
+                chunks.append({
+                    "text": doc,
+                    "source": metadata.get("source", "unknown"),
+                    "chunk_index": metadata.get("chunk_index", 0),
+                    "relevance_score": round(1 - distance, 4),
+                })
+
+        return json.dumps({
+            "query": query,
+            "num_results": len(chunks),
+            "chunks": chunks,
+        }, indent=2)
+
+
+def build_retrieval_tool(retriever: KnowledgeRetriever) -> dict:
+    """Build the tool definition for the Claude API.
+
+    Returns the tool schema dict that gets passed to
+    the tools parameter of messages.create().
+    """
+    return {
+        "name": "search_knowledge_base",
+        "description": (
+            "Search the internal knowledge base for information "
+            "relevant to the user's question. Use this tool when "
+            "the user asks about topics that may be covered in "
+            "the ingested documents. Returns the most relevant "
+            "text chunks with source citations. Always prefer "
+            "this over generating answers from general knowledge "
+            "when the topic might be in the knowledge base."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": (
+                        "The search query. Use natural language. "
+                        "Be specific about what information you "
+                        "need."
+                    ),
+                },
+                "n_results": {
+                    "type": "integer",
+                    "description": (
+                        "Number of results to return. Default 5. "
+                        "Use more for broad questions, fewer for "
+                        "specific lookups."
+                    ),
+                },
+            },
+            "required": ["query"],
+        },
+    }
+`} language="python" filename="rag_tool.py" />
+
+The tool description is critical. It tells the model *when* to use retrieval ("when the user asks about topics that may be covered in the ingested documents") and *how* to use it ("be specific about what information you need"). A vague tool description leads to either over-retrieval (the agent searches for everything, wasting tokens) or under-retrieval (the agent guesses instead of looking things up).
+
+## Step 4: The Complete Memory-Augmented Agent
+
+Now you combine all three components -- conversation memory, document ingestion, and RAG retrieval -- into a single agent. This is the full system from the architecture diagram at the top of this lesson.
+
+<MermaidDiagram chart={`sequenceDiagram
+    participant User
+    participant Agent as Agent Loop
+    participant Mem as ConversationMemory
+    participant LLM as Claude API
+    participant RAG as search_knowledge_base
+    participant VS as Vector Store
+
+    User->>Agent: "What is RLHF?"
+    Agent->>Mem: add_user_message(question)
+    Agent->>Mem: get_messages()
+    Mem-->>Agent: [summary] + [recent turns]
+
+    Agent->>LLM: messages.create(tools, messages)
+    LLM-->>Agent: tool_use: search_knowledge_base
+
+    Agent->>RAG: search("RLHF reinforcement learning")
+    RAG->>VS: query(embedding)
+    VS-->>RAG: top-5 chunks
+    RAG-->>Agent: JSON with chunks + sources
+
+    Agent->>LLM: messages.create(tool_result)
+    LLM-->>Agent: text response with citations
+
+    Agent->>Mem: add_assistant_message(response)
+    Agent-->>User: grounded answer with sources
+`} />
+
+The sequence shows how both memory systems participate in every turn. Conversation memory provides context about what has been discussed. The RAG tool provides factual grounding from documents. The LLM synthesizes both into a coherent response.
+
+<CodeBlock code={`"""Complete memory-augmented agent.
+
+Combines:
+  1. ConversationMemory -- tracks the dialogue across turns
+  2. IngestionPipeline -- loads documents into a vector store
+  3. KnowledgeRetriever -- RAG tool the agent can call
+  4. Agent loop -- orchestrates everything
+
+Usage:
+    python memory_agent.py
+
+    # First run ingests documents, then starts a conversation.
+    # The agent remembers what you discussed and grounds
+    # answers in the ingested documents.
+"""
+
+import json
+import anthropic
+
+
+# --- Configuration ---
+MODEL = "claude-sonnet-4-6"
+KNOWLEDGE_DIR = "./documents"
+VECTORSTORE_DIR = "./vectorstore"
+
+SYSTEM_PROMPT = """You are a knowledgeable assistant with access
+to an internal knowledge base. Follow these rules:
+
+1. When the user asks a factual question, ALWAYS search the
+   knowledge base first using the search_knowledge_base tool.
+2. Ground your answers in the retrieved documents. Cite the
+   source file when referencing specific information.
+3. If the knowledge base does not contain relevant information,
+   say so clearly and answer from your general knowledge,
+   marking it as such.
+4. Maintain continuity across the conversation -- reference
+   earlier discussion when relevant.
+5. Be concise but thorough. Prefer clarity over length."""
+
+
+class MemoryAugmentedAgent:
+    """An agent with conversation memory and RAG retrieval.
+
+    This is the complete system: it remembers what you talked
+    about, looks up facts in a knowledge base, and synthesizes
+    grounded responses.
+    """
+
+    def __init__(
+        self,
+        knowledge_dir: str = KNOWLEDGE_DIR,
+        vectorstore_dir: str = VECTORSTORE_DIR,
+    ):
+        self.client = anthropic.Anthropic()
+
+        # Layer 1: Conversation memory
+        self.memory = ConversationMemory(
+            max_turns=10,
+            _client=self.client,
+            _model=MODEL,
+        )
+
+        # Layer 2: Document ingestion
+        self.pipeline = IngestionPipeline(
+            collection_name="knowledge_base",
+            persist_directory=vectorstore_dir,
+            chunk_size=500,
+            chunk_overlap=50,
+        )
+
+        # Layer 3: RAG retrieval tool
+        self.retriever = KnowledgeRetriever(
+            pipeline=self.pipeline,
+            top_k=5,
+        )
+
+        # Tool definitions for the API
+        self.tools = [build_retrieval_tool(self.retriever)]
+
+        # Tool dispatch table
+        self.tool_handlers = {
+            "search_knowledge_base": self.retriever.search,
+        }
+
+        # Ingest documents on startup
+        if os.path.isdir(knowledge_dir):
+            print(f"Ingesting documents from {knowledge_dir}...")
+            self.pipeline.ingest_directory(knowledge_dir)
+            print()
+
+    def chat(self, user_message: str) -> str:
+        """Process a user message and return a response.
+
+        This is the main entry point. It:
+          1. Records the message in conversation memory
+          2. Builds the message list (summary + recent turns)
+          3. Calls the LLM with tools available
+          4. Handles any tool calls (RAG retrieval)
+          5. Records the response in conversation memory
+          6. Returns the final text
+        """
+        # Record the user message
+        self.memory.add_user_message(user_message)
+
+        # Build messages from memory
+        messages = self.memory.get_messages()
+
+        # Agent loop: handle tool calls until we get a text response
+        for iteration in range(10):
+            response = self.client.messages.create(
+                model=MODEL,
+                max_tokens=4096,
+                system=SYSTEM_PROMPT,
+                tools=self.tools,
+                messages=messages,
+            )
+
+            # If the model is done, extract and return the text
+            if response.stop_reason == "end_turn":
+                assistant_text = ""
+                for block in response.content:
+                    if block.type == "text":
+                        assistant_text += block.text
+
+                # Record in conversation memory
+                self.memory.add_assistant_message(assistant_text)
+                return assistant_text
+
+            # If the model wants to use a tool, execute it
+            if response.stop_reason == "tool_use":
+                messages.append({
+                    "role": "assistant",
+                    "content": response.content,
+                })
+
+                tool_results = []
+                for block in response.content:
+                    if block.type == "tool_use":
+                        handler = self.tool_handlers.get(block.name)
+                        if handler:
+                            result = handler(**block.input)
+                            print(
+                                f"  [tool] {block.name}: "
+                                f"query={block.input.get('query', '')}"
+                            )
+                        else:
+                            result = json.dumps({
+                                "error": f"Unknown tool: {block.name}"
+                            })
+
+                        tool_results.append({
+                            "type": "tool_result",
+                            "tool_use_id": block.id,
+                            "content": result,
+                        })
+
+                messages.append({
+                    "role": "user",
+                    "content": tool_results,
+                })
+
+        return "Max iterations reached."
+`} language="python" filename="memory_agent.py" />
+
+The `chat` method is the heart of the agent. Notice how simple the loop is -- complexity is pushed into the components. Conversation memory handles history management. The retriever handles vector search. The agent loop just orchestrates: get messages, call the LLM, handle tools, record the response.
+
+## Running the Agent
+
+Here is how you use the complete system. The agent ingests documents once, then handles a multi-turn conversation where it draws on both conversation history and retrieved knowledge.
+
+<CodeBlock code={`"""Run the memory-augmented agent in a conversation loop."""
+
+import os
+
+
+def main():
+    # Create sample documents for the knowledge base
+    os.makedirs("./documents", exist_ok=True)
+
+    # Write a sample document about RLHF
+    with open("./documents/rlhf-overview.md", "w") as f:
+        f.write("""# Reinforcement Learning from Human Feedback
+
+RLHF is a technique for aligning language models with human
+preferences. The process has three stages:
+
+1. Supervised Fine-Tuning (SFT): Train the base model on
+   high-quality demonstration data.
+
+2. Reward Model Training: Collect human comparisons of model
+   outputs and train a reward model to predict which output
+   humans prefer.
+
+3. PPO Optimization: Use Proximal Policy Optimization to
+   fine-tune the SFT model to maximize the reward model's
+   score, with a KL penalty to prevent divergence from the
+   original model.
+
+Key challenges include reward hacking (the model exploits
+the reward model without genuinely improving), the cost of
+human annotation, and the difficulty of capturing complex
+preferences in a scalar reward signal.
+
+Alternatives to RLHF include DPO (Direct Preference
+Optimization), which skips the reward model entirely by
+optimizing the policy directly on preference data, and
+RLAIF (RL from AI Feedback), which uses another AI model
+to generate preference labels.
+""")
+
+    # Initialize and run the agent
+    agent = MemoryAugmentedAgent(
+        knowledge_dir="./documents",
+        vectorstore_dir="./vectorstore",
+    )
+
+    # Multi-turn conversation
+    questions = [
+        "What is RLHF and how does it work?",
+        "You mentioned three stages -- which one is most expensive?",
+        "What alternatives exist to the approach you described?",
+    ]
+
+    for question in questions:
+        print(f"\nUser: {question}")
+        print("-" * 50)
+        response = agent.chat(question)
+        print(f"Agent: {response}\n")
+        print("=" * 60)
+
+
+if __name__ == "__main__":
+    main()
+`} language="python" filename="run_agent.py" />
+
+Watch what happens across the three questions:
+
+- **Question 1**: The agent calls `search_knowledge_base` with "RLHF reinforcement learning from human feedback", retrieves the chunks from `rlhf-overview.md`, and explains the three-stage process with citations.
+- **Question 2**: The agent does *not* call the tool. "Three stages" is a reference to the previous answer, which is in conversation memory. The agent draws on the earlier turn to discuss costs -- particularly human annotation for the reward model.
+- **Question 3**: The agent calls the tool again, searching for "alternatives to RLHF", and retrieves the DPO and RLAIF chunks. It connects this to the earlier discussion: "As I mentioned, RLHF has high annotation costs -- DPO addresses this by..."
+
+This is the payoff of combining conversation memory with RAG. Neither system alone could handle all three questions well. Without conversation memory, question 2 would be nonsensical ("which three stages?"). Without RAG, the answers would come from general knowledge and might contain hallucinated details about the algorithms.
+
+## How the Two Memory Systems Interact
+
+The interaction between conversation memory and RAG retrieval is worth understanding in detail, because getting it wrong leads to subtle bugs.
+
+<MermaidDiagram chart={`graph TD
+    subgraph Turn["Each Conversation Turn"]
+        direction TB
+        Q["User question arrives"]
+        Q --> CM["ConversationMemory<br/>adds question to buffer"]
+        CM --> Build["Build message list:<br/>summary + recent turns"]
+        Build --> LLM1["LLM decides: answer<br/>directly or use tools?"]
+        LLM1 -->|"needs facts"| RAG["RAG tool retrieves<br/>relevant chunks"]
+        LLM1 -->|"has context"| Gen["Generate response<br/>from memory alone"]
+        RAG --> LLM2["LLM synthesizes<br/>chunks + conversation"]
+        LLM2 --> Store["ConversationMemory<br/>stores response"]
+        Gen --> Store
+    end
+
+    subgraph Background["Before Conversation"]
+        Docs["Documents"] --> Ingest["Ingestion Pipeline"]
+        Ingest --> VS["Vector Store<br/>(persistent)"]
+    end
+
+    VS -.->|"queried by"| RAG
+
+    style Turn fill:#f7fafc,stroke:#a0aec0
+    style Background fill:#fffff0,stroke:#d69e2e
+    style LLM1 fill:#fed7e2,stroke:#d53f8c
+    style LLM2 fill:#fed7e2,stroke:#d53f8c
+    style RAG fill:#f0fff4,stroke:#38a169
+    style CM fill:#ebf8ff,stroke:#3182ce
+`} />
+
+The critical insight is **when each memory system contributes**. Conversation memory is always present -- every LLM call includes the summary and recent turns. RAG retrieval is *conditional* -- the LLM decides whether to search based on whether the question needs factual grounding. This is why the tool description matters so much: it guides the model's decision about when to retrieve.
+
+There is also a subtle feedback loop. When the agent retrieves information and uses it in a response, that response gets stored in conversation memory. On later turns, the summarized version of that response becomes part of the context. This means RAG results gradually become part of the conversation's "common ground" -- the agent can reference them later without re-retrieving.
+
+## Adding More Tools
+
+The architecture is designed to accommodate additional tools alongside RAG. You might want a calculator, a web search tool, or a code execution tool. Here is how you extend the agent without restructuring anything.
+
+<CodeBlock code={`"""Extending the agent with additional tools.
+
+Shows how to add tools alongside RAG retrieval. The agent
+decides which tools to use based on the question.
+"""
+
+import json
+import datetime
+
+
+def get_current_date() -> str:
+    """Get today's date for time-sensitive questions."""
+    return json.dumps({
+        "date": datetime.date.today().isoformat(),
+        "weekday": datetime.date.today().strftime("%A"),
+    })
+
+
+def calculate(expression: str) -> str:
+    """Evaluate a mathematical expression safely.
+
+    Args:
+        expression: A math expression like '2 + 2' or
+                    '(100 / 3) * 1.5'.
+    """
+    # Only allow safe math operations
+    allowed = set("0123456789+-*/.() ")
+    if not all(c in allowed for c in expression):
+        return json.dumps({
+            "error": "Expression contains invalid characters"
+        })
+    try:
+        result = eval(expression)  # Safe: chars are restricted
+        return json.dumps({"expression": expression, "result": result})
+    except Exception as e:
+        return json.dumps({"error": str(e)})
+
+
+# Add tools to the agent
+EXTRA_TOOLS = [
+    {
+        "name": "get_current_date",
+        "description": "Get today's date and day of week.",
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+        },
+    },
+    {
+        "name": "calculate",
+        "description": (
+            "Evaluate a mathematical expression. Use for any "
+            "arithmetic the user asks about."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "expression": {
+                    "type": "string",
+                    "description": "Math expression to evaluate.",
+                },
+            },
+            "required": ["expression"],
+        },
+    },
+]
+
+EXTRA_HANDLERS = {
+    "get_current_date": lambda **kwargs: get_current_date(),
+    "calculate": lambda **kwargs: calculate(kwargs["expression"]),
+}
+
+
+# To integrate, add these in the agent's __init__:
+#   self.tools.extend(EXTRA_TOOLS)
+#   self.tool_handlers.update(EXTRA_HANDLERS)
+`} language="python" filename="extra_tools.py" />
+
+Adding a tool is three things: a function, a schema, and a handler entry. The agent loop does not change. The LLM decides when to use each tool based on the descriptions. This is the same extensibility pattern you saw with the Tool Registry in Module 5, but now the tools have access to persistent memory through the shared vector store.
+
+## What You Built
+
+Take a step back and look at what the complete system does:
+
+- **Conversation memory** gives the agent continuity within a session. It remembers what was discussed, can reference earlier points, and does not repeat itself. The automatic summarization keeps the context window manageable even for long conversations.
+
+- **Document ingestion** gives the agent a knowledge base. Raw documents are chunked, embedded, and stored in a vector database. The ingestion is idempotent -- re-ingesting the same documents updates rather than duplicates.
+
+- **RAG retrieval** gives the agent factual grounding. When a question touches on topics in the knowledge base, the agent retrieves relevant chunks and cites its sources. When the knowledge base does not have relevant information, the agent says so.
+
+- **The agent loop** orchestrates everything. It is simple because complexity lives in the components. Adding new capabilities means adding new tools, not rewriting the loop.
+
+This is roughly 300 lines of Python, not counting the sample documents. That is the entire infrastructure for a knowledge-grounded conversational agent. It is not production-ready -- you would want error handling, rate limiting, better chunking strategies, reranking, and observability -- but the architecture is sound. Every production system you will see in Module 7 follows this same shape.
+
+## What Frameworks Give You
+
+You built this from scratch. It works. But look at the code and count how much of it is *your* logic versus *infrastructure plumbing*. The conversation memory class is mostly boilerplate for managing a list and calling a summarization API. The ingestion pipeline is mostly file I/O and ChromaDB wiring. The RAG tool is mostly JSON formatting. The agent loop is mostly the same tool-dispatch pattern you have written since Module 3.
+
+This is exactly the problem that **agent frameworks** solve. They provide the plumbing so you can focus on the logic. LangChain gives you `ConversationBufferMemory` and `ConversationSummaryMemory` as one-liners. LangGraph lets you define the retrieval-generation flow as a graph with built-in state management. The Anthropic SDK handles the tool-dispatch loop for you.
+
+But here is why you built it from scratch first: when `ConversationSummaryMemory` does not behave the way you expect, you now know *exactly* what it is doing underneath. When LangGraph's retrieval node returns unexpected results, you can reason about the chunking and embedding pipeline because you wrote one. When the framework's agent loop does not fit your use case, you know how to build your own because you have already done it.
+
+> **Bridge to Module 7:** You have now built every core component of an agent system by hand -- tool use (Module 3), design patterns (Module 5), and memory with RAG (this lab). Module 7 shows how frameworks like LangChain, LangGraph, the OpenAI Agents SDK, and the Anthropic Claude SDK package these same components into reusable abstractions. You will see the same patterns, the same architecture, and the same tradeoffs -- just expressed in the framework's vocabulary instead of raw Python.
+
+## Summary
+
+In this lab, you built a complete knowledge-grounded agent with two memory systems working in parallel:
+
+- **Conversation memory** with buffer and summarization tracks dialogue across turns. Older turns are compressed into a running summary, keeping the context window manageable while preserving continuity. The summary is incremental -- each compression incorporates the previous summary.
+
+- **A document ingestion pipeline** processes raw documents into a vector store. Text is split into overlapping chunks at sentence boundaries, embedded using a sentence-transformer model, and stored in ChromaDB with source metadata for citation.
+
+- **RAG retrieval as an agent tool** lets the model decide when to search the knowledge base. The tool description guides the model's retrieval decisions. Retrieved chunks flow through the same tool-use mechanism as any other tool.
+
+- **The complete agent** combines all three components in a simple loop. Conversation memory provides every-turn context. RAG provides on-demand factual grounding. The agent synthesizes both into responses that are conversational, accurate, and citable.
+
+You also saw how the two memory systems interact: conversation memory is always present, RAG is conditional, and retrieved information gradually becomes part of the conversation's summarized context.
+
+This lab concludes Module 6. You have gone from understanding why agents need memory to building a fully functional memory-augmented agent. In **Module 7: Agent Frameworks and SDKs**, you will see how production frameworks implement these same patterns -- and you will be equipped to evaluate them critically because you have built the internals yourself.

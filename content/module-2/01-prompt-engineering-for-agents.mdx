@@ -1,0 +1,262 @@
+---
+title: "Prompt Engineering for Agents"
+quiz:
+  - question: "What is the primary reason agent prompts are more complex than chatbot prompts?"
+    options:
+      - "Agents require longer prompts to produce better answers"
+      - "Agents must handle tool selection, multi-turn state, output format constraints, and error recovery within a single prompt"
+      - "Agents use a different language model than chatbots"
+      - "Agents always need few-shot examples to work correctly"
+    correctIndex: 1
+  - question: "Which section of an agent prompt defines WHAT the agent can do and HOW it should use external capabilities?"
+    options:
+      - "Role definition"
+      - "Behavioral guidelines"
+      - "Tool instructions"
+      - "Output format specification"
+    correctIndex: 2
+  - question: "Why should an agent prompt include explicit failure-handling instructions?"
+    options:
+      - "To prevent the model from generating any text when a tool fails"
+      - "To reduce the number of API calls the agent makes"
+      - "Because agents operate in loops where errors compound -- an unhandled failure in one step can derail the entire chain of subsequent actions"
+      - "Because LLMs cannot handle errors without explicit instructions"
+    correctIndex: 2
+  - question: "Which of the following is a key difference between a chatbot system prompt and an agent system prompt?"
+    options:
+      - "Chatbot prompts are written in natural language while agent prompts use code"
+      - "Agent prompts must define when to stop acting, while chatbot prompts do not need a stopping condition"
+      - "Chatbot prompts always use structured output formats"
+      - "Agent prompts never include personality or tone instructions"
+    correctIndex: 1
+---
+
+## Overview
+
+In Module 1, we built our first agent -- a calculator that uses tools to solve math problems step by step. That agent worked, but take another look at its system prompt: *"You are a calculator assistant. Use the provided tools to solve math problems step by step."* A single sentence. For a calculator, that was enough. For anything more complex, it would fall apart.
+
+**Prompt engineering for agents** is fundamentally different from prompting a chatbot or a text completion model. A chatbot prompt shapes a single response. An agent prompt shapes an entire chain of decisions -- which tools to call, in what order, how to interpret results, when to retry, and when to stop. Getting this right is the difference between an agent that reliably completes tasks and one that spirals into confused loops or produces dangerously wrong outputs.
+
+This lesson explains why agent prompting is its own discipline, introduces the anatomy of a well-structured agent prompt, and shows you how to build one. In the next lesson, we will layer on **Chain-of-Thought reasoning** to make our agents think more carefully before acting.
+
+## Why Agent Prompts Are Different
+
+When you prompt a chatbot, the interaction is simple: the user sends a message, the model responds, done. The model's job is to produce helpful, coherent text in a single turn. If the response is slightly off, the user can follow up and course-correct.
+
+An agent operates in a fundamentally different context. It runs in a **loop**, making a sequence of decisions without human intervention between steps. Each decision -- which tool to call, what arguments to pass, how to interpret the result -- builds on the previous one. A bad decision early in the chain does not just produce a poor response; it cascades, causing the agent to call the wrong tools, misinterpret results, or loop indefinitely.
+
+This means an agent prompt must do several things that a chatbot prompt never needs to worry about:
+
+- **Tool selection** -- the model must understand what tools are available and choose the right one for each step
+- **Multi-turn state management** -- the model must track what it has already done and what remains
+- **Output format constraints** -- the model must produce responses that your code can parse and route correctly
+- **Error recovery** -- the model must know what to do when a tool fails or returns unexpected results
+- **Behavioral boundaries** -- the model must know what it should *not* do, not just what it should do
+- **Stopping conditions** -- the model must know when the task is complete and it should stop acting
+
+<MermaidDiagram chart={`graph LR
+    subgraph Chatbot["Chatbot Prompt"]
+        C1["Personality & tone"]
+        C2["Knowledge boundaries"]
+        C3["Response style"]
+    end
+    subgraph Agent["Agent Prompt"]
+        A1["Role definition"]
+        A2["Tool instructions"]
+        A3["Output format"]
+        A4["Error recovery"]
+        A5["Behavioral boundaries"]
+        A6["Stopping conditions"]
+    end
+    Chatbot --- Agent
+    style Chatbot fill:#fff5f5,stroke:#fc8181
+    style Agent fill:#f0fff4,stroke:#68d391
+`} />
+
+Notice the asymmetry. A chatbot prompt has three concerns. An agent prompt has six or more. And the agent concerns are harder -- they involve reasoning about actions and their consequences, not just generating appropriate text.
+
+## The Anatomy of an Agent Prompt
+
+A well-structured agent prompt is not a wall of text. It is organized into distinct sections, each serving a specific purpose. Think of it like a job description: you would not hand someone a rambling paragraph and expect them to know exactly what to do. You would give them a role, responsibilities, procedures, and boundaries.
+
+Here are the six core sections of an agent prompt:
+
+**Role definition** tells the model who it is and what its primary mission is. This anchors every subsequent decision. A model that knows it is a "code review assistant" will make different tool choices than one told it is a "data analysis agent."
+
+**Capability boundaries** specify what the agent can and cannot do. This is where you list what tools are available (the API provides tool definitions, but the prompt gives context about *when* to use them) and what topics or domains are out of scope.
+
+**Tool instructions** explain how to use the available tools effectively. While the API's tool definitions tell the model the function signatures, the prompt provides the strategy: when to prefer one tool over another, how to chain tool calls, and what to do with ambiguous results.
+
+**Output format specification** defines how the agent should structure its responses. Should it think step-by-step before acting? Should it summarize results in a particular format? Should it use markdown, JSON, or plain text?
+
+**Behavioral guidelines** set the rules of engagement. These include safety constraints ("never delete files without confirmation"), quality standards ("always verify results before reporting"), and interaction patterns ("ask for clarification when the request is ambiguous").
+
+**Error handling instructions** tell the agent what to do when things go wrong. This is the section most people forget, and it is the one that matters most in production. Tools fail, APIs time out, and data is malformed. Without explicit recovery instructions, the agent will either hallucinate a result or loop endlessly.
+
+## A Side-by-Side Comparison
+
+Let's make the difference concrete. Here is the same task -- helping a user query a database -- with a chatbot prompt and an agent prompt.
+
+<CodeBlock code={`# Chatbot prompt: simple, conversational
+CHATBOT_PROMPT = """You are a helpful database assistant.
+You know about SQL and can help users write queries.
+Be friendly and explain your reasoning."""
+`} language="python" filename="chatbot_prompt.py" />
+
+This works fine for a chatbot. The user asks "How do I join two tables?", the model explains JOINs. But this prompt would fail catastrophically for an agent that actually *executes* queries. It says nothing about which tools to use, how to handle errors, or when to stop.
+
+<CodeBlock code={`# Agent prompt: structured, operational
+AGENT_PROMPT = """You are a database query agent. Your mission is to
+help users retrieve information from a PostgreSQL database by writing
+and executing SQL queries on their behalf.
+
+## Available Tools
+- query_database: Executes a read-only SQL query and returns results.
+  Use this for SELECT statements only.
+- list_tables: Returns the names of all tables in the database.
+  Call this FIRST if the user's request does not specify a table.
+- describe_table: Returns the schema (columns, types) of a table.
+  Call this before writing queries against unfamiliar tables.
+
+## Procedure
+1. If the user's request is ambiguous, ask for clarification.
+2. If you do not know the table schema, call describe_table first.
+3. Write a SELECT query. NEVER use INSERT, UPDATE, DELETE, or DROP.
+4. Execute the query using query_database.
+5. If the query returns an error, analyze the error message, fix the
+   query, and retry once. If it fails again, report the error.
+6. Present results in a clear, readable format.
+
+## Constraints
+- NEVER modify data. You have read-only access.
+- NEVER expose raw connection strings or credentials in responses.
+- Limit result sets to 100 rows. If more exist, inform the user.
+- If a query would take longer than 30 seconds, warn the user first.
+
+## When You Are Done
+Once you have presented the query results and the user's question is
+fully answered, summarize what you found and ask if they need anything
+else. Do NOT continue executing queries after the answer is complete."""
+`} language="python" filename="agent_prompt.py" />
+
+The difference is stark. The agent prompt is longer, but every section earns its place. Remove the procedure section and the agent might query before checking the schema. Remove the constraints and it might run destructive queries. Remove the error handling and a single typo in a query could crash the loop.
+
+## Building a Prompt: The Research Agent Example
+
+Let's walk through constructing an agent prompt from scratch for a more realistic scenario: a research agent that searches the web and summarizes findings. This example shows how each section works together.
+
+<CodeBlock code={`RESEARCH_AGENT_PROMPT = """You are a research assistant agent.
+Your goal is to help users find accurate, well-sourced answers to
+their questions by searching the web and synthesizing information
+from multiple sources.
+
+## Tools
+You have access to the following tools:
+
+- web_search(query: str) -> list[SearchResult]
+  Searches the web and returns a list of results with titles, URLs,
+  and snippets. Use specific, targeted queries. If your first search
+  does not return relevant results, reformulate and try again with
+  different keywords.
+
+- fetch_page(url: str) -> str
+  Retrieves the full text content of a web page. Use this to read
+  promising search results in detail. Only fetch pages that appear
+  directly relevant from their search snippet.
+
+## Procedure
+1. Analyze the user's question. Identify the key claims or facts
+   that need to be verified or researched.
+2. Formulate 1-3 targeted search queries. Prefer specific terms
+   over broad ones.
+3. Review the search results. Select the 2-4 most relevant pages.
+4. Fetch and read the selected pages.
+5. Synthesize your findings. Cross-reference claims across sources.
+6. Present your answer with inline citations: [Source Title](URL).
+
+## Error Handling
+- If web_search returns no results, reformulate with broader terms
+  and retry. After 3 failed searches, tell the user you could not
+  find relevant information.
+- If fetch_page fails (timeout, 404, paywall), skip that source
+  and note it was unavailable. Do NOT fabricate content from a
+  page you could not read.
+- If sources contradict each other, present both perspectives and
+  note the disagreement.
+
+## Constraints
+- Cite every factual claim. Never present information without a
+  source URL.
+- Do NOT make up URLs or citations. Only cite pages you actually
+  fetched and read.
+- Distinguish clearly between facts and your own analysis.
+- If you cannot find reliable sources, say so honestly rather than
+  speculating.
+
+## Completion
+When you have synthesized information from at least 2 sources and
+addressed all parts of the user's question, present your findings
+and stop. Do not continue searching after you have a well-sourced
+answer."""
+`} language="python" filename="research_agent_prompt.py" />
+
+Notice the patterns:
+
+- The **role** is one sentence that establishes the mission.
+- **Tool instructions** go beyond the API schema -- they include usage strategy ("Use specific, targeted queries") and chaining advice ("reformulate and try again").
+- The **procedure** is numbered, giving the model a clear decision sequence.
+- **Error handling** covers three specific failure modes with concrete recovery actions.
+- **Constraints** are stated as absolute rules with "NEVER" and "Do NOT."
+- The **completion** section tells the model exactly when to stop.
+
+## Common Prompt Engineering Mistakes for Agents
+
+Even experienced engineers make these mistakes when writing agent prompts. Each one seems minor but can cause significant failures in a multi-step execution loop.
+
+**Missing stopping conditions.** Without explicit instructions about when the task is complete, agents tend to keep acting -- running extra searches, making unnecessary API calls, or looping back to re-verify work they have already done. Always include a "when you are done" section.
+
+**Vague tool instructions.** Telling the model "use the available tools" is like telling a new employee "use the office equipment." They need to know *which* tool for *which* situation, and what to do when a tool's output is ambiguous.
+
+**No error recovery path.** In a chatbot, a failed response is mildly annoying. In an agent, a failed tool call without a recovery plan means the agent either hallucinates a result (dangerous) or enters an infinite retry loop (expensive). Always specify what to do when things go wrong.
+
+**Over-constraining the model.** The opposite mistake is also common. If your prompt is so prescriptive that the model cannot exercise judgment, you have built a rigid script, not an agent. The goal is to set boundaries while leaving room for the model to reason about novel situations.
+
+> **Key takeaway:** A good agent prompt balances structure with flexibility. It provides clear procedures for common cases and clear principles for novel ones.
+
+## Prompt Structure as a Design Pattern
+
+You can think of the six-section agent prompt as a **design pattern** -- a reusable template that you adapt to each new agent. Here is the pattern:
+
+<MermaidDiagram chart={`graph TD
+    A["Role Definition<br/>Who you are and your mission"] --> B["Capability Boundaries<br/>What you can and cannot do"]
+    B --> C["Tool Instructions<br/>How and when to use each tool"]
+    C --> D["Output Format<br/>How to structure responses"]
+    D --> E["Behavioral Guidelines<br/>Rules, constraints, safety"]
+    E --> F["Error Handling & Completion<br/>Recovery paths and stopping conditions"]
+    style A fill:#ebf8ff,stroke:#3182ce
+    style B fill:#ebf8ff,stroke:#3182ce
+    style C fill:#e6fffa,stroke:#38b2ac
+    style D fill:#e6fffa,stroke:#38b2ac
+    style E fill:#fefcbf,stroke:#d69e2e
+    style F fill:#fefcbf,stroke:#d69e2e
+`} />
+
+The first two sections (blue) establish **identity** -- who the agent is and what it is scoped to do. The middle two (teal) define **operations** -- how the agent acts in the world. The last two (yellow) set **guardrails** -- what keeps the agent safe and efficient. In the upcoming lesson on System Prompt Design, we will dive much deeper into each of these layers and explore advanced patterns like dynamic prompt assembly and context-dependent instructions.
+
+## From Prompting to Reasoning
+
+The prompts we have built so far tell the agent *what to do* and *how to do it*. But they do not explicitly tell it *how to think*. Consider a complex request like "Find the most cost-effective cloud provider for a startup running ML workloads." An agent with a good prompt will know to search the web and compare options. But will it think through the comparison systematically, or just grab the first answer it finds?
+
+This is where **reasoning techniques** come in. In the next lesson, we will explore **Chain-of-Thought reasoning** -- a prompting approach that instructs the model to break complex problems into explicit intermediate steps before deciding on an action. Combined with the structured prompt patterns from this lesson, Chain-of-Thought transforms an agent from a simple tool-caller into a genuine problem-solver.
+
+## Summary
+
+Agent prompting is a distinct discipline from chatbot or completion prompting. The key differences stem from the fact that agents operate in **loops**, making chains of decisions where each step builds on the last:
+
+- **Chatbot prompts** shape a single response. **Agent prompts** shape an entire decision process.
+- A well-structured agent prompt has six sections: **role definition**, **capability boundaries**, **tool instructions**, **output format**, **behavioral guidelines**, and **error handling with completion criteria**.
+- The most common mistakes are missing stopping conditions, vague tool instructions, and no error recovery path.
+- Good agent prompts balance structure (clear procedures for common cases) with flexibility (clear principles for novel situations).
+- Think of the six-section prompt as a **design pattern** -- a reusable template you adapt for each new agent you build.
+
+The prompt is the most important lever you have over agent behavior. In the lessons ahead, we will build on this foundation with Chain-of-Thought reasoning, structured outputs, and advanced system prompt design to give you a complete toolkit for steering agents through complex tasks.

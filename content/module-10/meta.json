@@ -1,0 +1,62 @@
+{
+  "id": 10,
+  "title": "Evaluation & Testing",
+  "description": "Measuring agent quality, building test suites, and establishing confidence in agent behavior",
+  "color": "#68d391",
+  "lessons": [
+    {
+      "slug": "01-why-evaluation-matters",
+      "title": "Why Evaluation Matters",
+      "description": "The unique challenges of evaluating non-deterministic, multi-step agent systems",
+      "estimatedMinutes": 10,
+      "diagramTypes": ["architecture", "comparison"],
+      "hasCode": false,
+      "hasQuiz": true
+    },
+    {
+      "slug": "02-agent-benchmarks",
+      "title": "Agent Benchmarks",
+      "description": "SWE-Bench, GAIA, WebArena, and other benchmarks for measuring agent capability",
+      "estimatedMinutes": 10,
+      "diagramTypes": ["comparison"],
+      "hasCode": false,
+      "hasQuiz": true
+    },
+    {
+      "slug": "03-testing-strategies",
+      "title": "Testing Strategies for Agents",
+      "description": "Unit testing tools, integration testing loops, and end-to-end agent evaluation",
+      "estimatedMinutes": 12,
+      "diagramTypes": ["flowchart", "architecture"],
+      "hasCode": true,
+      "hasQuiz": true
+    },
+    {
+      "slug": "04-llm-as-judge",
+      "title": "LLM-as-Judge Evaluation",
+      "description": "Using LLMs to evaluate agent outputs: rubrics, pairwise comparison, and calibration",
+      "estimatedMinutes": 12,
+      "diagramTypes": ["flowchart", "sequence"],
+      "hasCode": true,
+      "hasQuiz": true
+    },
+    {
+      "slug": "05-tracing-and-debugging",
+      "title": "Tracing and Debugging Agents",
+      "description": "Tracing multi-step agent runs, identifying failure modes, and debugging strategies",
+      "estimatedMinutes": 12,
+      "diagramTypes": ["sequence", "flowchart"],
+      "hasCode": true,
+      "hasQuiz": true
+    },
+    {
+      "slug": "06-evaluation-lab",
+      "title": "Evaluation Lab",
+      "description": "Hands-on: build an evaluation harness with automated scoring and regression detection",
+      "estimatedMinutes": 15,
+      "diagramTypes": ["architecture"],
+      "hasCode": true,
+      "hasQuiz": false
+    }
+  ]
+}

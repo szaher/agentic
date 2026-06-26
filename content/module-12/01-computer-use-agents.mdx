@@ -1,0 +1,536 @@
+---
+title: "Computer Use Agents"
+quiz:
+  - question: "What is the primary feedback mechanism a computer use agent relies on to determine whether its action succeeded?"
+    options:
+      - "Parsing the application's source code after each action"
+      - "Listening for OS-level accessibility events"
+      - "Taking a screenshot after each action and analyzing it with a vision model"
+      - "Reading the application's log files for state changes"
+    correctIndex: 2
+  - question: "Why must computer use agents run inside a sandboxed environment such as a Docker container or virtual machine?"
+    options:
+      - "Sandboxing reduces the token cost of each API call"
+      - "The agent has autonomous control over mouse and keyboard, so sandboxing prevents it from accessing sensitive data or performing destructive actions on the host system"
+      - "The vision model requires a GPU that is only available inside containers"
+      - "Marp presentation slides can only be rendered in sandboxed browsers"
+    correctIndex: 1
+  - question: "In Claude's computer use API, what information does the model return when it decides to perform a mouse click?"
+    options:
+      - "A CSS selector identifying the target element"
+      - "A tool_use block specifying the computer tool with action type, coordinates, and optional button"
+      - "A natural language description of where to click, which the client must parse"
+      - "An accessibility tree node ID from the operating system"
+    correctIndex: 1
+  - question: "Which coordinate system does Claude's computer use tool expect for specifying click and cursor positions?"
+    options:
+      - "Percentage-based coordinates relative to the viewport (0.0 to 1.0)"
+      - "CSS pixel coordinates matching the browser's devicePixelRatio"
+      - "Absolute pixel coordinates relative to the top-left corner of the screenshot resolution provided"
+      - "Row and column indices from a grid overlay drawn on the screenshot"
+    correctIndex: 2
+---
+
+## Overview
+
+Your agent is production-ready -- Module 11 gave you the deployment infrastructure, reliability patterns, guardrails, and monitoring to run agents at scale. But so far, every agent you have built interacts with the world through **APIs and structured tool calls**. What happens when the system you need to automate does not have an API? What if the only interface is a graphical user interface -- a web form, a desktop application, a legacy system with no programmatic access?
+
+**Computer use agents** solve this problem by interacting with software the same way a human does: they look at the screen, decide where to click, type text, scroll, and then verify the result by looking again. Instead of calling a REST endpoint, the agent takes a screenshot, reasons about what it sees, and issues mouse and keyboard commands. This is the most general form of tool use -- any software a human can operate, a computer use agent can operate too.
+
+This lesson builds on the multi-modal tool use foundations from Module 8 Lesson 6, where you learned how agents capture screenshots and send them to vision models. Here, you will go much further: instead of passively analyzing screenshots, the agent will actively **drive** the interface -- clicking buttons, filling forms, navigating menus, and verifying outcomes in a closed loop.
+
+By the end of this lesson, you will understand the architecture of computer use agents, know how to use Claude's computer use API, and have built a working agent that can navigate a GUI autonomously.
+
+## The Computer Use Agent Pipeline
+
+A computer use agent operates in a continuous **observe-plan-act-verify** loop. Unlike API-based agents that send a request and parse a response, computer use agents must perceive the visual state of the environment after every action, because the screen is the only source of truth.
+
+<MermaidDiagram chart={`graph TD
+    Start["Task Instruction"] --> Capture["1. Screenshot Capture<br/>Grab current screen state"]
+    Capture --> Vision["2. Vision Analysis<br/>LLM interprets the screenshot"]
+    Vision --> Plan["3. Action Planning<br/>Decide next mouse/keyboard action"]
+    Plan --> Execute["4. Action Execution<br/>Perform click, type, scroll, or keypress"]
+    Execute --> Wait["5. Wait for UI Update<br/>Brief pause for rendering"]
+    Wait --> Verify["6. Verification Screenshot<br/>Capture new screen state"]
+    Verify --> Check{"Task<br/>Complete?"}
+    Check -->|"No"| Vision
+    Check -->|"Yes"| Result["Return Result"]
+    Check -->|"Error detected"| Recovery["Error Recovery<br/>Retry or alternate path"]
+    Recovery --> Capture
+
+    subgraph Loop["Agent Control Loop"]
+        Capture
+        Vision
+        Plan
+        Execute
+        Wait
+        Verify
+        Check
+    end
+
+    style Loop fill:#ebf8ff,stroke:#3182ce,stroke-width:2px
+    style Vision fill:#e9d8fd,stroke:#805ad5
+    style Execute fill:#fefcbf,stroke:#d69e2e
+    style Check fill:#fed7d7,stroke:#c53030
+    style Recovery fill:#fed7e2,stroke:#d53f8c
+    style Result fill:#c6f6d5,stroke:#38a169
+`} />
+
+Each step in the pipeline has a specific responsibility:
+
+- **Screenshot capture** grabs the current pixel state of the screen or a specific window, encoding it as a PNG image
+- **Vision analysis** sends the screenshot to a vision-capable LLM, which interprets the UI elements -- buttons, text fields, menus, error messages, and layout
+- **Action planning** is where the LLM decides what to do next based on the task goal and the current visual state
+- **Action execution** translates the LLM's decision into a physical input -- a mouse click at specific coordinates, a keyboard sequence, or a scroll action
+- **Verification** captures a new screenshot to confirm the action had the intended effect, closing the feedback loop
+
+The critical insight is that this loop is **self-correcting**. If the agent clicks the wrong button, the verification screenshot reveals the unexpected state, and the agent can reason about what went wrong and try a different approach.
+
+## Claude's Computer Use API
+
+Claude provides a dedicated **computer use tool** that gives the model direct control over a computer's mouse and keyboard. Instead of you defining custom tools for each action, the model uses a built-in `computer` tool type that supports a rich set of actions.
+
+The computer use tool works through a structured conversation:
+
+1. You send a screenshot to Claude as an image content block
+2. Claude responds with a `tool_use` block specifying an action (click, type, scroll, etc.) with exact coordinates
+3. Your code executes that action on the actual screen
+4. You capture a new screenshot and send it back as the `tool_result`
+5. Claude sees the result and decides the next action
+
+Here is how the interaction flows at the API level:
+
+<MermaidDiagram chart={`sequenceDiagram
+    participant User as Your Application
+    participant Claude as Claude API
+    participant Screen as Computer Screen
+
+    User->>Screen: Capture initial screenshot
+    Screen-->>User: Screenshot PNG (base64)
+    User->>Claude: Message with task + screenshot image block
+    
+    Claude-->>User: tool_use: computer (action=click, x=450, y=320)
+    User->>Screen: Execute mouse click at (450, 320)
+    User->>Screen: Capture new screenshot
+    Screen-->>User: Updated screenshot PNG
+    User->>Claude: tool_result with new screenshot
+    
+    Claude-->>User: tool_use: computer (action=type, text="user@example.com")
+    User->>Screen: Type text into focused field
+    User->>Screen: Capture new screenshot
+    Screen-->>User: Updated screenshot PNG
+    User->>Claude: tool_result with new screenshot
+
+    Claude-->>User: tool_use: computer (action=click, x=500, y=400)
+    User->>Screen: Execute click on Submit button
+    User->>Screen: Capture new screenshot
+    Screen-->>User: Confirmation page screenshot
+    User->>Claude: tool_result with new screenshot
+
+    Claude-->>User: Final text response: "Form submitted successfully"
+`} />
+
+The sequence diagram shows a concrete example: the agent fills out a web form by clicking an email field, typing an address, and clicking a submit button. Each action is followed by a screenshot that feeds back into the next decision.
+
+## Action Types and Coordinate Systems
+
+The computer use tool supports several **action types**, each corresponding to a different kind of input:
+
+- **click** -- move the cursor to `(x, y)` and click. Supports `left`, `right`, and `middle` button options, plus single, double, and triple click variants
+- **type** -- send a sequence of keystrokes as if typed on the keyboard. Used for filling text fields
+- **key** -- press a specific key or key combination, such as `Return`, `Tab`, `ctrl+a`, or `ctrl+c`. Essential for keyboard shortcuts and form navigation
+- **scroll** -- scroll up or down at the current cursor position or at specified coordinates. Defined by direction and amount
+- **screenshot** -- request a fresh screenshot without performing any other action. Used when the agent wants to observe without acting
+- **cursor_position** -- return the current cursor coordinates without moving it
+- **mouse_move** -- move the cursor to specified coordinates without clicking
+
+All positional actions use **absolute pixel coordinates** measured from the top-left corner of the screen. The coordinate system matches the resolution of the screenshot you provide. If you capture a 1280x800 screenshot, then `(0, 0)` is the top-left pixel and `(1279, 799)` is the bottom-right pixel. This means you must ensure the screenshots you send to Claude match the actual display resolution -- if you downscale screenshots, the coordinates Claude returns will not map correctly to the real screen.
+
+> **Key takeaway:** The coordinate system is anchored to the screenshot resolution. Always send screenshots at the same resolution as the display the agent is controlling, or apply a consistent scaling factor to the coordinates Claude returns.
+
+## Building a Computer Use Agent
+
+Now let us build a working computer use agent using Claude's API. The agent will operate in the observe-plan-act loop described above. This implementation handles the core mechanics: capturing screenshots, sending them to Claude, executing the returned actions, and looping until the task is complete.
+
+<CodeBlock code={`import anthropic
+import base64
+import subprocess
+import time
+from dataclasses import dataclass
+
+
+@dataclass
+class ScreenConfig:
+    """Configuration for the screen the agent controls."""
+    width: int = 1280
+    height: int = 800
+    display_number: int = 1  # X11 display number for virtual displays
+
+
+def capture_screenshot(config: ScreenConfig) -> str:
+    """Capture a screenshot and return it as a base64-encoded PNG string.
+    
+    In production, this would capture from a virtual display (Xvfb)
+    running inside a Docker container.
+    """
+    filepath = "/tmp/agent_screenshot.png"
+    
+    # Use scrot for X11-based capture (works in Docker with Xvfb)
+    subprocess.run(
+        ["scrot", "--display", f":{config.display_number}", filepath],
+        check=True,
+        timeout=5,
+    )
+    
+    with open(filepath, "rb") as f:
+        return base64.standard_b64encode(f.read()).decode("utf-8")
+
+
+def execute_action(action: dict, config: ScreenConfig) -> None:
+    """Execute a computer use action using xdotool.
+    
+    Translates Claude's action specification into actual
+    mouse/keyboard commands on the controlled display.
+    """
+    action_type = action.get("action")
+    display_env = {"DISPLAY": f":{config.display_number}"}
+    
+    if action_type == "click":
+        x, y = action["coordinate"]
+        button_map = {"left": "1", "right": "3", "middle": "2"}
+        button = button_map.get(action.get("button", "left"), "1")
+        
+        # Move mouse and click
+        subprocess.run(
+            ["xdotool", "mousemove", str(x), str(y)],
+            env=display_env, check=True,
+        )
+        subprocess.run(
+            ["xdotool", "click", button],
+            env=display_env, check=True,
+        )
+    
+    elif action_type == "double_click":
+        x, y = action["coordinate"]
+        subprocess.run(
+            ["xdotool", "mousemove", str(x), str(y)],
+            env=display_env, check=True,
+        )
+        subprocess.run(
+            ["xdotool", "click", "--repeat", "2", "1"],
+            env=display_env, check=True,
+        )
+    
+    elif action_type == "type":
+        text = action["text"]
+        subprocess.run(
+            ["xdotool", "type", "--clearmodifiers", text],
+            env=display_env, check=True,
+        )
+    
+    elif action_type == "key":
+        key = action["key"]
+        # xdotool uses different key names, map common ones
+        key_map = {"Return": "Return", "Tab": "Tab", "Escape": "Escape"}
+        xdo_key = key_map.get(key, key)
+        subprocess.run(
+            ["xdotool", "key", xdo_key],
+            env=display_env, check=True,
+        )
+    
+    elif action_type == "scroll":
+        x, y = action["coordinate"]
+        direction = action["direction"]
+        amount = action["amount"]
+        subprocess.run(
+            ["xdotool", "mousemove", str(x), str(y)],
+            env=display_env, check=True,
+        )
+        # xdotool: button 4 = scroll up, button 5 = scroll down
+        scroll_button = "4" if direction == "up" else "5"
+        subprocess.run(
+            ["xdotool", "click", "--repeat", str(amount), scroll_button],
+            env=display_env, check=True,
+        )
+    
+    elif action_type == "mouse_move":
+        x, y = action["coordinate"]
+        subprocess.run(
+            ["xdotool", "mousemove", str(x), str(y)],
+            env=display_env, check=True,
+        )
+    
+    elif action_type == "screenshot":
+        # No physical action needed -- the caller will capture a screenshot
+        pass
+    
+    else:
+        raise ValueError(f"Unknown action type: {action_type}")
+`} language="python" filename="computer_use_core.py" />
+
+This module handles the two lowest-level responsibilities: capturing what is on the screen and translating Claude's action specifications into real input events. The `execute_action` function uses **xdotool**, a standard Linux tool for simulating keyboard and mouse input on X11 displays. In a production setup, the agent runs inside a Docker container with a virtual display (Xvfb), so these commands control a headless desktop environment that is completely isolated from the host machine.
+
+Now let us build the agent loop that ties everything together:
+
+<CodeBlock code={`import anthropic
+import base64
+import time
+from computer_use_core import ScreenConfig, capture_screenshot, execute_action
+
+
+class ComputerUseAgent:
+    """An agent that controls a computer through screenshots and actions.
+    
+    Uses Claude's computer use tool to observe the screen, plan actions,
+    and execute them in a closed loop until the task is complete.
+    """
+    
+    def __init__(
+        self,
+        model: str = "claude-sonnet-4-20250514",
+        max_steps: int = 50,
+        action_delay: float = 1.0,
+    ):
+        self.client = anthropic.Anthropic()
+        self.model = model
+        self.max_steps = max_steps
+        self.action_delay = action_delay
+        self.config = ScreenConfig()
+    
+    def run(self, task: str) -> str:
+        """Execute a task by controlling the computer.
+        
+        Args:
+            task: Natural language description of what to accomplish.
+                  Example: "Open Firefox, go to example.com, and fill
+                  out the contact form with name 'Jane Doe' and
+                  email 'jane@example.com', then submit it."
+        
+        Returns:
+            The agent's final summary of what it accomplished.
+        """
+        # Define the computer use tool for Claude
+        tools = [
+            {
+                "type": "computer_20250124",
+                "name": "computer",
+                "display_width_px": self.config.width,
+                "display_height_px": self.config.height,
+                "display_number": self.config.display_number,
+            }
+        ]
+        
+        # Start the conversation with the task and initial screenshot
+        initial_screenshot = capture_screenshot(self.config)
+        
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": task,
+                    },
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": "image/png",
+                            "data": initial_screenshot,
+                        },
+                    },
+                ],
+            }
+        ]
+        
+        # Agent loop: observe -> plan -> act -> verify
+        for step in range(self.max_steps):
+            print(f"\\n--- Step {step + 1}/{self.max_steps} ---")
+            
+            response = self.client.messages.create(
+                model=self.model,
+                max_tokens=4096,
+                tools=tools,
+                messages=messages,
+                betas=["computer-use-2025-01-24"],
+            )
+            
+            # Check if the model is done (no more tool calls)
+            if response.stop_reason == "end_turn":
+                final_text = ""
+                for block in response.content:
+                    if hasattr(block, "text"):
+                        final_text += block.text
+                print(f"\\nTask complete: {final_text[:200]}")
+                return final_text
+            
+            # Process each content block in the response
+            tool_results = []
+            assistant_content = response.content
+            
+            for block in assistant_content:
+                if block.type == "text":
+                    print(f"Agent thinking: {block.text[:150]}")
+                
+                elif block.type == "tool_use":
+                    print(f"Action: {block.input.get('action')} "
+                          f"at {block.input.get('coordinate', 'N/A')}")
+                    
+                    # Execute the action on the real screen
+                    try:
+                        execute_action(block.input, self.config)
+                    except Exception as e:
+                        print(f"Action failed: {e}")
+                    
+                    # Wait for the UI to update after the action
+                    time.sleep(self.action_delay)
+                    
+                    # Capture the result screenshot
+                    result_screenshot = capture_screenshot(self.config)
+                    
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": [
+                            {
+                                "type": "image",
+                                "source": {
+                                    "type": "base64",
+                                    "media_type": "image/png",
+                                    "data": result_screenshot,
+                                },
+                            }
+                        ],
+                    })
+            
+            # Add the assistant's response and tool results to the conversation
+            messages.append({"role": "assistant", "content": assistant_content})
+            messages.append({"role": "user", "content": tool_results})
+        
+        return "Max steps reached without completing the task."
+
+
+# --- Usage example ---
+
+if __name__ == "__main__":
+    agent = ComputerUseAgent(max_steps=30)
+    
+    result = agent.run(
+        "Open the web browser, navigate to the internal HR portal at "
+        "http://localhost:8080/leave-request, fill out a vacation request "
+        "for July 14-18, and submit the form."
+    )
+    
+    print(f"\\nFinal result: {result}")
+`} language="python" filename="computer_use_agent.py" />
+
+The `ComputerUseAgent` class encapsulates the full observe-plan-act-verify loop. A few implementation details are worth noting:
+
+- **The `betas` parameter** enables computer use capabilities. The `"computer-use-2025-01-24"` beta identifier activates the computer use tool type, which is distinct from regular tool definitions
+- **The tool definition** uses `type: "computer_20250124"` instead of the usual `"custom"` type. You specify the display dimensions so Claude knows the coordinate space
+- **The `action_delay`** gives the UI time to render after each action. Without this pause, the verification screenshot might capture a partially-rendered state
+- **Message threading** preserves the full conversation history, so Claude can reason about previous actions and their outcomes when deciding what to do next
+- **The `max_steps` limit** prevents runaway loops. In production, you would combine this with a token budget and a wall-clock timeout
+
+## Safety and Sandboxing
+
+Computer use agents are fundamentally different from API-based agents in their **risk profile**. An API-based agent can only do what its tools allow. A computer use agent can do anything a human can do with a mouse and keyboard -- including accessing sensitive files, sending emails, or modifying system settings. This makes **sandboxing** not just a best practice, but a hard requirement.
+
+The standard sandboxing approach uses a Docker container with a virtual display:
+
+<CodeBlock code={`# Dockerfile for a sandboxed computer use environment
+
+FROM ubuntu:22.04
+
+# Install virtual display and desktop environment
+RUN apt-get update && apt-get install -y \\
+    xvfb \\
+    x11vnc \\
+    xdotool \\
+    scrot \\
+    fluxbox \\
+    firefox \\
+    python3 \\
+    python3-pip \\
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python dependencies
+COPY requirements.txt /app/requirements.txt
+RUN pip3 install -r /app/requirements.txt
+
+# Copy agent code
+COPY . /app
+WORKDIR /app
+
+# Set up the virtual display
+ENV DISPLAY=:1
+ENV SCREEN_WIDTH=1280
+ENV SCREEN_HEIGHT=800
+
+# Start script: launch Xvfb, window manager, then the agent
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+ENTRYPOINT ["/entrypoint.sh"]
+`} language="dockerfile" filename="Dockerfile" />
+
+<CodeBlock code={`#!/bin/bash
+# entrypoint.sh -- Start the virtual display and run the agent
+
+# Launch virtual framebuffer (headless X11 display)
+Xvfb :1 -screen 0 \${SCREEN_WIDTH}x\${SCREEN_HEIGHT}x24 &
+sleep 1
+
+# Start a minimal window manager (needed for proper window handling)
+fluxbox &
+sleep 1
+
+# Optionally start VNC for debugging (view what the agent sees)
+x11vnc -display :1 -nopw -forever -shared &
+
+# Run the agent
+exec python3 /app/computer_use_agent.py "$@"
+`} language="bash" filename="entrypoint.sh" />
+
+Beyond container isolation, production computer use agents should implement additional safety layers:
+
+- **Action allowlists** -- restrict the agent to specific applications or URL domains. If the agent tries to open a terminal or navigate to an unauthorized site, block the action
+- **Sensitive area masking** -- overlay opaque blocks over regions of the screen that contain sensitive information (passwords, API keys, personal data) before sending screenshots to the model
+- **Action rate limiting** -- cap the number of actions per minute to prevent the agent from executing rapid sequences that could cause damage before a human can intervene
+- **Human-in-the-loop checkpoints** -- pause and request human approval before irreversible actions like form submissions, purchases, or file deletions
+- **Session recording** -- save every screenshot and action for audit trails. This is essential for debugging, compliance, and understanding agent behavior after the fact
+
+> **Warning:** Never run a computer use agent on your host operating system without sandboxing. Always use a container, virtual machine, or dedicated sandbox environment. The agent has full control over whatever display it can see -- treat it like giving an untrusted program full access to your desktop.
+
+## Practical Challenges
+
+Building reliable computer use agents involves several challenges that do not arise with API-based agents:
+
+**Coordinate accuracy** is the most common failure mode. The model must map visual elements to exact pixel coordinates. Small errors -- clicking 20 pixels too far left -- can miss a button entirely or click the wrong element. Larger screenshots (higher resolution) generally improve coordinate accuracy because UI elements occupy more pixels, but they also increase token cost.
+
+**Dynamic UIs** create unpredictability. Animations, loading spinners, pop-up dialogs, and auto-complete dropdowns can all change the screen state between the moment Claude analyzes a screenshot and the moment the action executes. The `action_delay` parameter helps, but fast-changing UIs may require multiple screenshot captures to confirm a stable state.
+
+**Multi-step form navigation** requires the agent to maintain context across many turns. A 10-field form might require 30+ steps (click field, type value, tab to next field, repeat). Each step consumes tokens for the screenshot analysis, so long tasks can become expensive. Efficient agents learn to use keyboard shortcuts like `Tab` to navigate forms instead of clicking each field individually.
+
+**Error recovery** is where computer use agents either shine or fail. When something unexpected happens -- a modal dialog appears, the page redirects, or a field validation error shows up -- the agent must recognize the deviation from its plan, interpret the new state, and adapt. This requires strong visual reasoning and the ability to abandon a failing approach.
+
+## When to Use Computer Use Agents
+
+Computer use agents are powerful but expensive in terms of latency, token cost, and complexity. Use them when the alternatives are worse:
+
+- **Legacy systems** with no API and no ability to add one -- mainframe terminals, old desktop applications, vendor-locked SaaS tools
+- **Cross-application workflows** that span multiple applications, each with different interfaces -- copying data from a spreadsheet into a web form, then generating a report in another tool
+- **Testing and QA** where you need to verify the visual appearance and interactive behavior of a UI, not just its API responses
+- **Accessibility automation** where the goal is to interact with software exactly as a human user would, including screen readers and adaptive interfaces
+
+For tasks where a clean API exists, always prefer the API. Computer use is the tool of last resort -- the most general but also the most expensive and error-prone approach to automation.
+
+## Summary
+
+Computer use agents represent the most general form of software automation: instead of requiring APIs or structured interfaces, they interact with any GUI by observing screenshots and issuing mouse and keyboard commands. The **observe-plan-act-verify** loop gives these agents the ability to self-correct when actions have unexpected results, making them robust enough for real-world tasks.
+
+Claude's computer use API provides the model with a built-in `computer` tool that supports clicking, typing, scrolling, and key presses at precise pixel coordinates. The coordinate system is anchored to the screenshot resolution, so the display dimensions you configure must match the screenshots you capture.
+
+Safety is non-negotiable for computer use agents. Because they can do anything a human can do with a mouse and keyboard, they must run inside sandboxed environments -- Docker containers with virtual displays -- and should include action allowlists, sensitive area masking, and human-in-the-loop checkpoints for irreversible actions.
+
+In the next lesson, you will explore **coding agents** -- a specialized class of agents that use similar autonomy to write, test, and debug code, but with domain-specific tools and safety considerations that differ from general-purpose computer use.

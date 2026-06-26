@@ -1,0 +1,255 @@
+---
+title: "When to Use Agents"
+quiz:
+  - question: "A user wants to translate a paragraph from English to French. Which approach is most appropriate?"
+    options:
+      - "A multi-agent system with a translator agent and a reviewer agent"
+      - "A single LLM call with a translation prompt"
+      - "A ReAct agent with a dictionary tool"
+      - "A prompt chain with three sequential LLM calls"
+    correctIndex: 1
+  - question: "Which of the following is a genuine risk of using an agent when a simpler approach would suffice?"
+    options:
+      - "The agent will always produce lower-quality output than a single prompt"
+      - "Agents cannot use tools, so they are limited to text generation"
+      - "Agents add latency, cost, and unpredictability that may not be justified for simple tasks"
+      - "Agents require multi-GPU clusters to run"
+    correctIndex: 2
+  - question: "What is the FIRST question to ask in the agent decision framework?"
+    options:
+      - "How many tools does the task require?"
+      - "Can this task be solved with a single, well-crafted prompt?"
+      - "Which agent framework should I use?"
+      - "Does the task require multiple agents?"
+    correctIndex: 1
+  - question: "Which scenario is the BEST fit for an agentic approach?"
+    options:
+      - "Generating a product description from a list of features"
+      - "Summarizing a single document into three bullet points"
+      - "Investigating a production outage by querying logs, checking metrics, testing hypotheses, and proposing a fix"
+      - "Converting a JSON payload to YAML format"
+    correctIndex: 2
+---
+
+## Overview
+
+You have spent the first six lessons of this module building a mental model of what agents are, how they work, and what the ecosystem looks like. You even built one from scratch. Now comes the question that separates thoughtful engineers from hype-driven ones: **when should you actually use an agent?**
+
+Not every problem needs an agent. In fact, most do not. Reaching for an agentic architecture when a single well-crafted prompt would suffice is one of the most common -- and most expensive -- mistakes in applied AI today. Agents add power, but they also add latency, cost, complexity, and unpredictability.
+
+This lesson gives you a practical **decision framework** for choosing the right level of complexity for any given task. By the end, you will be able to look at a problem and confidently say: "This needs an agent," "This needs a prompt chain," or "This is just a single LLM call."
+
+> Think of this lesson as the engineering judgment layer on top of everything you have learned so far. Knowing how to build an agent is necessary. Knowing when *not* to build one is wisdom.
+
+## The Spectrum of LLM Applications
+
+LLM-powered applications are not binary -- "agent" or "not agent." They exist on a **spectrum of complexity**, where each level adds capabilities and costs. Understanding this spectrum is the foundation of good architectural decisions.
+
+<MermaidDiagram chart={`graph LR
+    A["Single Prompt<br/><i>One call, one response</i>"] --> B["Prompt Chain<br/><i>Sequenced LLM calls</i>"]
+    B --> C["RAG Pipeline<br/><i>Retrieve then generate</i>"]
+    C --> D["Tool-Using Agent<br/><i>Dynamic tool calls</i>"]
+    D --> E["Reasoning Agent<br/><i>Multi-step, adaptive</i>"]
+    E --> F["Multi-Agent System<br/><i>Coordinated agents</i>"]
+
+    subgraph Simple["Simpler Approaches"]
+        A
+        B
+        C
+    end
+
+    subgraph Agentic["Agentic Approaches"]
+        D
+        E
+        F
+    end
+
+    style Simple fill:#f0fff4,stroke:#68d391
+    style Agentic fill:#ebf8ff,stroke:#63b3ed
+`} />
+
+Let us walk through each level:
+
+**Single Prompt** -- You send one prompt, get one response. Translation, summarization, classification, simple Q&A, reformatting. This covers a surprising number of real-world use cases. If the task can be fully specified in a single prompt and the model has all the information it needs, stop here.
+
+**Prompt Chain** -- You break a complex task into a fixed sequence of LLM calls, where the output of one becomes the input to the next. Example: extract key points from a document, then rewrite them as a blog post, then generate social media snippets. The path is **predetermined** -- there is no branching or adaptation. This is orchestration, not agency.
+
+**RAG Pipeline** -- You retrieve relevant documents from a knowledge base and include them in the prompt before generating a response. This is the **Retrieval-Augmented Generation** pattern. It extends the model's knowledge beyond its training data, but the flow is still linear: retrieve, augment, generate. No loops, no tool calls, no adaptation. You will study RAG in depth in Module 6.
+
+**Tool-Using Agent** -- The model decides *which* tools to call, *when* to call them, and *what arguments* to pass -- and it does so dynamically based on the task. This is the threshold of agency. The path is no longer predetermined; the model is making decisions at runtime.
+
+**Reasoning Agent** -- The agent operates in a multi-step loop: reason, act, observe, repeat. It can plan, backtrack, self-correct, and adapt its strategy based on intermediate results. This is the full agent loop you studied in Lesson 4.
+
+**Multi-Agent System** -- Multiple specialized agents collaborate, each owning a piece of a larger workflow. A planner delegates to a researcher, a coder, and a reviewer. This adds coordination complexity on top of individual agent complexity. Module 9 covers this in detail.
+
+The key insight: **each level adds both capability and cost**. Your job as an engineer is to use the *minimum* level of complexity that solves the problem reliably.
+
+## The Decision Framework
+
+When you face a new problem, work through these questions in order. Stop as soon as you reach the right level.
+
+<MermaidDiagram chart={`graph TD
+    Q1{"Can a single prompt<br/>solve this task?"} -->|Yes| A1["Use a Single Prompt"]
+    Q1 -->|No| Q2{"Is the task a fixed<br/>sequence of steps?"}
+    Q2 -->|Yes| A2["Use a Prompt Chain"]
+    Q2 -->|No| Q3{"Does it need external<br/>knowledge at query time?"}
+    Q3 -->|"Yes, and the flow<br/>is still linear"| A3["Use a RAG Pipeline"]
+    Q3 -->|No| Q4{"Does it need to call<br/>tools or take actions?"}
+    Q4 -->|No| A3
+    Q3 -->|"Yes, and it needs<br/>to act on results"| Q4
+    Q4 -->|Yes| Q5{"Does it need to adapt<br/>its plan based on results?"}
+    Q5 -->|No| A4["Use a Simple<br/>Tool-Calling Agent"]
+    Q5 -->|Yes| Q6{"Does it need multiple<br/>specialized roles?"}
+    Q6 -->|No| A5["Use a Reasoning Agent"]
+    Q6 -->|Yes| A6["Use a Multi-Agent System"]
+
+    style Q1 fill:#fff5f5,stroke:#fc8181
+    style Q2 fill:#fff5f5,stroke:#fc8181
+    style Q3 fill:#fff5f5,stroke:#fc8181
+    style Q4 fill:#fff5f5,stroke:#fc8181
+    style Q5 fill:#fff5f5,stroke:#fc8181
+    style Q6 fill:#fff5f5,stroke:#fc8181
+    style A1 fill:#f0fff4,stroke:#68d391
+    style A2 fill:#f0fff4,stroke:#68d391
+    style A3 fill:#ebf8ff,stroke:#63b3ed
+    style A4 fill:#ebf8ff,stroke:#63b3ed
+    style A5 fill:#e9d8fd,stroke:#9f7aea
+    style A6 fill:#e9d8fd,stroke:#9f7aea
+`} />
+
+The framework boils down to five questions:
+
+1. **Can a single prompt solve this?** If yes, do not add complexity. A well-crafted prompt with good examples is the most reliable, fastest, and cheapest solution.
+
+2. **Is the path fixed?** If the steps are predetermined and never change regardless of intermediate results, use a prompt chain. No agent needed.
+
+3. **Does it need external knowledge?** If the model needs information beyond its training data but the flow is still linear (retrieve, then generate), a RAG pipeline is sufficient.
+
+4. **Does it need to take actions?** If the task requires calling APIs, querying databases, running code, or modifying external systems, you need tool use -- and you are entering agent territory.
+
+5. **Does it need to adapt?** If the next step depends on the result of the previous step in ways you cannot predict at design time, you need a reasoning agent with a dynamic loop.
+
+## When Agents Shine
+
+Agents are the right choice when the task has one or more of these characteristics:
+
+**Open-ended goals** -- The task is defined by an outcome, not a procedure. "Find and fix the bug causing test failures" has a clear goal but no predetermined path. The agent must explore, hypothesize, test, and iterate.
+
+**Dynamic tool selection** -- The agent needs to choose among multiple tools based on what it discovers. A customer support agent might need to look up an account, check order status, issue a refund, or escalate to a human -- and the right action depends on the conversation.
+
+**Multi-step reasoning with feedback** -- The task requires the agent to act, observe the result, and adjust. A data analysis agent that runs a query, examines the output, decides to drill deeper, runs another query, and eventually synthesizes a report is doing work that cannot be expressed as a fixed pipeline.
+
+**Error recovery** -- The agent needs to detect failures and try alternative approaches. If a web search returns no results, the agent reformulates the query. If code it wrote does not compile, it reads the error and fixes it.
+
+**Ambiguous or underspecified tasks** -- The human provides a high-level objective and expects the system to figure out the details. "Prepare a competitive analysis for our Q3 board meeting" requires the agent to decide what to research, what sources to consult, and how to structure the output.
+
+## When Agents Are Overkill
+
+Equally important is recognizing when agents add cost without adding value. Here are common scenarios where simpler approaches win:
+
+**Deterministic transformations** -- Converting JSON to YAML, reformatting dates, extracting structured data from a template. These tasks have a single correct answer and a fixed procedure. A single prompt -- or even a regular expression -- is better than an agent.
+
+**Single-document tasks** -- Summarizing a document, translating text, classifying sentiment. The model has all the information it needs in the prompt. No tools, no multi-step reasoning, no adaptation required.
+
+**Fixed workflows** -- Generating a report from a template where the steps are always the same: extract data, fill template, format output. A prompt chain is simpler, faster, and more predictable than an agent.
+
+**Latency-critical paths** -- If the user is waiting for a response in under two seconds, an agent loop that makes three to five LLM calls plus tool calls will not meet that constraint. A single LLM call or a cached RAG response is the right choice.
+
+**High-stakes, low-tolerance tasks** -- If a wrong action has severe consequences (financial transactions, medical decisions, production deployments) and you cannot tolerate the unpredictability of an autonomous loop, you may want a human-in-the-loop pipeline rather than a fully autonomous agent.
+
+## The Cost of Agency
+
+Every layer of agentic behavior adds real costs. You should weigh these explicitly before choosing an agent architecture:
+
+**Latency** -- Each iteration of the agent loop requires at least one LLM call, and often a tool call as well. A three-step agent interaction might take 10-30 seconds. A five-step one might take a minute or more. Compare this to a single LLM call that completes in one to two seconds.
+
+**Financial cost** -- LLM API calls are priced by token. An agent that reasons for five steps, generating internal monologue and tool-call schemas at each step, might use 10-20x the tokens of a single prompt. Multiply by your request volume and this becomes significant.
+
+**Unpredictability** -- A single prompt produces relatively consistent output. An agent loop introduces **nondeterminism at every step**. The model might choose different tools, take different paths, or produce different final results on repeated runs. This makes testing, debugging, and compliance harder.
+
+**Debugging difficulty** -- When a single prompt gives a wrong answer, you adjust the prompt. When an agent gives a wrong answer, you need to trace through multiple steps, tool calls, and observations to find where the reasoning went wrong. **Observability** becomes a first-class concern -- a topic you will study in Module 10 (Evaluation & Testing) and Module 11 (Production & Safety).
+
+**Failure modes** -- Agents can get stuck in loops, hallucinate tool arguments, misinterpret tool outputs, or pursue irrelevant tangents. These failure modes are qualitatively different from the mistakes a single LLM call makes, and they require different mitigation strategies (timeouts, guardrails, maximum iteration limits).
+
+> A useful rule of thumb: if you can solve the problem with a single prompt and the result is good enough, do that. Agents should earn their complexity.
+
+## Real-World Examples
+
+To make this concrete, let us apply the decision framework to several real-world tasks:
+
+| Task | Best Approach | Why |
+|------|--------------|-----|
+| Translate an email to Spanish | Single prompt | Model has all needed info; one-step task |
+| Summarize 3 documents and compare themes | Prompt chain | Fixed steps: summarize each, then compare |
+| Answer questions about company policies | RAG pipeline | Needs external docs but flow is linear |
+| Debug a failing CI pipeline | Reasoning agent | Must read logs, form hypotheses, test fixes, iterate |
+| Plan and book a multi-leg trip | Tool-using agent | Needs flight/hotel APIs; choices depend on results |
+| Conduct a full code review across a PR | Reasoning agent | Must read files, understand context, check patterns, adapt feedback |
+| Build, test, and deploy a microservice | Multi-agent system | Needs coder, tester, and deployer roles coordinating |
+| Classify support tickets by category | Single prompt | Deterministic mapping; model has enough context |
+| Research a market and write a 20-page report | Multi-agent system | Needs researcher, analyst, and writer coordinating across sources |
+
+Notice the pattern: as tasks become more **open-ended**, require more **tool interaction**, and involve more **dynamic decision-making**, the case for agents gets stronger. As tasks become more **deterministic**, **self-contained**, and **latency-sensitive**, simpler approaches win.
+
+## The RICE Test for Agents
+
+Here is a quick mnemonic to evaluate whether a task warrants an agent. Ask whether the task involves:
+
+- **R**easoning across multiple steps -- Does the task require thinking through a sequence of dependent decisions?
+- **I**nteraction with external systems -- Does the model need to call tools, APIs, or databases?
+- **C**onditional paths -- Does the next step depend on the result of the previous step in ways you cannot predict in advance?
+- **E**rror recovery -- Does the task require detecting failures and trying alternative approaches?
+
+If the answer to **two or more** of these is yes, an agent is likely the right choice. If the answer to all four is no, a simpler approach will serve you better.
+
+## Common Anti-Patterns
+
+Watch out for these mistakes when deciding whether to use agents:
+
+**The hammer problem** -- After learning about agents, everything looks like it needs one. Resist this. Most LLM applications in production today are single prompts or prompt chains, and they work well precisely because they are simple.
+
+**Premature multi-agent** -- Jumping to a multi-agent system before verifying that a single agent cannot handle the task. Multi-agent coordination introduces failure modes (miscommunication, conflicting actions, deadlocks) that are hard to debug. Start with the simplest architecture that could work and add complexity only when you have evidence that it is needed.
+
+**Agent as a wrapper** -- Building an "agent" that always follows the same fixed sequence of tool calls. If the path never varies, it is not really an agent -- it is a script with an expensive reasoning engine in the middle. Use a prompt chain or a traditional pipeline instead.
+
+**Ignoring the baseline** -- Not testing whether a single well-crafted prompt with examples and clear instructions solves the problem adequately. Always establish this baseline before investing in agent architecture.
+
+## The Decision in Practice
+
+Here is a practical workflow for making the build-vs-skip decision on any new project:
+
+1. **Start with a single prompt.** Write the best prompt you can for the task. Include examples, context, and clear instructions. Test it on representative inputs.
+
+2. **Evaluate the gap.** Where does the single prompt fall short? Does it lack information? Does it need to take actions? Does it need to adapt? Be specific about the shortcomings.
+
+3. **Add complexity incrementally.** If the prompt needs external knowledge, add RAG. If it needs a fixed sequence of steps, add a chain. If it needs dynamic tool use, add an agent loop. Do not skip levels.
+
+4. **Set a complexity budget.** Before building, decide: how many agent loop iterations are acceptable? What is the latency budget? What is the cost ceiling per request? These constraints will shape your architecture.
+
+5. **Measure and compare.** Compare your agentic solution against the simpler baseline on quality, cost, latency, and reliability. The agent should demonstrate a clear, measurable improvement to justify its complexity.
+
+## Looking Ahead: From Foundations to Practice
+
+This lesson concludes Module 1: Foundations of LLM Agents. Over seven lessons, you have built a comprehensive mental model:
+
+- **Why agents matter** and how they evolved from static LLM calls
+- **What an agent is** -- perception, reasoning, action, and environment
+- **Which LLM capabilities** make agents possible -- instruction following, in-context learning, tool use
+- **How the agent loop works** -- the observe-think-act cycle
+- **The agent ecosystem** -- frameworks, protocols, and standards
+- **How to build a simple agent** from scratch using raw API calls
+- **When to use agents** -- and when simpler approaches are the better choice
+
+You now have the conceptual foundation. But knowing *what* an agent is and *when* to use one is only the beginning. The next critical skill is learning how to **steer an agent's reasoning** -- how to craft prompts that reliably guide an LLM through complex, multi-step tasks without losing coherence, accuracy, or focus.
+
+That is exactly what Module 2 covers.
+
+## Summary
+
+Not every problem needs an agent. LLM applications exist on a spectrum from single prompts to multi-agent systems, and each level adds both capability and cost. The right architectural choice is the **simplest approach that reliably solves the problem**.
+
+Use the decision framework: start by asking whether a single prompt suffices, and only escalate to chains, RAG, tool-using agents, reasoning agents, or multi-agent systems when you have specific evidence that simpler approaches fall short. Apply the **RICE test** (Reasoning, Interaction, Conditional paths, Error recovery) as a quick check. And always measure your agentic solution against a simpler baseline.
+
+Agents shine for open-ended tasks, dynamic tool use, multi-step reasoning with feedback, and error recovery. They are overkill for deterministic transformations, single-document tasks, fixed workflows, and latency-critical paths.
+
+With the foundations complete, **Module 2: Prompting & Reasoning** will teach you the single most important skill in agent engineering -- how to craft prompts that steer an LLM's reasoning reliably, precisely, and robustly through the complex tasks that agents are built to handle.

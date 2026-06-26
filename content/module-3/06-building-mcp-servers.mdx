@@ -1,0 +1,461 @@
+---
+title: "Building MCP Servers"
+---
+
+## Overview
+
+In the previous lesson, you learned what the **Model Context Protocol** is and how its architecture works: hosts, clients, servers, transports, and the three primitives (tools, resources, prompts). You understand how MCP separates the agent from its capabilities. Now it is time to build a server yourself.
+
+In this lesson, you will create a working MCP server from scratch using the official **FastMCP** Python SDK. Your server will expose two tools -- `get_weather` and `add_note` -- plus a resource that lists all stored notes. By the end, you will be able to run the server, connect it to an MCP client, and call your custom tools from an LLM-powered agent.
+
+This is a build lesson. Every section adds working code. Follow along step by step.
+
+## What We Are Building
+
+Here is the architecture of the server you will create and how it fits into the MCP ecosystem:
+
+<MermaidDiagram chart={`graph LR
+    subgraph Host["MCP Host (Claude Desktop / Agent)"]
+        LLM["LLM"] --> Client["MCP Client"]
+    end
+    subgraph YourServer["Your MCP Server"]
+        Router["FastMCP Router"]
+        Router --> TW["get_weather tool"]
+        Router --> TN["add_note tool"]
+        Router --> RN["notes://list resource"]
+        Router --> NS["In-Memory Store"]
+    end
+    Client <-->|"stdio transport"| Router
+    style Host fill:#ebf8ff,stroke:#3182ce
+    style YourServer fill:#c6f6d5,stroke:#38a169
+    style TW fill:#fefcbf,stroke:#b7791f
+    style TN fill:#fefcbf,stroke:#b7791f
+    style RN fill:#e9d8fd,stroke:#805ad5
+    style NS fill:#f7fafc,stroke:#a0aec0
+`} />
+
+The host (Claude Desktop or any MCP client) connects to your server over **stdio transport**. When the LLM decides to call a tool, the client sends a JSON-RPC request through stdin. Your server routes the request to the right handler, executes it, and returns the result through stdout. The LLM never knows or cares that your server is a separate process -- it just sees tools and resources it can use.
+
+## Step 1: Project Setup
+
+Create a new directory and install the `mcp` Python package. This is the official SDK maintained by Anthropic.
+
+<CodeBlock code={`# Create a project directory
+mkdir my-mcp-server && cd my-mcp-server
+
+# Create a virtual environment
+python -m venv .venv
+source .venv/bin/activate
+
+# Install the MCP SDK
+pip install mcp
+`} language="bash" filename="terminal" />
+
+The `mcp` package includes **FastMCP**, a high-level framework that handles all the protocol details -- JSON-RPC message parsing, capability negotiation, transport management -- so you can focus on writing tool and resource handlers.
+
+Let's verify the installation by creating a minimal server file:
+
+<CodeBlock code={`from mcp.server.fastmcp import FastMCP
+
+# Create the server instance
+mcp = FastMCP("my-notes-server")
+
+if __name__ == "__main__":
+    mcp.run()
+`} language="python" filename="server.py" />
+
+If you run `python server.py` and it starts without errors, your environment is ready. The server will listen on stdin/stdout by default, waiting for a client to connect. Press `Ctrl+C` to stop it.
+
+## Step 2: Add Your First Tool
+
+Tools are the most common MCP primitive. They let the LLM **take actions** -- calling APIs, writing data, performing computations. You define a tool by decorating a Python function with `@mcp.tool()`.
+
+Let's add a `get_weather` tool that returns weather data for a given city. In a real server, this would call a weather API. For this lesson, we will use simulated data so we can focus on the MCP mechanics.
+
+<CodeBlock code={`from mcp.server.fastmcp import FastMCP
+
+mcp = FastMCP("my-notes-server")
+
+@mcp.tool()
+def get_weather(city: str) -> str:
+    """Get the current weather for a city.
+
+    Args:
+        city: The name of the city to get weather for.
+    """
+    # Simulated weather data -- in production, call a real API
+    weather_data = {
+        "london": {"temp_c": 12, "condition": "Cloudy", "humidity": 78},
+        "tokyo": {"temp_c": 22, "condition": "Sunny", "humidity": 45},
+        "new york": {"temp_c": 18, "condition": "Partly cloudy", "humidity": 62},
+        "cairo": {"temp_c": 35, "condition": "Sunny", "humidity": 20},
+    }
+
+    lookup = city.lower().strip()
+    if lookup in weather_data:
+        data = weather_data[lookup]
+        return (
+            f"Weather in {city}: {data['temp_c']}°C, "
+            f"{data['condition']}, "
+            f"Humidity: {data['humidity']}%"
+        )
+    else:
+        return f"Weather data not available for '{city}'."
+
+if __name__ == "__main__":
+    mcp.run()
+`} language="python" filename="server.py" />
+
+Three things to notice about how FastMCP handles this:
+
+- **The function name becomes the tool name.** When the LLM sees the list of available tools, it will see `get_weather`.
+- **The docstring becomes the tool description.** FastMCP extracts it and sends it to the client during capability negotiation. Write clear docstrings -- they are what the LLM reads to decide when to call your tool.
+- **Type hints become the input schema.** The `city: str` parameter annotation tells FastMCP to generate a JSON Schema requiring a string argument named `city`. The `Args:` section in the docstring provides the parameter description.
+
+You did not write any JSON Schema, parse any JSON-RPC messages, or handle any protocol details. FastMCP did all of that from your function signature and docstring.
+
+## Step 3: Add a Second Tool
+
+Now let's add `add_note` -- a tool that stores a note in memory. This demonstrates a **stateful** tool: one that modifies server-side state rather than just returning data.
+
+<CodeBlock code={`from mcp.server.fastmcp import FastMCP
+
+mcp = FastMCP("my-notes-server")
+
+# In-memory storage for notes
+notes: list[dict] = []
+
+@mcp.tool()
+def get_weather(city: str) -> str:
+    """Get the current weather for a city.
+
+    Args:
+        city: The name of the city to get weather for.
+    """
+    weather_data = {
+        "london": {"temp_c": 12, "condition": "Cloudy", "humidity": 78},
+        "tokyo": {"temp_c": 22, "condition": "Sunny", "humidity": 45},
+        "new york": {"temp_c": 18, "condition": "Partly cloudy", "humidity": 62},
+        "cairo": {"temp_c": 35, "condition": "Sunny", "humidity": 20},
+    }
+
+    lookup = city.lower().strip()
+    if lookup in weather_data:
+        data = weather_data[lookup]
+        return (
+            f"Weather in {city}: {data['temp_c']}°C, "
+            f"{data['condition']}, "
+            f"Humidity: {data['humidity']}%"
+        )
+    else:
+        return f"Weather data not available for '{city}'."
+
+@mcp.tool()
+def add_note(title: str, content: str) -> str:
+    """Save a new note.
+
+    Args:
+        title: A short title for the note.
+        content: The body text of the note.
+    """
+    note = {
+        "id": len(notes) + 1,
+        "title": title,
+        "content": content,
+    }
+    notes.append(note)
+    return f"Note saved with ID {note['id']}: '{title}'"
+
+if __name__ == "__main__":
+    mcp.run()
+`} language="python" filename="server.py" />
+
+The `add_note` tool takes two string parameters and stores the note in a Python list. FastMCP generates the JSON Schema with both `title` and `content` as required string fields, all from the type hints.
+
+> **Stateful vs. stateless tools:** `get_weather` is stateless -- it returns the same result for the same input every time. `add_note` is stateful -- it modifies the `notes` list. Both are valid MCP tools. Stateful tools are how MCP servers interact with databases, files, and external services.
+
+## Step 4: Add a Resource
+
+**Resources** are the second MCP primitive. While tools let the LLM take actions, resources let the LLM **read data**. Resources are identified by URIs, just like web pages. The LLM can request a resource to load context into its conversation.
+
+Let's add a resource that returns all stored notes:
+
+<CodeBlock code={`@mcp.resource("notes://list")
+def list_notes() -> str:
+    """List all saved notes."""
+    if not notes:
+        return "No notes saved yet."
+
+    lines = []
+    for note in notes:
+        lines.append(
+            f"[{note['id']}] {note['title']}: {note['content']}"
+        )
+    return "\n".join(lines)
+`} language="python" filename="server.py (add below add_note)" />
+
+The `@mcp.resource()` decorator takes a **URI** as its argument. When a client requests the resource at `notes://list`, FastMCP calls this function and returns the result. The URI scheme is up to you -- `notes://` is a custom scheme that makes the purpose clear.
+
+Resources differ from tools in an important way: tools are **model-controlled** (the LLM decides when to call them), while resources are typically **application-controlled** (the host application decides when to load them). Think of resources as "files" the LLM can read, and tools as "actions" the LLM can take.
+
+## The Request Flow
+
+Here is what happens when an LLM calls one of your tools, from start to finish:
+
+<MermaidDiagram chart={`flowchart TD
+    A["LLM decides to call get_weather"] --> B["Client sends JSON-RPC request via stdin"]
+    B --> C["FastMCP parses the request"]
+    C --> D["FastMCP routes to @mcp.tool handler"]
+    D --> E["Your function executes"]
+    E --> F["FastMCP wraps result in JSON-RPC response"]
+    F --> G["Response sent via stdout"]
+    G --> H["Client delivers result to LLM"]
+    H --> I["LLM incorporates result into reasoning"]
+    style A fill:#ebf8ff,stroke:#3182ce
+    style D fill:#c6f6d5,stroke:#38a169
+    style E fill:#c6f6d5,stroke:#38a169
+    style I fill:#ebf8ff,stroke:#3182ce
+`} />
+
+You wrote steps D and E. FastMCP handles everything else -- the JSON-RPC parsing (C), the routing (D), the response formatting (F), and the transport (B, G). This is why building an MCP server requires so little boilerplate.
+
+## Step 5: The Complete Server
+
+Here is the full server in a single file. This is everything you need to run a working MCP server:
+
+<CodeBlock code={`"""
+MCP server exposing weather tools and a notes system.
+
+Usage:
+    python server.py                  # Run with stdio transport
+    mcp dev server.py                 # Run with MCP Inspector
+"""
+
+from mcp.server.fastmcp import FastMCP
+
+# Create the server
+mcp = FastMCP("my-notes-server")
+
+# In-memory storage for notes
+notes: list[dict] = []
+
+
+# --- Tools ---
+
+@mcp.tool()
+def get_weather(city: str) -> str:
+    """Get the current weather for a city.
+
+    Args:
+        city: The name of the city to get weather for.
+    """
+    weather_data = {
+        "london": {"temp_c": 12, "condition": "Cloudy", "humidity": 78},
+        "tokyo": {"temp_c": 22, "condition": "Sunny", "humidity": 45},
+        "new york": {"temp_c": 18, "condition": "Partly cloudy", "humidity": 62},
+        "cairo": {"temp_c": 35, "condition": "Sunny", "humidity": 20},
+    }
+
+    lookup = city.lower().strip()
+    if lookup in weather_data:
+        data = weather_data[lookup]
+        return (
+            f"Weather in {city}: {data['temp_c']}°C, "
+            f"{data['condition']}, "
+            f"Humidity: {data['humidity']}%"
+        )
+    else:
+        return f"Weather data not available for '{city}'."
+
+
+@mcp.tool()
+def add_note(title: str, content: str) -> str:
+    """Save a new note.
+
+    Args:
+        title: A short title for the note.
+        content: The body text of the note.
+    """
+    note = {
+        "id": len(notes) + 1,
+        "title": title,
+        "content": content,
+    }
+    notes.append(note)
+    return f"Note saved with ID {note['id']}: '{title}'"
+
+
+# --- Resources ---
+
+@mcp.resource("notes://list")
+def list_notes() -> str:
+    """List all saved notes."""
+    if not notes:
+        return "No notes saved yet."
+
+    lines = []
+    for note in notes:
+        lines.append(
+            f"[{note['id']}] {note['title']}: {note['content']}"
+        )
+    return "\\n".join(lines)
+
+
+# --- Entry point ---
+
+if __name__ == "__main__":
+    mcp.run()
+`} language="python" filename="server.py" />
+
+That is the entire server: 60 lines of meaningful code. Compare this to what it would take to build the equivalent from scratch -- you would need to implement JSON-RPC message parsing, capability negotiation, request routing, error handling, and transport management. FastMCP handles all of it.
+
+## Step 6: Testing Your Server
+
+The MCP SDK includes a built-in development tool called the **MCP Inspector**. It provides a web UI where you can connect to your server, list its tools and resources, and call them interactively -- without needing a full LLM client.
+
+<CodeBlock code={`# Start the MCP Inspector (opens a web UI)
+mcp dev server.py
+`} language="bash" filename="terminal" />
+
+The Inspector will start your server and open a browser window where you can:
+
+1. See the list of registered tools and their schemas
+2. Call `get_weather` with a city name and see the response
+3. Call `add_note` to store a note, then read the `notes://list` resource to verify it was saved
+
+This is the fastest way to iterate on your server. You do not need an LLM to test MCP -- the Inspector lets you call tools directly and inspect the JSON-RPC messages flowing back and forth.
+
+> **Debugging tip:** If your server crashes or a tool returns an error, the Inspector shows the full JSON-RPC error response. Look at the `message` field for Python tracebacks. Common mistakes include missing type hints (FastMCP cannot generate a schema without them) and forgetting to return a string from your tool handler.
+
+## Step 7: Connecting to Claude Desktop
+
+Once your server works in the Inspector, you can connect it to **Claude Desktop** so Claude can use your tools in conversation. Claude Desktop acts as an MCP host -- it manages client connections to one or more MCP servers.
+
+Add your server to Claude Desktop's configuration file:
+
+<CodeBlock code={`// Claude Desktop config
+// macOS: ~/Library/Application Support/Claude/claude_desktop_config.json
+// Windows: %APPDATA%\\Claude\\claude_desktop_config.json
+
+{
+  "mcpServers": {
+    "my-notes-server": {
+      "command": "python",
+      "args": ["/absolute/path/to/server.py"]
+    }
+  }
+}
+`} language="json" filename="claude_desktop_config.json" />
+
+After saving this file and restarting Claude Desktop, you will see a hammer icon indicating that MCP tools are available. You can then ask Claude things like:
+
+- "What's the weather in Tokyo?"
+- "Save a note titled 'Meeting' with the content 'Discuss Q3 roadmap'"
+- "Show me all my notes"
+
+Claude will call your `get_weather` and `add_note` tools, and read the `notes://list` resource, all through the MCP protocol.
+
+> **Use absolute paths.** Claude Desktop launches your server as a subprocess. Relative paths will fail because the working directory is not what you expect. Always use the full path to `server.py` and, if you are using a virtual environment, point `command` to the Python binary inside it (e.g., `/path/to/.venv/bin/python`).
+
+## Debugging MCP Servers
+
+When things go wrong -- and they will -- here are the most effective debugging techniques:
+
+**Check the logs.** Claude Desktop writes MCP logs that show every JSON-RPC message exchanged with your server. On macOS, find them at `~/Library/Logs/Claude/mcp*.log`.
+
+**Print to stderr.** Your server's stdout is reserved for JSON-RPC messages. If you add `print()` statements for debugging, they will corrupt the protocol stream. Use `print(..., file=sys.stderr)` instead, or use Python's `logging` module which defaults to stderr:
+
+<CodeBlock code={`import sys
+import logging
+
+# Configure logging to stderr (safe for MCP servers)
+logging.basicConfig(level=logging.DEBUG, stream=sys.stderr)
+logger = logging.getLogger("my-server")
+
+@mcp.tool()
+def get_weather(city: str) -> str:
+    """Get the current weather for a city.
+
+    Args:
+        city: The name of the city to get weather for.
+    """
+    logger.debug(f"get_weather called with city={city}")
+    # ... rest of the handler
+`} language="python" filename="server.py (debugging)" />
+
+**Return errors, don't raise them.** If a tool handler raises an unhandled exception, FastMCP will catch it and return a generic error to the client. Instead, catch exceptions yourself and return a descriptive error string. The LLM can read your error message and adjust its approach:
+
+<CodeBlock code={`@mcp.tool()
+def get_weather(city: str) -> str:
+    """Get the current weather for a city.
+
+    Args:
+        city: The name of the city to get weather for.
+    """
+    try:
+        # ... lookup logic ...
+        return f"Weather in {city}: ..."
+    except Exception as e:
+        return f"Error fetching weather for '{city}': {str(e)}"
+`} language="python" filename="server.py (error handling)" />
+
+**Validate with the Inspector first.** Always test tools in `mcp dev` before connecting to Claude Desktop. The Inspector shows you the raw protocol messages, making it much easier to diagnose schema mismatches and serialization issues.
+
+## Beyond the Basics
+
+The server you built covers the core patterns, but FastMCP supports several more capabilities you should know about:
+
+**Dynamic resources with templates.** Instead of a fixed URI, you can parameterize resources using URI templates:
+
+<CodeBlock code={`@mcp.resource("notes://{note_id}")
+def get_note(note_id: str) -> str:
+    """Get a specific note by ID."""
+    for note in notes:
+        if str(note["id"]) == note_id:
+            return f"{note['title']}: {note['content']}"
+    return f"Note {note_id} not found."
+`} language="python" filename="server.py (resource template)" />
+
+Now the client can request `notes://1`, `notes://2`, and so on. FastMCP extracts the `note_id` from the URI and passes it to your handler.
+
+**Prompts.** The third MCP primitive lets you expose reusable prompt templates:
+
+<CodeBlock code={`@mcp.prompt()
+def summarize_notes() -> str:
+    """Create a prompt to summarize all notes."""
+    all_notes = list_notes()
+    return f"Please summarize the following notes:\\n\\n{all_notes}"
+`} language="python" filename="server.py (prompt)" />
+
+Prompts are user-controlled -- the human selects them from the client UI to inject pre-built instructions into the conversation. They are useful for complex workflows that the user triggers intentionally.
+
+**SSE transport.** For remote servers (not running on the same machine as the host), FastMCP supports **Server-Sent Events** transport over HTTP. This lets you deploy your MCP server as a web service:
+
+<CodeBlock code={`# Run with SSE transport instead of stdio
+if __name__ == "__main__":
+    mcp.run(transport="sse")
+`} language="python" filename="server.py (SSE transport)" />
+
+## What You Have Built
+
+Let's step back and see what you accomplished. You started with an empty file and built an MCP server that:
+
+1. **Exposes two tools** -- `get_weather` and `add_note` -- that any MCP client can discover and call
+2. **Serves a resource** -- `notes://list` -- that provides read access to stored data
+3. **Handles the full MCP protocol** -- capability negotiation, JSON-RPC messaging, transport -- through FastMCP
+4. **Connects to real clients** -- the MCP Inspector for development, Claude Desktop for production use
+
+The server is 60 lines of code. Everything else -- the protocol, the transport, the schema generation -- is handled by the SDK. This is the power of MCP: it gives you a standard way to expose capabilities to any LLM agent, without writing integration code for each client.
+
+In the next lesson, you will combine everything from this module -- tool definitions, function calling, error handling, and MCP -- into a complete tool-using agent in the **Tool Use Lab**.
+
+## Summary
+
+You built a working MCP server from scratch using the FastMCP Python SDK. The key takeaways are:
+
+- **`@mcp.tool()`** turns a Python function into an MCP tool. FastMCP generates the JSON Schema from your type hints and the description from your docstring.
+- **`@mcp.resource()`** exposes read-only data at a URI. Resources let the LLM load context without taking actions.
+- **`mcp dev`** launches the MCP Inspector for interactive testing without needing an LLM client.
+- **stdio transport** connects your server to local clients like Claude Desktop. The host launches your server as a subprocess and communicates through stdin/stdout.
+- **Always log to stderr** -- stdout is reserved for protocol messages. A stray `print()` will corrupt the JSON-RPC stream.
+- **Return error strings** from tool handlers instead of raising exceptions, so the LLM can read the error and adapt its behavior.

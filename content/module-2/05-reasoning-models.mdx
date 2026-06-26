@@ -1,0 +1,272 @@
+---
+title: "Reasoning Models and Extended Thinking"
+quiz:
+  - question: "What is the key difference between a standard LLM using Chain-of-Thought prompting and a reasoning model like o1 or o3?"
+    options:
+      - "Reasoning models are always faster than standard models with CoT prompts"
+      - "Standard models with CoT produce reasoning in the visible output, while reasoning models perform internal chain-of-thought before generating the response"
+      - "Reasoning models cannot perform multi-step reasoning"
+      - "Standard models with CoT use more tokens than reasoning models"
+    correctIndex: 1
+  - question: "When using Claude's extended thinking, what does the budget_tokens parameter control?"
+    options:
+      - "The total number of tokens in the final response"
+      - "The cost limit in dollars for the API call"
+      - "The maximum number of tokens the model can use for its internal reasoning before responding"
+      - "The number of tokens reserved for the system prompt"
+    correctIndex: 2
+  - question: "In which scenario would a standard model with a CoT prompt likely be a better choice than a reasoning model?"
+    options:
+      - "Solving a multi-step math proof that requires careful logical deduction"
+      - "A high-volume classification task where each request is straightforward and latency matters"
+      - "Planning a complex multi-agent workflow with many dependencies"
+      - "Debugging a subtle concurrency issue in a distributed system"
+    correctIndex: 1
+  - question: "Why might adding explicit Chain-of-Thought instructions to a prompt for a reasoning model actually hurt performance?"
+    options:
+      - "Reasoning models do not understand natural language instructions"
+      - "The model's internal reasoning process may conflict with the forced external reasoning format, leading to redundant or confused output"
+      - "CoT prompts are incompatible with the API format used by reasoning models"
+      - "Reasoning models always ignore the system prompt entirely"
+    correctIndex: 1
+---
+
+## Overview
+
+In lesson 02, we explored **Chain-of-Thought (CoT) prompting** -- a technique where we instruct a standard LLM to "think step by step" before arriving at an answer. CoT works because it forces the model to generate intermediate reasoning tokens, which improves accuracy on complex tasks. But what if reasoning was not a prompting trick we applied from the outside, but a capability built directly into the model itself?
+
+That is the central idea behind **reasoning models**. Models like OpenAI's o1 and o3 series, and Anthropic's Claude with **extended thinking**, are trained to perform deep internal reasoning before producing a response. They do not need to be told to think step by step -- they do it automatically, allocating significant compute to an internal chain-of-thought process that happens before the user ever sees output.
+
+This lesson explores how reasoning models work, how they differ from standard models with CoT prompts, and what this shift means for the way you design and build agents.
+
+## From Prompted Reasoning to Native Reasoning
+
+To understand why reasoning models matter, recall how CoT prompting works with a standard model. You write a prompt like "Think step by step before answering," and the model produces its reasoning in the visible output alongside the final answer. The reasoning is there because you asked for it. It appears in the response tokens, the user can read it, and it counts against the output token limit.
+
+**Reasoning models** take a fundamentally different approach. During training, these models are specifically optimized to spend time "thinking" before answering. The model generates an internal chain-of-thought -- often called **thinking tokens** -- that the user may or may not see, depending on the API. Only after this internal deliberation does the model produce the final response.
+
+The distinction is not cosmetic. It changes the economics, the quality, and the architecture of agent systems.
+
+<MermaidDiagram chart={`graph LR
+    subgraph Standard["Standard LLM + CoT Prompt"]
+        P1["User Prompt<br/>+ 'Think step by step'"] --> R1["Visible Reasoning<br/>(output tokens)"]
+        R1 --> A1["Final Answer<br/>(output tokens)"]
+    end
+
+    subgraph Reasoning["Reasoning Model"]
+        P2["User Prompt<br/>(no CoT needed)"] --> T2["Internal Thinking<br/>(thinking tokens,<br/>hidden or separate)"]
+        T2 --> A2["Final Answer<br/>(output tokens)"]
+    end
+
+    style Standard fill:#fff5f5,stroke:#c53030,stroke-width:2px
+    style Reasoning fill:#f0fff4,stroke:#276749,stroke-width:2px
+    style P1 fill:#fed7d7,stroke:#c53030
+    style R1 fill:#feb2b2,stroke:#c53030
+    style A1 fill:#fc8181,stroke:#c53030
+    style P2 fill:#c6f6d5,stroke:#276749
+    style T2 fill:#9ae6b4,stroke:#276749
+    style A2 fill:#68d391,stroke:#276749
+`} />
+
+The left side shows the pattern you already know: you prompt the model to reason, and the reasoning appears in the output. The right side shows what reasoning models do: internal thinking happens in a separate phase, and only the final answer is returned as output.
+
+## The Reasoning Model Landscape
+
+### OpenAI o1 and o3
+
+OpenAI's **o1** (released late 2024) was one of the first widely available reasoning models. It introduced the concept of a model that spends variable amounts of time "thinking" based on problem complexity. The **o3** family extended this further, with o3-mini offering a cost-effective option and o3 providing maximum reasoning depth.
+
+Key characteristics of o1/o3:
+
+- **Hidden reasoning** -- the model's internal chain-of-thought is not exposed to the user. You see only a summary of the reasoning process, not the raw thinking tokens.
+- **Variable compute** -- the model automatically decides how much thinking time a problem requires. A simple factual question gets minimal thinking; a complex math problem gets extensive deliberation.
+- **No system prompt support (initially)** -- early versions of o1 did not support system prompts, which required significant agent architecture changes. Later versions relaxed this restriction.
+- **Reasoning effort parameter** -- o3 introduced a `reasoning_effort` parameter (`low`, `medium`, `high`) that lets you trade off quality against cost and latency.
+
+### Claude with Extended Thinking
+
+Anthropic's approach with **Claude's extended thinking** differs in a critical way: the thinking process is visible. When you enable extended thinking, the API returns both a `thinking` block and a `text` block. You can inspect exactly what the model reasoned about.
+
+Key characteristics of Claude's extended thinking:
+
+- **Visible thinking blocks** -- the full internal reasoning is returned as a separate content block, giving you transparency into the model's thought process.
+- **Budget control** -- you set a `budget_tokens` parameter that caps how many tokens the model can spend on thinking. This gives you direct control over the cost-quality tradeoff.
+- **System prompt compatibility** -- extended thinking works with system prompts, so existing agent architectures do not need to be restructured.
+- **Streaming support** -- thinking tokens can be streamed in real time, giving the user feedback that the model is working on a complex problem.
+
+### How the Flow Works
+
+The following diagram shows the complete lifecycle of a request to a reasoning model with extended thinking enabled.
+
+<MermaidDiagram chart={`sequenceDiagram
+    participant User
+    participant Agent
+    participant API as Claude API
+    participant Model as Claude Model
+
+    User->>Agent: Complex question or task
+    Agent->>API: Request with<br/>extended thinking enabled<br/>(budget_tokens: 10000)
+    API->>Model: Process prompt
+
+    rect rgb(235, 248, 255)
+        Note over Model: Thinking Phase
+        Model->>Model: Break down the problem
+        Model->>Model: Consider multiple approaches
+        Model->>Model: Evaluate tradeoffs
+        Model->>Model: Verify reasoning
+    end
+
+    rect rgb(198, 246, 213)
+        Note over Model: Response Phase
+        Model->>Model: Generate final answer<br/>informed by thinking
+    end
+
+    Model->>API: Return thinking + response
+    API->>Agent: thinking block +<br/>text block
+    Agent->>Agent: Log thinking for<br/>debugging (optional)
+    Agent->>User: Final response
+`} />
+
+Notice the two distinct phases: the **thinking phase**, where the model reasons internally within the token budget you set, and the **response phase**, where it produces the final answer informed by that reasoning. The agent receives both blocks and can choose to log, display, or discard the thinking content.
+
+## Using Extended Thinking in Code
+
+Here is how you enable extended thinking with the Anthropic Python SDK. This example shows a practical agent scenario -- asking the model to analyze a complex system design problem.
+
+<CodeBlock code={`import anthropic
+
+client = anthropic.Anthropic()
+
+def solve_with_thinking(problem: str, thinking_budget: int = 10000) -> dict:
+    """Send a problem to Claude with extended thinking enabled."""
+    response = client.messages.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=16000,
+        temperature=1,  # Required: must be 1 when thinking is enabled
+        thinking={
+            "type": "enabled",
+            "budget_tokens": thinking_budget,  # Max tokens for internal reasoning
+        },
+        messages=[
+            {
+                "role": "user",
+                "content": problem,
+            }
+        ],
+    )
+
+    # Extract thinking and response from content blocks
+    thinking_text = ""
+    response_text = ""
+    for block in response.content:
+        if block.type == "thinking":
+            thinking_text = block.thinking
+        elif block.type == "text":
+            response_text = block.text
+
+    return {
+        "thinking": thinking_text,
+        "response": response_text,
+        "thinking_tokens": response.usage.cache_creation_input_tokens,
+        "output_tokens": response.usage.output_tokens,
+    }
+
+
+# Example: Complex agent planning task
+result = solve_with_thinking(
+    problem="""Design a retry strategy for an agent that calls three 
+    external APIs with different reliability characteristics:
+    - API A: 99.9% uptime, 50ms latency, idempotent
+    - API B: 95% uptime, 2s latency, NOT idempotent  
+    - API C: 99% uptime, 200ms latency, idempotent
+    
+    The agent must call all three and combine results. 
+    What is the optimal order, retry policy, and error handling?""",
+    thinking_budget=8000,
+)
+
+print("=== Model's Thinking Process ===")
+print(result["thinking"][:500])  # First 500 chars of reasoning
+print("\\n=== Final Response ===")
+print(result["response"])
+`} language="python" filename="extended_thinking.py" />
+
+A few important details in this code:
+
+- **`temperature=1` is required** when extended thinking is enabled. The model needs full sampling diversity during its thinking phase.
+- **`budget_tokens`** sets the ceiling for thinking tokens. The model may use fewer if the problem is straightforward. A budget of 5,000-10,000 tokens works well for most agent tasks; increase to 20,000+ for very complex reasoning.
+- The response contains **separate content blocks** for thinking and text. Your agent code should handle both types.
+
+## When to Use Reasoning Models vs. Standard Models
+
+Reasoning models are not universally better. They are a tool with specific strengths, and using them effectively requires understanding when they help and when they add unnecessary cost.
+
+### Use reasoning models when:
+
+- **The task requires multi-step logical reasoning** -- math proofs, code debugging, complex planning, and constraint satisfaction problems benefit most from extended thinking.
+- **Accuracy is critical and latency is acceptable** -- for tasks where a wrong answer is expensive (financial analysis, medical reasoning, legal review), the extra thinking time is worth it.
+- **The problem has a verifiable answer** -- reasoning models excel when the model can check its own work. "Does this code compile?" or "Does this proof follow logically?" are checkable in ways that creative writing is not.
+- **You are building a planner agent** -- agents that need to decompose complex goals into multi-step plans benefit enormously from native reasoning, which we will explore in Module 4 when we cover agent architectures.
+
+### Use standard models with CoT prompts when:
+
+- **Latency matters more than depth** -- for real-time chat agents or high-throughput pipelines, standard models with CoT prompts are faster.
+- **The reasoning is simple** -- straightforward classification, summarization, or extraction tasks do not benefit from extended thinking. The overhead is wasted.
+- **You need fine-grained control over reasoning format** -- CoT prompts let you specify exactly how the model should structure its reasoning (numbered steps, pros/cons lists, specific frameworks). Reasoning models choose their own internal format.
+- **Cost is the primary constraint** -- thinking tokens add to your bill. For high-volume, low-complexity tasks, standard models are more economical. This tradeoff becomes critical at production scale, as we will discuss in Module 11.
+
+### The cost and latency tradeoff
+
+This is worth stating explicitly: **reasoning tokens are not free**. A request that would use 500 output tokens with a standard model might use 5,000 thinking tokens plus 500 output tokens with a reasoning model. You are paying for the model to think, and that cost scales with problem complexity.
+
+| Factor | Standard Model + CoT | Reasoning Model |
+|---|---|---|
+| Latency | Lower (single pass) | Higher (thinking + response) |
+| Token cost | Output tokens only | Thinking tokens + output tokens |
+| Reasoning quality | Good for simple tasks | Superior for complex tasks |
+| Prompt engineering | Required (CoT prompt) | Minimal (built-in reasoning) |
+| Transparency | Full (reasoning in output) | Varies (hidden in o1, visible in Claude) |
+| Control over reasoning | High (prompt-directed) | Low to moderate (budget-directed) |
+
+## Design Implications for Agents
+
+Reasoning models change several assumptions that underpin agent design. If you are building agents, these implications matter.
+
+### You may not need CoT prompting
+
+This is the most immediate change. In lesson 02, we learned to add "Think step by step" and similar instructions to improve reasoning. With reasoning models, **this can actually hurt performance**. The model already reasons internally; adding explicit CoT instructions can create conflicting reasoning processes -- the model tries to follow your format while also doing its own internal reasoning, sometimes producing worse results.
+
+The rule of thumb: **remove CoT instructions from prompts when using reasoning models**. Let the model's built-in reasoning do its work.
+
+### Agent loops may need fewer iterations
+
+A standard model in an agent loop might need multiple tool calls and iterations to solve a complex problem -- it reasons a little, acts, observes, reasons more, acts again. A reasoning model can often solve more of the problem in a single step because it does deeper reasoning upfront. This means your agent loop might converge faster, requiring fewer iterations and fewer tool calls.
+
+### Planning becomes more reliable
+
+One of the hardest problems in agent design is **planning** -- decomposing a complex task into a sequence of actions. Standard models often produce superficial plans that fall apart when executed. Reasoning models produce more robust plans because they can think through edge cases, dependencies, and failure modes before committing to a plan. We will see this pay off in Module 4 when we explore planner-executor architectures.
+
+### Error recovery improves
+
+When a tool call fails or returns unexpected results, reasoning models are better at diagnosing what went wrong and adapting. Instead of blindly retrying (a common failure mode with standard models), a reasoning model can think through why the failure occurred and choose a different approach.
+
+## Combining Reasoning Models with Agent Architectures
+
+A powerful pattern that is emerging in production agent systems is **selective reasoning** -- using reasoning models for the hard parts and standard models for the easy parts.
+
+Consider an agent that processes customer support tickets:
+
+1. **Classify the ticket** (standard model -- fast, cheap, simple)
+2. **Route to the right team** (standard model -- rule-following task)
+3. **Analyze the root cause of a complex technical issue** (reasoning model -- requires deep analysis)
+4. **Draft a response** (standard model -- templated communication)
+
+This hybrid approach gives you the quality benefits of reasoning models where they matter, without paying the cost and latency penalty on every step. Designing these mixed architectures is a key skill that we will develop in Module 4 (Architectures) and Module 5 (Design Patterns).
+
+## Summary
+
+**Reasoning models** represent a shift from prompted reasoning to native reasoning. Instead of instructing a model to think step by step, models like OpenAI's o1/o3 and Claude with extended thinking are trained to reason internally before responding. Claude's extended thinking makes this process transparent by returning visible thinking blocks alongside the final response, with a `budget_tokens` parameter that gives you direct control over the reasoning depth.
+
+The key design implications for agents are: you can drop explicit CoT prompting (it may hurt more than help), agent loops may converge faster because the model reasons more deeply per step, and planning and error recovery improve. But reasoning models are not always the right choice -- they add cost and latency, and simple tasks do not benefit from extended thinking.
+
+The practical skill is knowing when to use reasoning models versus standard models with CoT prompts, and how to combine both in a single agent system. In the next lesson, *Prompt Patterns Lab*, you will put all of these prompting and reasoning techniques into practice by building a reasoning agent with progressively better prompts.

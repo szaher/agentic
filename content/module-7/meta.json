@@ -1,0 +1,71 @@
+{
+  "id": 7,
+  "title": "Agent Frameworks & SDKs",
+  "description": "Hands-on tour of the major agent frameworks and when to use each one",
+  "color": "#fc8181",
+  "lessons": [
+    {
+      "slug": "01-framework-landscape",
+      "title": "The Framework Landscape",
+      "description": "Why frameworks exist and the spectrum from low-level SDKs to high-level orchestrators",
+      "estimatedMinutes": 10,
+      "diagramTypes": ["comparison", "architecture"],
+      "hasCode": false,
+      "hasQuiz": true
+    },
+    {
+      "slug": "02-openai-agents-sdk",
+      "title": "OpenAI Agents SDK",
+      "description": "Building agents with the OpenAI Agents SDK: tools, handoffs, and guardrails",
+      "estimatedMinutes": 12,
+      "diagramTypes": ["architecture", "sequence"],
+      "hasCode": true,
+      "hasQuiz": true
+    },
+    {
+      "slug": "03-anthropic-claude-agents",
+      "title": "Anthropic Claude Agent SDK",
+      "description": "Building agents with Claude: extended thinking, tool use, and the agent loop",
+      "estimatedMinutes": 12,
+      "diagramTypes": ["architecture", "sequence"],
+      "hasCode": true,
+      "hasQuiz": true
+    },
+    {
+      "slug": "04-langgraph",
+      "title": "LangGraph",
+      "description": "Graph-based agent workflows: nodes, edges, state, and conditional routing",
+      "estimatedMinutes": 14,
+      "diagramTypes": ["flowchart", "state"],
+      "hasCode": true,
+      "hasQuiz": true
+    },
+    {
+      "slug": "05-crewai-and-autogen",
+      "title": "CrewAI and AutoGen",
+      "description": "Role-based multi-agent frameworks: crews, agents, and conversation patterns",
+      "estimatedMinutes": 12,
+      "diagramTypes": ["architecture", "sequence"],
+      "hasCode": true,
+      "hasQuiz": true
+    },
+    {
+      "slug": "06-framework-comparison",
+      "title": "Framework Comparison and Selection",
+      "description": "Head-to-head comparison: features, tradeoffs, and when to use each framework",
+      "estimatedMinutes": 10,
+      "diagramTypes": ["comparison"],
+      "hasCode": false,
+      "hasQuiz": true
+    },
+    {
+      "slug": "07-framework-lab",
+      "title": "Framework Lab",
+      "description": "Hands-on: build the same agent in three different frameworks and compare",
+      "estimatedMinutes": 15,
+      "diagramTypes": ["comparison"],
+      "hasCode": true,
+      "hasQuiz": false
+    }
+  ]
+}

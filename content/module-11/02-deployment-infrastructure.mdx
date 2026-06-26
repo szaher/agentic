@@ -1,0 +1,467 @@
+---
+title: "Deployment Infrastructure"
+quiz:
+  - question: "Why is a serverless platform like AWS Lambda generally a poor fit for a multi-step agent that orchestrates several tool calls in sequence?"
+    options:
+      - "Serverless functions cannot make outbound HTTP requests to LLM APIs"
+      - "Each invocation has a maximum execution time, and multi-step agents can exceed it; plus cold starts add latency that compounds across the reasoning loop"
+      - "Serverless platforms do not support Python or Node.js runtimes"
+      - "Serverless functions lack access to environment variables for API keys"
+    correctIndex: 1
+  - question: "In a queue-based architecture for asynchronous agents, what is the primary role of the message queue between the API gateway and the agent worker?"
+    options:
+      - "It encrypts the request payload before the agent processes it"
+      - "It stores the final agent response so the client can retrieve it later"
+      - "It decouples request acceptance from processing, allowing the system to absorb traffic spikes and retry failed jobs without dropping requests"
+      - "It converts synchronous HTTP calls into WebSocket connections"
+    correctIndex: 2
+  - question: "What is the purpose of the /health endpoint in a containerized agent service?"
+    options:
+      - "It returns the full agent conversation history for debugging"
+      - "It allows orchestrators like Kubernetes to verify the service is running and ready to accept requests, enabling automatic restarts and load balancing"
+      - "It triggers a graceful shutdown of the service when called"
+      - "It resets the agent's in-memory state between requests"
+    correctIndex: 1
+  - question: "When deploying agents on Kubernetes, why does the Horizontal Pod Autoscaler (HPA) often need custom metrics rather than just CPU utilization?"
+    options:
+      - "Kubernetes does not support CPU-based autoscaling for Python workloads"
+      - "Agent pods spend most of their time waiting on external LLM API calls rather than consuming CPU, so CPU stays low even under heavy load"
+      - "Custom metrics are cheaper to compute than CPU metrics"
+      - "The HPA only supports custom metrics when running on managed cloud Kubernetes services"
+    correctIndex: 1
+---
+
+## Overview
+
+In the previous lesson, you learned why agents that work on a laptop often fail in production. The gap between a working prototype and a reliable service is not about model quality -- it is about **infrastructure**. This lesson shows you how to bridge that gap.
+
+You will learn how to **containerize** an agent so it runs identically everywhere, choose between **serverless**, **long-running**, and **Kubernetes** deployment patterns, and design **queue-based architectures** for agents that take minutes instead of milliseconds. By the end, you will have a mental framework for matching any agent type to the right infrastructure.
+
+## Cloud Deployment Architecture
+
+Before diving into individual components, let's look at the full picture. A production agent deployment typically involves several layers between the user and the LLM.
+
+<MermaidDiagram chart={`graph TD
+    Client["Client Application"] --> GW["API Gateway<br/>(Auth, Rate Limiting, TLS)"]
+    GW --> LB["Load Balancer"]
+    LB --> AS1["Agent Service<br/>Instance 1"]
+    LB --> AS2["Agent Service<br/>Instance 2"]
+    LB --> AS3["Agent Service<br/>Instance N"]
+    AS1 --> TS["Tool Microservices"]
+    AS2 --> TS
+    AS3 --> TS
+    AS1 --> LLM["LLM API<br/>(Claude, GPT, etc.)"]
+    AS2 --> LLM
+    AS3 --> LLM
+    TS --> DB["Database"]
+    TS --> EXT["External APIs"]
+    AS1 --> Cache["Response Cache<br/>(Redis)"]
+    AS2 --> Cache
+    AS3 --> Cache
+    subgraph Gateway["Edge Layer"]
+        GW
+        LB
+    end
+    subgraph Compute["Compute Layer"]
+        AS1
+        AS2
+        AS3
+    end
+    subgraph Backend["Backend Services"]
+        TS
+        DB
+        EXT
+        Cache
+    end
+    style Gateway fill:#ebf8ff,stroke:#3182ce
+    style Compute fill:#c6f6d5,stroke:#38a169
+    style Backend fill:#fefcbf,stroke:#b7791f
+    style LLM fill:#fed7d7,stroke:#c53030
+`} />
+
+The **edge layer** handles authentication, rate limiting, and TLS termination before any request reaches your agent code. The **compute layer** runs your agent logic -- this is where the reasoning loop lives. The **backend services** provide tools, state storage, and caching. The **LLM API** sits outside your infrastructure entirely, which is both a benefit (no GPU management) and a risk (external dependency).
+
+Each of these layers can be deployed independently. The art of agent infrastructure is choosing the right deployment pattern for the compute layer while keeping the other layers stable.
+
+## Docker Containerization
+
+The foundation of reproducible deployment is the **container**. A Docker container packages your agent code, its dependencies, and its runtime environment into a single artifact that behaves identically on your laptop, in CI/CD, and in production.
+
+**Why containers matter for agents specifically:**
+
+- **Dependency isolation** -- agents often need specific versions of LLM client libraries, tool SDKs, and parsing libraries that conflict with system packages
+- **Reproducible builds** -- the model behaves the same way when the code, prompt templates, and library versions are identical
+- **Horizontal scaling** -- containers can be replicated behind a load balancer with zero configuration changes
+- **Rollback safety** -- every deployment is a tagged image; rolling back means pointing to the previous tag
+
+Here is a production-grade Dockerfile for an agent service:
+
+<CodeBlock code={`# syntax=docker/dockerfile:1
+FROM python:3.12-slim AS base
+
+# Prevent Python from writing .pyc files and enable unbuffered output
+ENV PYTHONDONTWRITEBYTECODE=1 \\
+    PYTHONUNBUFFERED=1
+
+WORKDIR /app
+
+# Install dependencies first (layer caching)
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy application code
+COPY src/ ./src/
+COPY prompts/ ./prompts/
+
+# Create non-root user for security
+RUN adduser --disabled-password --no-create-home agent
+USER agent
+
+EXPOSE 8000
+
+# Health check for orchestrators
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 \\
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"
+
+CMD ["python", "-m", "uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000"]
+`} language="dockerfile" filename="Dockerfile" />
+
+Key decisions in this Dockerfile: we use a **slim base image** to reduce the attack surface, install dependencies before copying code to exploit **layer caching** (dependencies change less often than code), run as a **non-root user**, and include a **HEALTHCHECK** instruction that orchestrators can use to detect failures.
+
+## Deployment Decision Framework
+
+Not every agent needs Kubernetes. The right infrastructure depends on your agent's execution profile -- how long it runs, how much state it holds, and how it handles concurrency.
+
+<MermaidDiagram chart={`flowchart TD
+    Start["What kind of agent<br/>are you deploying?"] --> Q1{"Does the agent complete<br/>in under 30 seconds?"}
+    Q1 -->|Yes| Q2{"Traffic pattern?"}
+    Q1 -->|No| Q3{"Does it need to maintain<br/>state across turns?"}
+    Q2 -->|"Sporadic / bursty"| SL["Serverless<br/>(Lambda, Cloud Functions)"]
+    Q2 -->|"Steady / high volume"| CT["Containers<br/>(ECS, Cloud Run)"]
+    Q3 -->|Yes| Q4{"Expected scale?"}
+    Q3 -->|No| QB["Queue + Workers<br/>(Celery, Bull, SQS)"]
+    Q4 -->|"< 50 concurrent"| CT2["Containers<br/>(single service)"]
+    Q4 -->|"> 50 concurrent"| K8["Kubernetes<br/>(auto-scaling pods)"]
+    style SL fill:#fefcbf,stroke:#b7791f
+    style CT fill:#c6f6d5,stroke:#38a169
+    style CT2 fill:#c6f6d5,stroke:#38a169
+    style QB fill:#ebf8ff,stroke:#3182ce
+    style K8 fill:#e9d8fd,stroke:#805ad5
+    style Start fill:#f7fafc,stroke:#718096
+`} />
+
+Let's examine each path in this decision tree.
+
+## Serverless Deployments
+
+**Serverless platforms** like AWS Lambda, Google Cloud Functions, and Azure Functions run your code on demand and bill per invocation. They are attractive because you pay nothing when idle and scaling is automatic.
+
+**When serverless works for agents:**
+
+- **Single-turn agents** that receive a request, make one LLM call, and return a response
+- **Webhook handlers** that trigger an agent in response to an event (e.g., a new support ticket)
+- **Low-traffic tools** where cold start latency is acceptable
+
+**When serverless breaks down:**
+
+- **Multi-step agents** that loop through observe-think-act cycles -- each cycle adds cold start risk, and the total execution time can exceed the platform's maximum (15 minutes on Lambda, 9 minutes on Cloud Functions)
+- **Stateful conversations** that require in-memory context across turns
+- **Long-running tool calls** where the agent waits for a database migration or a CI pipeline to finish
+
+> Serverless works best as the **entry point** that dispatches to a queue, not as the runtime for the agent loop itself. Accept the request in a Lambda, push it to SQS, and let a long-running worker process it.
+
+## Long-Running Container Services
+
+For most production agents, a **long-running container service** is the sweet spot. Platforms like AWS ECS, Google Cloud Run, and Azure Container Apps run your Docker image as an always-on (or scale-to-zero) service with built-in load balancing.
+
+The following code implements a production FastAPI service with health checks, graceful shutdown, and structured logging:
+
+<CodeBlock code={`import asyncio
+import signal
+import logging
+from contextlib import asynccontextmanager
+from datetime import datetime, timezone
+
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+import anthropic
+
+# --- Structured logging ---
+logging.basicConfig(
+    format='{"time":"%(asctime)s","level":"%(levelname)s","msg":"%(message)s"}',
+    level=logging.INFO,
+)
+logger = logging.getLogger("agent-service")
+
+# --- Application state ---
+shutdown_event = asyncio.Event()
+active_requests = 0
+client: anthropic.AsyncAnthropic | None = None
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Manage startup and shutdown lifecycle."""
+    global client
+    # Startup: initialize the LLM client once
+    client = anthropic.AsyncAnthropic()
+    logger.info("Agent service started, LLM client initialized")
+    yield
+    # Shutdown: wait for in-flight requests to complete
+    logger.info(f"Shutdown signal received, draining {active_requests} requests")
+    for _ in range(30):  # Wait up to 30 seconds
+        if active_requests == 0:
+            break
+        await asyncio.sleep(1)
+    logger.info("Shutdown complete")
+
+
+app = FastAPI(title="Agent Service", lifespan=lifespan)
+
+
+# --- Models ---
+class AgentRequest(BaseModel):
+    user_message: str
+    conversation_id: str | None = None
+    max_turns: int = 5
+
+
+class AgentResponse(BaseModel):
+    response: str
+    conversation_id: str
+    turns_used: int
+    total_tokens: int
+
+
+# --- Health check ---
+@app.get("/health")
+async def health():
+    """Liveness and readiness probe for orchestrators."""
+    return {
+        "status": "healthy" if not shutdown_event.is_set() else "draining",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "active_requests": active_requests,
+    }
+
+
+# --- Agent endpoint ---
+@app.post("/agent/run", response_model=AgentResponse)
+async def run_agent(request: AgentRequest):
+    global active_requests
+
+    if shutdown_event.is_set():
+        raise HTTPException(503, "Service is shutting down")
+
+    active_requests += 1
+    try:
+        messages = [{"role": "user", "content": request.user_message}]
+        total_tokens = 0
+        turns = 0
+
+        # Agent loop: observe-think-act
+        for turn in range(request.max_turns):
+            turns += 1
+            response = await client.messages.create(
+                model="claude-sonnet-4-20250514",
+                max_tokens=1024,
+                system="You are a helpful assistant. Use tools when needed.",
+                messages=messages,
+            )
+            total_tokens += response.usage.input_tokens + response.usage.output_tokens
+
+            # Check if the agent wants to use a tool or is done
+            if response.stop_reason == "end_turn":
+                break
+
+            # In a real service, handle tool_use blocks here
+            messages.append({"role": "assistant", "content": response.content})
+
+        final_text = ""
+        for block in response.content:
+            if hasattr(block, "text"):
+                final_text += block.text
+
+        logger.info(f"Agent completed in {turns} turns, {total_tokens} tokens")
+
+        return AgentResponse(
+            response=final_text,
+            conversation_id=request.conversation_id or "new-session",
+            turns_used=turns,
+            total_tokens=total_tokens,
+        )
+    except anthropic.APIError as e:
+        logger.error(f"LLM API error: {e}")
+        raise HTTPException(502, f"LLM API error: {e.message}")
+    finally:
+        active_requests -= 1
+
+
+# --- Graceful shutdown ---
+def handle_sigterm(*_):
+    """Handle SIGTERM from container orchestrators."""
+    shutdown_event.set()
+    logger.info("SIGTERM received, beginning graceful shutdown")
+
+signal.signal(signal.SIGTERM, handle_sigterm)
+`} language="python" filename="src/main.py" />
+
+Several patterns in this code are worth calling out:
+
+- **Lifespan management** -- the `lifespan` context manager initializes the LLM client once at startup and drains in-flight requests during shutdown. Without this, Kubernetes will kill your pod while it is still waiting on an LLM response.
+- **Active request tracking** -- the `active_requests` counter lets the health endpoint report whether the service is idle, and the shutdown handler waits for it to reach zero.
+- **SIGTERM handling** -- container orchestrators send SIGTERM before killing a process. The handler sets a flag that causes new requests to be rejected (HTTP 503) while existing ones finish.
+- **Structured logging** -- JSON-formatted logs are parseable by centralized logging systems like CloudWatch, Datadog, and ELK.
+
+## Kubernetes for Scaling
+
+When your agent service needs to handle hundreds of concurrent users, **Kubernetes** provides the orchestration layer. It manages pod scheduling, auto-scaling, health monitoring, and rolling deployments.
+
+Here is a minimal Kubernetes deployment manifest:
+
+<CodeBlock code={`apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agent-service
+  labels:
+    app: agent-service
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: agent-service
+  template:
+    metadata:
+      labels:
+        app: agent-service
+    spec:
+      containers:
+        - name: agent
+          image: registry.example.com/agent-service:v1.2.0
+          ports:
+            - containerPort: 8000
+          env:
+            - name: ANTHROPIC_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: llm-credentials
+                  key: api-key
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          terminationGracePeriodSeconds: 45
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: agent-service-hpa
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: agent-service
+  minReplicas: 2
+  maxReplicas: 20
+  metrics:
+    - type: Pods
+      pods:
+        metric:
+          name: agent_active_requests
+        target:
+          type: AverageValue
+          averageValue: "5"
+`} language="yaml" filename="k8s/deployment.yaml" />
+
+Notice the **HorizontalPodAutoscaler** uses a custom metric (`agent_active_requests`) rather than CPU. This is critical for agent workloads. An agent pod spends most of its time awaiting an LLM API response -- the CPU is idle, but the pod is fully occupied. CPU-based autoscaling would see low utilization and refuse to scale up, even when every pod is saturated with waiting requests.
+
+The **terminationGracePeriodSeconds** is set to 45 seconds, giving in-flight agent loops time to complete before the pod is killed. This value should match or exceed your maximum expected agent execution time.
+
+## Queue-Based Architectures for Async Agents
+
+Some agents take minutes to complete -- researching a topic across multiple sources, generating a complex report, or orchestrating a multi-step workflow. These agents cannot hold an HTTP connection open. The solution is a **queue-based architecture** that decouples request submission from result delivery.
+
+<MermaidDiagram chart={`sequenceDiagram
+    participant C as Client
+    participant API as API Service
+    participant Q as Message Queue
+    participant W as Agent Worker
+    participant S as Result Store
+    C->>API: POST /agent/submit
+    API->>Q: Enqueue job
+    API-->>C: 202 Accepted + job_id
+    Q->>W: Dequeue job
+    W->>W: Run agent loop (minutes)
+    W->>S: Store result
+    C->>API: GET /agent/result/{job_id}
+    API->>S: Fetch result
+    API-->>C: 200 OK + agent response
+`} />
+
+The pattern works as follows:
+
+1. **Submit** -- the client sends a request; the API validates it, enqueues a job, and returns a `job_id` immediately (HTTP 202)
+2. **Process** -- a worker picks the job from the queue and runs the full agent loop, which may take minutes
+3. **Poll or push** -- the client either polls for the result or receives a webhook notification when processing completes
+
+**Benefits of queue-based architectures:**
+
+- **Resilience** -- if a worker crashes mid-execution, the message returns to the queue and another worker picks it up
+- **Backpressure** -- the queue absorbs traffic spikes; workers process jobs at their own pace
+- **Cost efficiency** -- workers can scale to zero when the queue is empty
+- **Visibility** -- queue depth is a direct metric of system load, making autoscaling straightforward
+
+Popular queue systems include **Amazon SQS**, **Google Cloud Pub/Sub**, **RabbitMQ**, and **Redis Streams**. For Python workers, **Celery** with Redis or SQS as the broker is a common choice.
+
+## Comparing Deployment Patterns
+
+Different agent types have different infrastructure needs. Here is a comparison to help you choose:
+
+| Pattern | Best For | Latency | Max Duration | Scaling | Cost Model |
+|---------|----------|---------|-------------|---------|------------|
+| **Serverless** | Single-turn, sporadic traffic | High (cold start) | 5-15 min | Automatic | Per invocation |
+| **Containers** | Multi-turn, steady traffic | Low | Unlimited | Manual or auto | Per hour |
+| **Kubernetes** | High-scale, multi-service | Low | Unlimited | Auto (HPA) | Per node-hour |
+| **Queue + Workers** | Long-running, async | N/A (async) | Unlimited | Queue depth | Per worker-hour |
+
+**Hybrid patterns** are common in practice. A typical production setup uses:
+
+- A **container service** for the API layer and short-lived agent requests
+- A **queue + worker pool** for long-running agent tasks
+- **Serverless functions** for lightweight event handlers (e.g., Slack webhook that triggers an agent job)
+
+> The best deployment pattern is the simplest one that meets your latency, reliability, and cost requirements. Start with a single container service and add complexity only when you have measured evidence that you need it.
+
+## Key Configuration Decisions
+
+When deploying any agent service, you will face these infrastructure decisions:
+
+**Secrets management** -- LLM API keys must never be baked into container images. Use your platform's secrets manager (AWS Secrets Manager, GCP Secret Manager, Kubernetes Secrets) and inject them as environment variables at runtime.
+
+**Request timeouts** -- set timeouts at every layer. The API gateway timeout should exceed the agent's maximum expected execution time. Set LLM client timeouts (connect, read, total) independently so a single slow API call does not block the entire request.
+
+**Resource limits** -- agent services are I/O-bound, not CPU-bound. Allocate modest CPU and memory, but set generous network and connection pool limits. A single agent pod with 0.5 CPU can handle dozens of concurrent requests because it spends most of its time waiting on network I/O.
+
+**Image tagging** -- never deploy the `latest` tag. Use immutable tags tied to git commits (e.g., `agent-service:abc123f`). This makes rollbacks trivial and audit trails clear.
+
+## Summary
+
+Production agent deployment is a layered problem. You **containerize** your agent to guarantee reproducibility across environments. You choose a **deployment pattern** -- serverless, container service, or Kubernetes -- based on your agent's execution profile and traffic patterns. For agents that run longer than a typical HTTP timeout, you introduce a **queue-based architecture** that decouples submission from processing.
+
+The FastAPI service pattern you saw in this lesson -- with health checks, graceful shutdown, structured logging, and active request tracking -- is a template you can reuse for any agent deployment. The Kubernetes configuration with custom metrics autoscaling addresses the unique challenge of agent workloads: they are I/O-bound, not CPU-bound, so standard autoscaling metrics mislead.
+
+In the next lesson, you will learn how to build **CI/CD pipelines** that test, version, and deploy these containerized agents safely -- including the unique challenge of versioning prompts alongside code.

@@ -1,0 +1,525 @@
+---
+title: "Vision-Language Agents"
+quiz:
+  - question: "When passing an image to Claude's Messages API, which two source types are supported for the image content block?"
+    options:
+      - "file_path and http_url"
+      - "base64 and url"
+      - "binary and data_uri"
+      - "raw_bytes and signed_url"
+    correctIndex: 1
+  - question: "Why does a vision-language agent typically extract structured data (JSON, typed objects) from visual inputs rather than returning free-form text descriptions?"
+    options:
+      - "Structured output is smaller and reduces token costs"
+      - "Free-form text cannot be generated from images by current models"
+      - "Structured output enables downstream tools and code to act on the extracted information reliably"
+      - "Structured output is required by the API and free-form responses are rejected"
+    correctIndex: 2
+  - question: "In the document processing agent workflow, what is the purpose of the classification step that occurs before extraction?"
+    options:
+      - "It determines the document's file size to choose the right model"
+      - "It identifies the document type so the agent can apply the correct extraction schema and prompt"
+      - "It converts the image from RGB to grayscale for better OCR accuracy"
+      - "It checks whether the document contains sensitive information that should be redacted"
+    correctIndex: 1
+  - question: "How does a vision-language agent connect to the tool use patterns covered in Module 3?"
+    options:
+      - "Vision replaces tools entirely, so agents no longer need external function calls"
+      - "The agent uses vision to perceive visual information and then invokes tools to act on what it sees, combining perception and action in the agent loop"
+      - "Tool use is only relevant to text-based agents and cannot be combined with image inputs"
+      - "Vision-language agents require a separate tool-use model that runs alongside the vision model"
+    correctIndex: 1
+---
+
+## Overview
+
+In the previous lesson, we explored why multi-modal capabilities matter for agents operating in the real world. Text alone cannot capture the richness of invoices, screenshots, architectural diagrams, or handwritten notes. In this lesson, we move from theory to practice: how do you build agents that **see**?
+
+A **vision-language agent** is an agent whose perception system processes images alongside text, enabling it to reason about visual information and take actions based on what it observes. This is not simply "image captioning" -- it is a full integration of visual perception into the agent loop you learned in Module 1. The agent sees an image, reasons about its contents in context, and decides what to do next -- exactly as a text-only agent reads a document and decides which tool to call.
+
+By the end of this lesson, you will understand the architecture of vision-language pipelines, know how to pass images to Claude's API, and be able to build agents that extract structured information from documents, analyze screenshots, and answer questions about visual content.
+
+## The Vision-Language Pipeline
+
+At the core of every vision-language agent is a pipeline that transforms raw pixel data into structured understanding. Modern **multimodal large language models** (like Claude) handle this pipeline internally, but understanding its stages helps you design better agents.
+
+<MermaidDiagram chart={`graph LR
+    subgraph Input["Image Input"]
+        IMG["Raw Image<br/>PNG / JPEG / GIF / WebP"]
+    end
+
+    subgraph Encoding["Vision Encoder"]
+        PATCH["Patch Embedding<br/>Split image into tiles"]
+        VIS["Visual Features<br/>Extract spatial and<br/>semantic information"]
+    end
+
+    subgraph Fusion["Multimodal LLM"]
+        ALIGN["Cross-Modal Alignment<br/>Map visual features<br/>to language space"]
+        REASON["Joint Reasoning<br/>Combine image understanding<br/>with text context"]
+    end
+
+    subgraph Output["Structured Output"]
+        TEXT["Text Response<br/>Descriptions, answers"]
+        JSON["Structured Data<br/>JSON, typed fields"]
+        TOOL["Tool Calls<br/>Actions based on<br/>visual understanding"]
+    end
+
+    IMG --> PATCH
+    PATCH --> VIS
+    VIS --> ALIGN
+    ALIGN --> REASON
+    REASON --> TEXT
+    REASON --> JSON
+    REASON --> TOOL
+
+    style Input fill:#fef3c7,stroke:#d69e2e,stroke-width:2px
+    style Encoding fill:#e0f0ff,stroke:#3182ce,stroke-width:2px
+    style Fusion fill:#ebf8ff,stroke:#3182ce,stroke-width:2px
+    style Output fill:#c6f6d5,stroke:#38a169,stroke-width:2px
+`} />
+
+The pipeline has four stages:
+
+- **Image input** -- the raw image arrives as base64-encoded data or a URL reference. Claude supports PNG, JPEG, GIF, and WebP formats.
+- **Vision encoder** -- the model splits the image into patches (small tiles), processes each through a vision transformer, and produces a set of **visual feature vectors** that encode spatial layout, objects, text, colors, and relationships.
+- **Cross-modal alignment** -- the visual features are projected into the same representational space as text tokens, allowing the language model to "read" the image as naturally as it reads words.
+- **Joint reasoning** -- the model reasons over both the visual features and any text prompt simultaneously, producing text responses, structured data, or tool calls.
+
+The key insight is that the model does not first describe the image and then reason about the description. Visual features and text are processed **jointly**, which means the model can attend to specific image regions when answering specific questions. Ask "what color is the button in the top-right corner?" and the model's attention focuses on that region directly.
+
+## Passing Images to Claude
+
+Claude's Messages API accepts images as **content blocks** within a message. There are two approaches: **base64 encoding** and **URL references**.
+
+### Base64 Encoding
+
+When you have an image file locally, you encode it as a base64 string and include it inline in the API request. This is the most reliable method because the image data travels with the request -- no external fetching required.
+
+<CodeBlock code={`import anthropic
+import base64
+from pathlib import Path
+
+
+def encode_image(image_path: str) -> tuple[str, str]:
+    """Read an image file and return its base64 encoding and media type."""
+    path = Path(image_path)
+    suffix = path.suffix.lower()
+    media_types = {
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".gif": "image/gif",
+        ".webp": "image/webp",
+    }
+    media_type = media_types.get(suffix, "image/png")
+    image_data = base64.standard_b64encode(path.read_bytes()).decode("utf-8")
+    return image_data, media_type
+
+
+client = anthropic.Anthropic()
+
+image_data, media_type = encode_image("invoice.png")
+
+message = client.messages.create(
+    model="claude-sonnet-4-20250514",
+    max_tokens=1024,
+    messages=[
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": media_type,
+                        "data": image_data,
+                    },
+                },
+                {
+                    "type": "text",
+                    "text": "Extract the invoice number, date, total amount, and line items from this invoice. Return the result as JSON.",
+                },
+            ],
+        }
+    ],
+)
+
+print(message.content[0].text)
+`} language="python" filename="send_image_base64.py" />
+
+### URL References
+
+When the image is hosted publicly, you can pass a URL instead. Claude will fetch the image at request time.
+
+<CodeBlock code={`message = client.messages.create(
+    model="claude-sonnet-4-20250514",
+    max_tokens=1024,
+    messages=[
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "url",
+                        "url": "https://example.com/charts/quarterly-revenue.png",
+                    },
+                },
+                {
+                    "type": "text",
+                    "text": "Analyze this chart. What trend do you see in Q3 and Q4?",
+                },
+            ],
+        }
+    ],
+)
+`} language="python" filename="send_image_url.py" />
+
+You can include **multiple images** in a single message by adding multiple image content blocks. This is useful when an agent needs to compare two screenshots, process a multi-page document, or analyze a set of related images.
+
+## Use Cases for Vision-Language Agents
+
+Vision-language agents unlock a broad range of capabilities that text-only agents cannot address. Here are the primary categories:
+
+### Document Parsing
+
+Extracting structured data from invoices, receipts, contracts, forms, and reports. The agent sees the document image and returns typed fields -- dates, amounts, names, line items -- in a structured format that downstream systems can process. Unlike traditional OCR pipelines, a vision-language agent understands **context**: it knows that the number next to "Total:" is a monetary amount, not an ID number.
+
+### UI Understanding
+
+Agents that look at application screenshots and understand the user interface -- identifying buttons, form fields, navigation elements, error messages, and layout structure. This is the foundation of **computer use** agents that can interact with software by seeing the screen. If you have used Claude's computer use capability, this is the vision component at work.
+
+### Visual Question Answering
+
+Answering natural language questions about images: "What brand is shown in this logo?", "How many people are in this photo?", "Is this plant healthy or diseased?" The agent combines its visual perception with its world knowledge to provide grounded answers.
+
+### Chart and Graph Analysis
+
+Reading data visualizations -- bar charts, line graphs, pie charts, scatter plots -- and extracting the underlying data, identifying trends, or comparing values. An agent can look at a dashboard screenshot and summarize the key metrics without needing access to the underlying database.
+
+### Screenshot Analysis for Testing and Monitoring
+
+Agents that capture screenshots of web applications and detect visual regressions, layout issues, broken elements, or deviations from design specifications. This combines vision perception with the tool use patterns from Module 3 -- the agent sees the screenshot and then calls tools to file a bug report or trigger a redeployment.
+
+## Document Processing Agent: A Complete Workflow
+
+Let us design a practical agent that processes incoming documents. This workflow demonstrates how vision perception integrates with the agent loop and tool use.
+
+<MermaidDiagram chart={`flowchart TD
+    START(["Document arrives<br/>image file or PDF page"]) --> CLASSIFY
+
+    subgraph Perceive["Perceive: Classify Document"]
+        CLASSIFY["Send image to LLM<br/>Prompt: What type of<br/>document is this?"]
+        CLASSIFY --> TYPE{"Document Type"}
+    end
+
+    TYPE -->|Invoice| INV_EXTRACT
+    TYPE -->|Receipt| REC_EXTRACT
+    TYPE -->|Contract| CON_EXTRACT
+    TYPE -->|Unknown| FALLBACK
+
+    subgraph Reason["Reason: Extract Structured Data"]
+        INV_EXTRACT["Extract with<br/>invoice schema:<br/>vendor, date, items, total"]
+        REC_EXTRACT["Extract with<br/>receipt schema:<br/>store, date, items, tax"]
+        CON_EXTRACT["Extract with<br/>contract schema:<br/>parties, terms, dates"]
+        FALLBACK["Extract with<br/>general schema:<br/>title, summary, key fields"]
+    end
+
+    INV_EXTRACT --> VALIDATE
+    REC_EXTRACT --> VALIDATE
+    CON_EXTRACT --> VALIDATE
+    FALLBACK --> VALIDATE
+
+    subgraph Act["Act: Validate and Store"]
+        VALIDATE["Validate extracted fields<br/>Check required fields present<br/>Verify data types"]
+        VALIDATE --> VALID{"Valid?"}
+        VALID -->|Yes| STORE["Store in database<br/>via tool call"]
+        VALID -->|No| RETRY["Re-extract with<br/>targeted prompt"]
+        RETRY --> VALIDATE
+        STORE --> DONE(["Return structured result"])
+    end
+
+    style Perceive fill:#e0f0ff,stroke:#3182ce,stroke-width:2px
+    style Reason fill:#ebf8ff,stroke:#3182ce,stroke-width:2px
+    style Act fill:#c6f6d5,stroke:#38a169,stroke-width:2px
+    style START fill:#fef3c7,stroke:#d69e2e,stroke-width:2px
+    style DONE fill:#c6f6d5,stroke:#276749,stroke-width:2px
+`} />
+
+Notice how this maps directly to the perception-reasoning-action loop from Module 1:
+
+- **Perceive** -- the agent looks at the document image and classifies its type
+- **Reason** -- based on the document type, it selects the appropriate extraction schema and pulls out structured fields
+- **Act** -- it validates the extracted data and stores it, retrying if validation fails
+
+The classification step is critical. A generic "extract everything" prompt produces inconsistent results. By first identifying whether the document is an invoice, receipt, or contract, the agent can apply a **type-specific extraction prompt** with the exact fields expected. This mirrors how a human would process documents -- you look at it, recognize what it is, and then know what information to look for.
+
+## Building a Vision-Language Agent
+
+Now let us implement a vision-language agent that combines image understanding with tool use. This agent can analyze images, extract structured data, and take actions based on what it sees. Recall the tool definition patterns from Module 3 -- we are extending the same approach to include visual inputs.
+
+<CodeBlock code={`import anthropic
+import base64
+import json
+from pathlib import Path
+
+
+def encode_image(image_path: str) -> tuple[str, str]:
+    """Encode a local image file to base64 with its media type."""
+    path = Path(image_path)
+    media_types = {
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".gif": "image/gif",
+        ".webp": "image/webp",
+    }
+    media_type = media_types.get(path.suffix.lower(), "image/png")
+    data = base64.standard_b64encode(path.read_bytes()).decode("utf-8")
+    return data, media_type
+
+
+# Define tools the agent can use after analyzing images
+tools = [
+    {
+        "name": "save_extracted_data",
+        "description": "Save structured data extracted from a document image to the database.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "document_type": {
+                    "type": "string",
+                    "enum": ["invoice", "receipt", "contract", "report", "other"],
+                    "description": "The classified type of the document.",
+                },
+                "extracted_fields": {
+                    "type": "object",
+                    "description": "Key-value pairs of extracted data fields.",
+                },
+                "confidence": {
+                    "type": "string",
+                    "enum": ["high", "medium", "low"],
+                    "description": "Confidence level in the extraction accuracy.",
+                },
+            },
+            "required": ["document_type", "extracted_fields", "confidence"],
+        },
+    },
+    {
+        "name": "flag_for_human_review",
+        "description": "Flag a document for human review when extraction confidence is low or the document type is unclear.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "reason": {
+                    "type": "string",
+                    "description": "Why this document needs human review.",
+                },
+                "partial_extraction": {
+                    "type": "object",
+                    "description": "Any data that was partially extracted.",
+                },
+            },
+            "required": ["reason"],
+        },
+    },
+]
+
+
+def process_document(image_path: str) -> dict:
+    """Run the vision-language agent loop on a document image."""
+    client = anthropic.Anthropic()
+    image_data, media_type = encode_image(image_path)
+
+    system_prompt = """You are a document processing agent. When given a document image:
+
+1. CLASSIFY the document type (invoice, receipt, contract, report, or other).
+2. EXTRACT all relevant structured fields based on the document type.
+   - Invoice: vendor name, invoice number, date, line items, subtotal, tax, total
+   - Receipt: store name, date, items with prices, tax, total, payment method
+   - Contract: parties involved, effective date, termination date, key terms
+   - Report: title, author, date, executive summary, key findings
+3. ASSESS your confidence in the extraction (high/medium/low).
+4. If confidence is high or medium, use save_extracted_data to store the result.
+   If confidence is low or the document is unclear, use flag_for_human_review.
+
+Always use one of the tools to record your result. Do not just describe the document."""
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": media_type,
+                        "data": image_data,
+                    },
+                },
+                {
+                    "type": "text",
+                    "text": "Process this document. Classify it, extract structured data, and save or flag it.",
+                },
+            ],
+        }
+    ]
+
+    # Agent loop: keep running until the model stops calling tools
+    while True:
+        response = client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=2048,
+            system=system_prompt,
+            tools=tools,
+            messages=messages,
+        )
+
+        # Check if the model wants to use a tool
+        if response.stop_reason == "tool_use":
+            tool_block = next(
+                block for block in response.content
+                if block.type == "tool_use"
+            )
+
+            # Execute the tool (in production, these would call real services)
+            if tool_block.name == "save_extracted_data":
+                result = {
+                    "status": "saved",
+                    "id": "doc_12345",
+                    "document_type": tool_block.input["document_type"],
+                }
+                print(f"Saved {tool_block.input['document_type']} with confidence: "
+                      f"{tool_block.input['confidence']}")
+                print(json.dumps(tool_block.input["extracted_fields"], indent=2))
+
+            elif tool_block.name == "flag_for_human_review":
+                result = {"status": "flagged", "queue_position": 3}
+                print(f"Flagged for review: {tool_block.input['reason']}")
+
+            # Feed the tool result back into the conversation
+            messages.append({"role": "assistant", "content": response.content})
+            messages.append({
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": tool_block.id,
+                        "content": json.dumps(result),
+                    }
+                ],
+            })
+        else:
+            # Model finished without a tool call -- return final response
+            final_text = next(
+                (block.text for block in response.content if hasattr(block, "text")),
+                "Processing complete.",
+            )
+            return {"status": "complete", "summary": final_text}
+
+
+# Usage
+if __name__ == "__main__":
+    result = process_document("invoice.png")
+    print(f"\\nFinal result: {result['status']}")
+`} language="python" filename="document_agent.py" />
+
+There are several design decisions worth noting in this implementation:
+
+- **Classification before extraction** -- the system prompt instructs the agent to first classify the document type, then apply the correct extraction schema. This produces far more consistent results than a generic "extract everything" prompt.
+- **Confidence-gated actions** -- the agent assesses its own extraction confidence and routes low-confidence documents to human review rather than saving potentially incorrect data. This is a practical pattern for production systems where accuracy matters.
+- **Tool use for actions** -- rather than returning raw text, the agent uses tools (as covered in Module 3) to take concrete actions. This makes the agent's outputs machine-readable and integrable with downstream systems.
+- **Agent loop** -- the `while True` loop continues until the model produces a response without a tool call, allowing for multi-step interactions if needed (for example, saving data and then confirming the save).
+
+## Multi-Image Analysis
+
+Vision-language agents become especially powerful when they process **multiple images** in a single conversation. This enables comparison, change detection, and multi-page document processing.
+
+<CodeBlock code={`def compare_screenshots(before_path: str, after_path: str) -> str:
+    """Compare two UI screenshots and identify differences."""
+    client = anthropic.Anthropic()
+
+    before_data, before_type = encode_image(before_path)
+    after_data, after_type = encode_image(after_path)
+
+    message = client.messages.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=1024,
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "Compare these two UI screenshots. The first is BEFORE and the second is AFTER a code change.",
+                    },
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": before_type,
+                            "data": before_data,
+                        },
+                    },
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": after_type,
+                            "data": after_data,
+                        },
+                    },
+                    {
+                        "type": "text",
+                        "text": """Analyze the visual differences between BEFORE and AFTER:
+1. Layout changes (spacing, alignment, element positions)
+2. Color or styling changes
+3. Content changes (text, icons, images)
+4. Missing or added elements
+5. Potential visual regressions or bugs
+
+Return a structured assessment with severity ratings.""",
+                    },
+                ],
+            }
+        ],
+    )
+    return message.content[0].text
+`} language="python" filename="compare_screenshots.py" />
+
+This pattern is directly applicable to visual regression testing, design review automation, and monitoring dashboards for unexpected UI changes.
+
+## Practical Considerations
+
+Building production vision-language agents requires attention to several practical details:
+
+**Image resolution and tokens** -- larger images consume more input tokens. Claude processes images by dividing them into tiles, and higher-resolution images produce more tiles. For cost-sensitive applications, resize images to the minimum resolution that preserves the information you need. A screenshot for UI analysis needs high resolution; a document classification task may work fine at lower resolution.
+
+**Prompt specificity** -- vague prompts like "describe this image" produce vague responses. Specific prompts like "extract the vendor name, invoice number, and total amount from this invoice" produce structured, actionable outputs. Always tell the model exactly what you are looking for and in what format.
+
+**Structured output** -- when you need machine-readable results, instruct the model to return JSON and define the expected schema in your prompt. For critical applications, validate the returned structure before using it. The tool use pattern shown above is one way to enforce structure, since tool inputs must conform to the defined input schema.
+
+**Multi-page documents** -- for PDFs or multi-page documents, convert each page to an image and send them as multiple image content blocks. The model can reason across pages, understanding that page 2 continues a table started on page 1.
+
+**Grounding and hallucination** -- vision-language models can sometimes "read" text that is not actually in the image, especially with low-resolution or blurry inputs. For high-stakes extraction tasks, implement validation checks: verify that extracted amounts sum correctly, cross-reference dates with expected ranges, and flag anomalies for human review.
+
+## Connecting to Module 3: Vision Meets Tool Use
+
+The document processing agent above demonstrates a pattern that will recur throughout this module: **vision as perception, tools as action**. In Module 3, you learned how agents use tools to interact with external systems -- calling APIs, querying databases, running code. Vision-language agents extend this by adding a visual perception channel.
+
+The agent loop remains the same:
+
+1. **Perceive** -- now includes both text inputs and image inputs
+2. **Reason** -- the model jointly processes visual and textual information
+3. **Act** -- the model calls tools based on its visual understanding
+4. **Observe** -- the model reads tool results and decides whether to continue
+
+This means every tool use pattern you learned in Module 3 -- sequential tool calls, parallel tool execution, error handling, human-in-the-loop confirmation -- applies directly to vision-language agents. The only difference is that the agent's perception now includes pixels as well as text.
+
+## Summary
+
+In this lesson, we moved from the "why" of multi-modal agents to the "how" of vision-language agents. You learned the architecture of the vision-language pipeline -- from raw pixels through vision encoding and cross-modal alignment to structured output. You saw how to pass images to Claude using base64 encoding and URL references, and you explored the key use cases: document parsing, UI understanding, visual QA, chart analysis, and screenshot-based testing.
+
+Most importantly, you built a complete document processing agent that combines visual perception with tool use, demonstrating that vision is not a separate capability but a new **perception channel** that plugs directly into the agent loop and tool use patterns you already know.
+
+In the next lesson, *Audio and Speech Agents*, we will extend this multi-modal approach to a different sensory channel -- sound -- and explore agents that can listen, speak, and process audio in real time.

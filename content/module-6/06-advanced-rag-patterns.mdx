@@ -1,0 +1,383 @@
+---
+title: "Advanced RAG Patterns"
+quiz:
+  - question: "What is the main advantage of hybrid search (BM25 + vector) over pure vector search?"
+    options:
+      - "It is faster because BM25 skips the embedding step entirely"
+      - "It captures both exact keyword matches and semantic similarity, covering cases where either alone would miss relevant documents"
+      - "It eliminates the need for a vector database"
+      - "It always returns fewer results, which reduces context window usage"
+    correctIndex: 1
+  - question: "In the HyDE technique, what does the LLM generate before performing retrieval?"
+    options:
+      - "A list of keywords extracted from the user's query"
+      - "A confidence score indicating whether retrieval is needed"
+      - "A hypothetical answer document that is then embedded and used as the search query"
+      - "A rewritten version of the user's query with synonyms"
+    correctIndex: 2
+  - question: "What distinguishes agentic RAG from a standard RAG pipeline?"
+    options:
+      - "Agentic RAG uses a fixed pipeline but with more retrieval steps"
+      - "Agentic RAG replaces the LLM with a classifier for retrieval decisions"
+      - "An agent dynamically decides when to retrieve, what query to use, and whether the results are sufficient -- retrieval becomes a tool, not a fixed stage"
+      - "Agentic RAG only works with structured databases, not vector stores"
+    correctIndex: 2
+  - question: "Why is a cross-encoder reranker more accurate than the initial retrieval scores but too slow to use as the primary search method?"
+    options:
+      - "Cross-encoders require GPU clusters that are not available at query time"
+      - "Cross-encoders process the query and each document jointly as a single input, which is expensive but captures fine-grained relevance that independent embeddings miss"
+      - "Cross-encoders only work on documents shorter than 512 tokens"
+      - "Cross-encoders use a different embedding model that has not been fine-tuned"
+    correctIndex: 1
+---
+
+## Overview
+
+In the previous two lessons, you learned how basic **Retrieval-Augmented Generation** works and how **embeddings and vector stores** power the retrieval step. Those foundations handle straightforward use cases well -- a user asks a question, you embed it, find similar chunks, and feed them to the LLM. But real-world queries are messy. Users ask vague questions, complex multi-part questions, or questions where the best document does not share the same vocabulary as the query. A naive retrieve-then-generate pipeline quietly fails in all of these cases, returning plausible-sounding answers built on irrelevant context.
+
+This lesson introduces the techniques that production RAG systems use to close that gap. You will learn how to transform queries before retrieval, combine multiple search strategies, rerank results for precision, and ultimately hand retrieval control to the agent itself. These are not theoretical improvements -- each technique addresses a specific, observable failure mode in basic RAG.
+
+## The Failure Modes of Naive RAG
+
+Before diving into solutions, it helps to understand exactly *what goes wrong* with a simple embed-and-retrieve pipeline. There are four common failure patterns:
+
+- **Vocabulary mismatch** -- the user says "car" but the document says "automobile." Vector search handles this better than keyword search, but it still struggles with domain-specific jargon and acronyms.
+- **Low-relevance retrieval** -- the top-k chunks are topically related but do not actually answer the question. The LLM receives context that looks relevant but is not, and confidently generates a wrong answer.
+- **Complex queries** -- the user asks a question that requires information from multiple documents or multiple aspects of a topic. A single retrieval pass returns chunks that cover only one aspect.
+- **Unnecessary retrieval** -- the query is something the LLM already knows (e.g., "What does HTTP stand for?"), but the pipeline retrieves and injects context anyway, sometimes introducing noise that degrades the answer.
+
+Every technique in this lesson targets one or more of these failure modes.
+
+## The Advanced RAG Pipeline
+
+A production RAG system inserts additional stages between the user's query and the final generation. Each stage refines the information before it reaches the LLM.
+
+<MermaidDiagram chart={`flowchart TD
+    Q["User Query"] --> QT["Query Transformation"]
+    QT --> QD["Query Decomposition"]
+    QT --> HY["HyDE: Generate Hypothetical Answer"]
+    QT --> QR["Query Rewriting"]
+    QD --> HS["Hybrid Search"]
+    HY --> HS
+    QR --> HS
+    HS --> BM["BM25 Keyword Search"]
+    HS --> VS["Vector Similarity Search"]
+    BM --> RR["Reciprocal Rank Fusion"]
+    VS --> RR
+    RR --> RE["Cross-Encoder Reranking"]
+    RE --> CC["Context Compression"]
+    CC --> LLM["LLM Generation"]
+    LLM --> SR["Self-RAG: Verify & Critique"]
+    SR -->|"Needs more info"| QT
+    SR -->|"Sufficient"| A["Final Answer"]
+    style QT fill:#e9d8fd,stroke:#805ad5
+    style HS fill:#bee3f8,stroke:#3182ce
+    style RE fill:#fefcbf,stroke:#d69e2e
+    style CC fill:#c6f6d5,stroke:#38a169
+    style SR fill:#fed7d7,stroke:#e53e3e
+    style QD fill:#e9d8fd,stroke:#805ad5
+    style HY fill:#e9d8fd,stroke:#805ad5
+    style QR fill:#e9d8fd,stroke:#805ad5
+`} />
+
+The purple stages transform the query, the blue stages perform retrieval, the yellow stage reranks, the green stage compresses context, and the red stage verifies the output. You do not need all of these in every system -- you choose the stages that address your specific failure modes.
+
+## Hybrid Search: BM25 + Vector
+
+**Hybrid search** combines two complementary retrieval methods: **BM25** (a classic keyword-matching algorithm) and **vector similarity search** (the embedding-based approach from the previous lesson). The insight is simple -- keyword search excels at exact matches and rare terms, while vector search excels at semantic similarity. By running both and merging their results, you cover cases where either alone would fail.
+
+Consider a user searching a medical knowledge base for "NSAID contraindications." A vector search might return chunks about "pain medication side effects" -- semantically related, but missing the specific acronym. BM25 would match "NSAID" exactly. Conversely, a query like "drugs you shouldn't take with blood thinners" would stump BM25 (no keyword overlap with "anticoagulant contraindications") but would be handled well by vector search.
+
+**Reciprocal Rank Fusion (RRF)** is the standard technique for merging results from multiple search methods. It assigns each document a score based on its rank position in each result list, then combines the scores:
+
+```
+RRF_score(doc) = sum( 1 / (k + rank_i) )  for each retriever i
+```
+
+The constant `k` (typically 60) dampens the influence of rank position, preventing a single retriever from dominating. Documents that appear high in *both* lists get the highest combined scores.
+
+## Query Decomposition
+
+**Query decomposition** addresses complex, multi-part questions by breaking them into simpler sub-queries that can each be answered independently. Instead of trying to retrieve all relevant information with a single search, you decompose the question into focused retrieval passes.
+
+For example, the question *"How does Kubernetes handle pod scheduling differently from Docker Swarm, and what are the performance implications?"* requires knowledge about three distinct topics: Kubernetes scheduling, Docker Swarm scheduling, and performance benchmarks. A single retrieval pass is unlikely to surface chunks covering all three.
+
+The decomposition approach uses the LLM itself to generate sub-queries:
+
+1. The LLM analyzes the original question and produces 2-4 focused sub-queries
+2. Each sub-query runs through the retrieval pipeline independently
+3. The retrieved chunks are deduplicated and merged
+4. The LLM generates the final answer using the combined context
+
+## HyDE: Hypothetical Document Embeddings
+
+**Hypothetical Document Embeddings (HyDE)** tackles the vocabulary mismatch problem from a creative angle. Instead of embedding the user's *question*, you ask the LLM to generate a *hypothetical answer* -- a passage that *would* answer the question if it existed -- and embed that instead.
+
+Why does this work? The hypothetical answer, even if factually imperfect, uses the same vocabulary and phrasing that a real answer document would use. When you embed it, the resulting vector is much closer in embedding space to the actual relevant documents than the original question vector would be.
+
+The trade-off is clear: HyDE adds an extra LLM call before retrieval (latency and cost), and if the hypothetical answer is wildly off-base, it can pull retrieval in the wrong direction. It works best for domains where the LLM has enough background knowledge to generate a plausible (if imprecise) answer.
+
+## Cross-Encoder Reranking
+
+Initial retrieval -- whether BM25, vector, or hybrid -- casts a wide net. The top 20-50 results are *probably* relevant, but their ranking is approximate. A **cross-encoder reranker** refines this ranking with much higher precision.
+
+The difference is architectural. In the initial retrieval step, the query and each document are embedded *independently* -- the retriever never sees them together. A **cross-encoder** processes the query and a candidate document *jointly* as a single input, allowing the model to capture fine-grained interactions between query terms and document terms. This produces far more accurate relevance scores, but it is computationally expensive -- you cannot run a cross-encoder over millions of documents, only over the pre-filtered candidates.
+
+This two-stage architecture -- fast approximate retrieval followed by precise reranking -- is the standard pattern in production search systems:
+
+1. **Stage 1 (Retrieval):** Retrieve top-50 candidates using hybrid search. Fast, approximate.
+2. **Stage 2 (Reranking):** Score each candidate with a cross-encoder. Slow, precise. Keep top-5.
+
+## Context Compression
+
+Even after reranking, the retrieved chunks may contain irrelevant paragraphs, boilerplate headers, or tangential information. **Context compression** extracts only the sentences or passages that are directly relevant to the query, reducing noise in the LLM's context window.
+
+This can be done with a lightweight model that scores each sentence for relevance, or by prompting the LLM itself to extract the relevant portions before generating the final answer. The benefit is twofold: less noise means better answers, and shorter context means lower token costs.
+
+## Self-RAG: Retrieval with Self-Critique
+
+**Self-RAG** introduces a feedback loop into the pipeline. Instead of blindly generating an answer from retrieved context, the LLM evaluates its own output:
+
+- **Do I need retrieval at all?** For simple factual questions the LLM already knows, retrieval may be unnecessary.
+- **Is the retrieved context relevant?** The LLM scores each chunk before using it.
+- **Is my answer supported by the context?** After generating, the LLM checks whether its claims are grounded in the retrieved passages.
+- **Is the answer complete?** If not, trigger another retrieval cycle with a refined query.
+
+Self-RAG transforms the pipeline from a single pass into an iterative loop where the LLM actively manages retrieval quality. This connects directly to the self-reflection architecture you studied in Module 4 -- the same principle of having the LLM critique and revise its own work, applied specifically to the retrieval-generation cycle.
+
+## Agentic RAG: The Agent Controls Retrieval
+
+All of the patterns above still treat RAG as a *pipeline* -- a fixed sequence of stages. **Agentic RAG** takes a fundamentally different approach: retrieval becomes a *tool* that the agent decides when and how to use. This is where the retrieval patterns from this module meet the agent architectures from Module 4.
+
+In a ReAct-style agentic RAG system, the agent has access to retrieval tools alongside other tools. At each step, the agent decides:
+
+- **Whether to retrieve at all** -- some questions do not need external knowledge
+- **What query to use** -- the agent can reformulate, decompose, or use HyDE on its own
+- **Which knowledge source to search** -- the agent can route queries to different indexes
+- **Whether the results are sufficient** -- the agent can retrieve again with a refined query
+
+<MermaidDiagram chart={`graph TD
+    U["User Question"] --> A["Agent (LLM)"]
+    A -->|"Thought: I need to search<br/>the technical docs"| T1["Tool: search_docs"]
+    A -->|"Thought: Let me check<br/>the API reference"| T2["Tool: search_api"]
+    A -->|"Thought: I should look<br/>at recent issues"| T3["Tool: search_issues"]
+    A -->|"Thought: I have enough<br/>context to answer"| ANS["Generate Answer"]
+    T1 -->|"Observation"| A
+    T2 -->|"Observation"| A
+    T3 -->|"Observation"| A
+    subgraph Knowledge["Knowledge Sources"]
+        D1["Technical Docs<br/>Vector Index"]
+        D2["API Reference<br/>BM25 Index"]
+        D3["GitHub Issues<br/>Hybrid Index"]
+    end
+    T1 --> D1
+    T2 --> D2
+    T3 --> D3
+    style A fill:#e9d8fd,stroke:#805ad5
+    style ANS fill:#c6f6d5,stroke:#38a169
+    style Knowledge fill:#ebf8ff,stroke:#3182ce
+`} />
+
+The agent does not follow a fixed retrieve-then-generate pipeline. It reasons about what information it needs, chooses the right source, evaluates the results, and iterates until it has enough context to answer confidently. This is the most flexible RAG architecture, but it is also the most dependent on the LLM's ability to make good retrieval decisions.
+
+## Implementing Query Decomposition + Reranking
+
+Let's implement two of the most impactful techniques -- query decomposition and cross-encoder reranking -- in a combined pipeline. This code builds on the embedding and retrieval patterns from the previous lessons.
+
+<CodeBlock code={`import anthropic
+import json
+from dataclasses import dataclass
+
+client = anthropic.Anthropic()
+
+
+@dataclass
+class RetrievedChunk:
+    """A chunk of text retrieved from the knowledge base."""
+    text: str
+    source: str
+    score: float = 0.0
+
+
+# --- Stage 1: Query Decomposition ---
+
+def decompose_query(query: str) -> list[str]:
+    """Use the LLM to break a complex query into focused sub-queries."""
+    response = client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=1024,
+        messages=[{
+            "role": "user",
+            "content": f"""Break this question into 2-4 focused sub-queries that can
+each be answered independently. Return a JSON array of strings.
+
+Question: {query}
+
+Return ONLY the JSON array, no other text. Example:
+["sub-query 1", "sub-query 2", "sub-query 3"]"""
+        }],
+    )
+    return json.loads(response.content[0].text)
+
+
+# --- Stage 2: Retrieval (simulated) ---
+
+def retrieve(query: str, top_k: int = 5) -> list[RetrievedChunk]:
+    """Simulate hybrid retrieval. In production, this would query
+    both a vector store and a BM25 index, then apply RRF."""
+    # Simulated knowledge base
+    knowledge = [
+        RetrievedChunk(
+            text="Kubernetes uses a scheduler that assigns pods to nodes based on "
+                 "resource requests, affinity rules, and taints/tolerations.",
+            source="k8s-docs/scheduling.md",
+        ),
+        RetrievedChunk(
+            text="Docker Swarm uses a simpler spread or binpack strategy for "
+                 "service placement across nodes in the cluster.",
+            source="swarm-docs/placement.md",
+        ),
+        RetrievedChunk(
+            text="Benchmarks show Kubernetes scheduling adds 2-5ms latency per "
+                 "pod compared to Swarm's sub-millisecond placement decisions.",
+            source="benchmarks/orchestration-2024.md",
+        ),
+        RetrievedChunk(
+            text="Kubernetes supports custom schedulers via the scheduler "
+                 "extender or the scheduling framework plugin API.",
+            source="k8s-docs/custom-scheduler.md",
+        ),
+        RetrievedChunk(
+            text="Container orchestration platforms manage the lifecycle of "
+                 "containerized applications across a cluster of machines.",
+            source="intro/orchestration-overview.md",
+        ),
+    ]
+    # In production: embed query, run BM25 + vector search, apply RRF
+    return knowledge[:top_k]
+
+
+# --- Stage 3: Cross-Encoder Reranking ---
+
+def rerank(query: str, chunks: list[RetrievedChunk], top_k: int = 3) -> list[RetrievedChunk]:
+    """Use the LLM as a cross-encoder reranker.
+    In production, use a dedicated cross-encoder model for speed."""
+    chunk_texts = "\n\n".join(
+        f"[{i}] {c.text}" for i, c in enumerate(chunks)
+    )
+    response = client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=256,
+        messages=[{
+            "role": "user",
+            "content": f"""Score each document's relevance to the query on a scale of 0-10.
+Return a JSON array of objects with "index" and "score" keys.
+
+Query: {query}
+
+Documents:
+{chunk_texts}
+
+Return ONLY the JSON array."""
+        }],
+    )
+    scores = json.loads(response.content[0].text)
+
+    for item in scores:
+        chunks[item["index"]].score = item["score"]
+
+    ranked = sorted(chunks, key=lambda c: c.score, reverse=True)
+    return ranked[:top_k]
+
+
+# --- Stage 4: Generate with reranked context ---
+
+def generate_answer(query: str, context_chunks: list[RetrievedChunk]) -> str:
+    """Generate the final answer using reranked context."""
+    context = "\n\n".join(
+        f"[Source: {c.source}] {c.text}" for c in context_chunks
+    )
+    response = client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=2048,
+        system="Answer the question using ONLY the provided context. "
+               "Cite sources in brackets. If the context is insufficient, say so.",
+        messages=[{
+            "role": "user",
+            "content": f"Context:\n{context}\n\nQuestion: {query}"
+        }],
+    )
+    return response.content[0].text
+
+
+# --- Full Pipeline ---
+
+def advanced_rag(query: str) -> str:
+    """Run the full advanced RAG pipeline."""
+    # Step 1: Decompose the query
+    sub_queries = decompose_query(query)
+    print(f"Sub-queries: {json.dumps(sub_queries, indent=2)}")
+
+    # Step 2: Retrieve for each sub-query
+    all_chunks: list[RetrievedChunk] = []
+    seen_texts: set[str] = set()
+    for sq in sub_queries:
+        for chunk in retrieve(sq):
+            if chunk.text not in seen_texts:
+                all_chunks.append(chunk)
+                seen_texts.add(chunk.text)
+
+    print(f"Retrieved {len(all_chunks)} unique chunks")
+
+    # Step 3: Rerank against the original query
+    top_chunks = rerank(query, all_chunks, top_k=3)
+    print(f"Top chunks after reranking:")
+    for c in top_chunks:
+        print(f"  [{c.score}] {c.source}: {c.text[:80]}...")
+
+    # Step 4: Generate the answer
+    return generate_answer(query, top_chunks)
+
+
+# --- Run it ---
+answer = advanced_rag(
+    "How does Kubernetes handle pod scheduling differently from Docker Swarm, "
+    "and what are the performance implications?"
+)
+print(f"\n=== Answer ===\n{answer}")
+`} language="python" filename="advanced_rag_pipeline.py" />
+
+This pipeline demonstrates the two stages working together. Query decomposition ensures you retrieve chunks covering all aspects of the question, and reranking ensures only the most relevant chunks reach the LLM. In production, you would replace the simulated retrieval with a real hybrid search engine and use a dedicated cross-encoder model (such as `cross-encoder/ms-marco-MiniLM-L-6-v2`) instead of prompting the LLM for reranking.
+
+## Choosing the Right Pattern
+
+Not every system needs every technique. The right combination depends on your failure modes:
+
+| Failure Mode | Technique | Trade-off |
+|-------------|-----------|-----------|
+| Vocabulary mismatch | Hybrid search, HyDE | HyDE adds latency (extra LLM call) |
+| Low-relevance results | Cross-encoder reranking | Adds 50-200ms per query |
+| Complex multi-part queries | Query decomposition | Multiple retrieval passes (cost and latency) |
+| Noisy context | Context compression | Extra processing step |
+| Unnecessary retrieval | Self-RAG, Agentic RAG | Requires capable LLM with good judgment |
+| Need for multiple sources | Agentic RAG | Most complex to implement and debug |
+
+Start with the simplest pipeline that works -- basic RAG from the previous lesson -- and add techniques as you identify specific failure modes in your data. Hybrid search and reranking give the most improvement for the least complexity. Query decomposition and HyDE help with specific query types. Agentic RAG is the most powerful but also the most complex, requiring the agent architecture patterns from Module 4.
+
+> **Connection to Module 4:** If you built a ReAct agent with tool access, you already have the foundation for agentic RAG. The only difference is that one of your tools is a retrieval function. The agent's Thought/Action/Observation loop naturally supports deciding when to retrieve, evaluating results, and retrieving again with a refined query.
+
+## Summary
+
+**Advanced RAG patterns** address the specific failure modes that naive retrieve-then-generate pipelines cannot handle. The key techniques build on each other in layers:
+
+- **Hybrid search** combines BM25 keyword matching with vector similarity to cover both exact and semantic matches
+- **Query decomposition** breaks complex questions into focused sub-queries, ensuring retrieval covers all aspects of the question
+- **HyDE** bridges the vocabulary gap between questions and documents by embedding a hypothetical answer instead of the raw query
+- **Cross-encoder reranking** applies a precision scoring model to pre-filtered candidates, dramatically improving which chunks reach the LLM
+- **Context compression** strips irrelevant content from retrieved chunks, reducing noise and token costs
+- **Self-RAG** adds a verification loop where the LLM critiques its own retrieval and generation quality
+- **Agentic RAG** gives the agent full control over when, how, and from where to retrieve, making retrieval a dynamic tool rather than a fixed pipeline stage
+
+The progression from basic RAG to agentic RAG mirrors the broader progression of this course: from fixed pipelines to autonomous agents that make their own decisions. Each layer of sophistication adds flexibility but also complexity -- choose the techniques that match your actual failure modes, not the ones that sound most impressive.
+
+> In the next lesson, **Memory Lab**, you will put these concepts into practice by building an agent with conversation memory and RAG-powered knowledge retrieval. Frameworks like LangChain and LlamaIndex provide built-in integrations for many of these patterns, which you will explore in Module 7.

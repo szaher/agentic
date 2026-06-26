@@ -1,0 +1,440 @@
+---
+title: "Task Decomposition and Delegation"
+quiz:
+  - question: "What is the key difference between functional decomposition and data-parallel decomposition?"
+    options:
+      - "Functional decomposition is faster because it uses fewer agents"
+      - "Data-parallel decomposition splits work by expertise, while functional decomposition splits by data"
+      - "Functional decomposition splits a task by capability or role, while data-parallel decomposition splits the same operation across partitions of data"
+      - "Data-parallel decomposition requires a hierarchical topology, but functional decomposition does not"
+    correctIndex: 2
+  - question: "In a push-based delegation model, who decides which worker receives a subtask?"
+    options:
+      - "Each worker agent selects tasks from a shared queue based on availability"
+      - "The orchestrator assigns subtasks directly to specific worker agents"
+      - "Workers negotiate among themselves to divide the work"
+      - "The user manually routes each subtask to the appropriate agent"
+    correctIndex: 1
+  - question: "Why is a dependency graph important when decomposing tasks with interdependent subtasks?"
+    options:
+      - "It ensures all subtasks run sequentially, which is always the safest approach"
+      - "It eliminates the need for result aggregation at the end"
+      - "It identifies which subtasks can run in parallel and which must wait for upstream results, enabling correct execution order"
+      - "It replaces the need for specialized worker agents"
+    correctIndex: 2
+  - question: "How does multi-agent task decomposition extend the Plan-and-Execute pattern from Module 4?"
+    options:
+      - "It replaces Plan-and-Execute entirely with a different paradigm"
+      - "It uses the same single agent for both planning and execution"
+      - "It distributes the execution phase across multiple specialized agents instead of a single executor"
+      - "It removes the planning phase and relies only on reactive execution"
+    correctIndex: 2
+---
+
+## Overview
+
+In the previous lesson, we explored Google's **Agent-to-Agent (A2A) protocol** -- an open standard that lets agents discover each other and exchange messages across platforms. A2A solves the *interoperability* problem: how agents connect. But connectivity alone does not make a multi-agent system effective. The harder question is: once you have a team of specialized agents, how do you decide what each one should work on?
+
+This is the problem of **task decomposition and delegation** -- taking a complex request that no single agent can handle well and breaking it into subtasks that specialized agents can execute efficiently. If orchestration patterns (Lesson 02) define *who is in charge*, and communication protocols (Lessons 03-04) define *how agents talk*, then task decomposition defines *what each agent actually does*.
+
+The idea is not new. You encountered a single-agent version in Module 4, Lesson 03: the **Plan-and-Execute** architecture, where a planner breaks a task into steps and an executor works through them sequentially. Multi-agent task decomposition extends this idea by distributing the execution phase across *multiple* specialized agents, each handling the subtasks that match their expertise. The planner becomes an orchestrator. The single executor becomes a worker pool. And the simple step list becomes a dependency-aware task graph.
+
+## The Decomposition Pipeline
+
+Every multi-agent task decomposition system follows the same core pipeline: receive a complex task, break it into subtasks, assign those subtasks to appropriate agents, execute them (possibly in parallel), and aggregate the results into a final output.
+
+<MermaidDiagram chart={`flowchart TD
+    INPUT["Complex Task"] --> ANALYZE["Analyze & Understand"]
+    ANALYZE --> DECOMPOSE["Decompose into Subtasks"]
+    DECOMPOSE --> DEP["Resolve Dependencies"]
+    DEP --> ASSIGN["Assign to Workers"]
+    ASSIGN --> PAR{"Parallel or<br/>Sequential?"}
+    PAR -- "Independent" --> EXEC_P["Execute in Parallel"]
+    PAR -- "Dependent" --> EXEC_S["Execute Sequentially"]
+    EXEC_P --> AGG["Aggregate Results"]
+    EXEC_S --> AGG
+    AGG --> VALIDATE["Validate & Synthesize"]
+    VALIDATE --> OUTPUT["Final Response"]
+
+    style INPUT fill:#fefcbf,stroke:#d69e2e,color:#1a202c
+    style ANALYZE fill:#ebf8ff,stroke:#3182ce,color:#1a202c
+    style DECOMPOSE fill:#ebf8ff,stroke:#3182ce,color:#1a202c
+    style DEP fill:#e9d8fd,stroke:#805ad5,color:#1a202c
+    style ASSIGN fill:#e9d8fd,stroke:#805ad5,color:#1a202c
+    style PAR fill:#fed7d7,stroke:#e53e3e,color:#1a202c
+    style EXEC_P fill:#c6f6d5,stroke:#38a169,color:#1a202c
+    style EXEC_S fill:#c6f6d5,stroke:#38a169,color:#1a202c
+    style AGG fill:#fefcbf,stroke:#d69e2e,color:#1a202c
+    style VALIDATE fill:#fefcbf,stroke:#d69e2e,color:#1a202c
+    style OUTPUT fill:#c6f6d5,stroke:#38a169,color:#1a202c
+`} />
+
+The pipeline has two critical decision points. First, during decomposition, the orchestrator must choose the right **decomposition strategy** -- should it split by function, by data, or by hierarchy? Second, after resolving dependencies, it must decide which subtasks can run in parallel and which must wait for upstream results. Getting these decisions right determines whether your multi-agent system is faster than a single agent or just more complicated.
+
+## Decomposition Strategies
+
+Not all tasks decompose the same way. The right strategy depends on the structure of the work itself. There are three fundamental approaches, and most real systems combine them.
+
+### Functional Decomposition
+
+**Functional decomposition** splits a task by capability or role. Each subtask requires a different type of expertise, and you assign it to the agent that specializes in that area.
+
+Consider a request like "Build a market analysis report for launching a SaaS product in Europe." A functional decomposition might produce:
+
+- **Market Research Agent** -- gather market size data, growth trends, and competitor landscape
+- **Legal/Compliance Agent** -- analyze GDPR requirements, data residency rules, and licensing
+- **Financial Agent** -- model pricing strategies, revenue projections, and cost structures
+- **Writing Agent** -- synthesize findings into a cohesive, well-structured report
+
+Each agent brings different knowledge and tools. The market researcher uses web search and data APIs. The legal agent queries regulatory databases. The financial agent runs spreadsheet models. Functional decomposition works best when the subtasks require genuinely different skills.
+
+### Data-Parallel Decomposition
+
+**Data-parallel decomposition** applies the same operation across partitions of data. Every worker does the same type of work, just on a different slice of the input.
+
+Consider: "Analyze customer sentiment across 10,000 support tickets from last quarter." Rather than one agent reading all 10,000 tickets, you partition the data:
+
+- **Worker 1** -- analyze tickets 1-2,500
+- **Worker 2** -- analyze tickets 2,501-5,000
+- **Worker 3** -- analyze tickets 5,001-7,500
+- **Worker 4** -- analyze tickets 7,501-10,000
+
+All four workers run the same sentiment analysis prompt. Their results are aggregated into a final summary. Data-parallel decomposition is straightforward -- the agents are interchangeable -- and it scales linearly. It is the right choice whenever the bottleneck is volume rather than complexity.
+
+### Hierarchical Decomposition
+
+**Hierarchical decomposition** applies decomposition recursively. A top-level orchestrator breaks the task into major subtasks, each of which is assigned to a sub-orchestrator that further decomposes its piece.
+
+Consider: "Migrate our entire infrastructure from AWS to GCP." The top-level orchestrator splits this into major workstreams -- compute, storage, networking, databases, security. Each workstream is assigned to a sub-orchestrator that further decomposes it. The compute sub-orchestrator might split its work into VM migration, container migration, and serverless migration, each handled by a specialist agent.
+
+Hierarchical decomposition is necessary when the task is too large for any single orchestrator to decompose in one pass. It mirrors how large organizations structure work -- executives set strategy, managers define projects, team leads assign tasks. The trade-off is complexity: more layers mean more coordination overhead and more places where communication can break down.
+
+## Delegation Patterns: Push vs. Pull
+
+Once you have subtasks, you need to get them to the right agents. There are two fundamental patterns for this, and they have very different characteristics.
+
+### Push-Based Delegation
+
+In **push-based delegation**, the orchestrator decides which worker receives each subtask and sends it directly. The orchestrator maintains a registry of available agents, their capabilities, and their current load. When a new subtask is created, the orchestrator selects the best-fit agent and pushes the task to it.
+
+Push-based delegation gives the orchestrator full control over assignment. It can implement sophisticated routing -- considering agent specialization, current workload, past performance, and even cost. The downside is that the orchestrator becomes a bottleneck: it must know about every agent and make every routing decision.
+
+### Pull-Based Delegation
+
+In **pull-based delegation**, subtasks are placed on a shared **task queue**, and worker agents pull tasks when they are ready. Each worker monitors the queue and claims tasks that match its capabilities. The orchestrator's job is simply to decompose the task and enqueue the subtasks -- it does not need to know which specific agent will handle each one.
+
+Pull-based delegation is more scalable and resilient. Workers self-balance their load. New workers can join without reconfiguring the orchestrator. If a worker crashes, its unclaimed tasks remain on the queue for others to pick up. The trade-off is less control: the orchestrator cannot guarantee which agent handles which task or in what order.
+
+> **In practice**, most production systems use a hybrid. The orchestrator pushes tasks to specific queues based on capability (e.g., "research-queue", "code-queue"), and workers pull from the queue that matches their specialization. This gives you capability-based routing with self-balancing load distribution.
+
+## The Delegation Architecture
+
+The following diagram shows a complete delegation system with a task decomposer, task queue, worker pool, and result aggregator. This is the architecture you would build for a production multi-agent system.
+
+<MermaidDiagram chart={`graph TD
+    subgraph Orchestration["Orchestration Layer"]
+        TD["Task Decomposer"] --> TQ["Task Queue"]
+        TD --> DG["Dependency Graph"]
+        DG --> TQ
+    end
+
+    subgraph Workers["Worker Pool"]
+        W1["Research Agent"]
+        W2["Code Agent"]
+        W3["Analysis Agent"]
+        W4["Writing Agent"]
+    end
+
+    subgraph Results["Result Layer"]
+        RQ["Result Queue"]
+        AGG["Result Aggregator"]
+        RQ --> AGG
+    end
+
+    TQ --> W1
+    TQ --> W2
+    TQ --> W3
+    TQ --> W4
+    W1 --> RQ
+    W2 --> RQ
+    W3 --> RQ
+    W4 --> RQ
+    AGG --> TD
+
+    style Orchestration fill:#ebf8ff,stroke:#3182ce,color:#1a202c
+    style Workers fill:#c6f6d5,stroke:#38a169,color:#1a202c
+    style Results fill:#fefcbf,stroke:#d69e2e,color:#1a202c
+    style TD fill:#bee3f8,stroke:#2b6cb0,color:#1a202c
+    style TQ fill:#bee3f8,stroke:#2b6cb0,color:#1a202c
+    style DG fill:#d6bcfa,stroke:#805ad5,color:#1a202c
+    style W1 fill:#9ae6b4,stroke:#276749,color:#1a202c
+    style W2 fill:#9ae6b4,stroke:#276749,color:#1a202c
+    style W3 fill:#9ae6b4,stroke:#276749,color:#1a202c
+    style W4 fill:#9ae6b4,stroke:#276749,color:#1a202c
+    style RQ fill:#fefcbf,stroke:#b7791f,color:#1a202c
+    style AGG fill:#fefcbf,stroke:#b7791f,color:#1a202c
+`} />
+
+Notice the feedback loop from the **Result Aggregator** back to the **Task Decomposer**. This is essential for adaptive decomposition. When a worker returns an unexpected result -- maybe the research agent discovers that the topic is much broader than expected -- the decomposer can generate additional subtasks or re-decompose the remaining work. This mirrors the replanning capability of Plan-and-Execute agents from Module 4, but now operating across a distributed team.
+
+The **Dependency Graph** is what makes the system smart about execution order. It tracks which subtasks depend on the output of other subtasks, ensuring that a subtask is only released to the queue when all its prerequisites are complete.
+
+## Handling Dependencies Between Subtasks
+
+Real tasks are rarely a flat list of independent items. Subtasks have dependencies -- the writing agent cannot draft a report section until the research agent has gathered the data for it. Managing these dependencies correctly is what separates a working multi-agent system from a chaotic one.
+
+A **dependency graph** represents subtasks as nodes and dependencies as directed edges. Before enqueueing a subtask, the orchestrator checks whether all upstream dependencies have completed. Subtasks with no unresolved dependencies are released immediately, allowing maximum parallelism.
+
+Consider a task: "Write a technical blog post comparing three database solutions." The dependency structure looks like this:
+
+- **Subtask A** (Research DB 1), **Subtask B** (Research DB 2), **Subtask C** (Research DB 3) -- these are independent and can run in parallel
+- **Subtask D** (Create comparison table) -- depends on A, B, and C
+- **Subtask E** (Write introduction) -- independent of all others
+- **Subtask F** (Write conclusion and recommendations) -- depends on D
+- **Subtask G** (Assemble and edit final post) -- depends on D, E, and F
+
+The optimal execution schedule runs A, B, C, and E in parallel. Once A, B, and C complete, D starts. Once D completes, F starts. Once D, E, and F all complete, G starts. This dependency-aware scheduling minimizes total execution time compared to running everything sequentially.
+
+## Implementing a Task Decomposer
+
+Let's build a practical task decomposer that analyzes a complex request, breaks it into subtasks with dependency information, and delegates them to specialized worker agents. This implementation uses an LLM to perform the decomposition and a simple execution engine to manage dependencies.
+
+<CodeBlock code={`import anthropic
+import json
+import asyncio
+from dataclasses import dataclass, field
+from enum import Enum
+
+client = anthropic.Anthropic()
+
+class TaskStatus(Enum):
+    PENDING = "pending"
+    READY = "ready"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+@dataclass
+class Subtask:
+    id: str
+    description: str
+    agent_type: str          # Which specialist handles this
+    dependencies: list[str]  # IDs of subtasks this depends on
+    status: TaskStatus = TaskStatus.PENDING
+    result: str | None = None
+
+DECOMPOSITION_PROMPT = """You are a task decomposition engine for a multi-agent system.
+
+Given a complex task, break it into subtasks. For each subtask, specify:
+- id: a short unique identifier (e.g., "research_1", "code_1")
+- description: what the subtask should accomplish
+- agent_type: one of "research", "code", "analysis", "writing"
+- dependencies: list of subtask IDs that must complete first (empty if independent)
+
+Return valid JSON with a "subtasks" array. Maximize parallelism:
+only add a dependency if the subtask truly needs another's output.
+
+Task: {task}"""
+
+def decompose_task(task: str) -> list[Subtask]:
+    """Use an LLM to decompose a complex task into subtasks."""
+
+    response = client.messages.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=2048,
+        messages=[{
+            "role": "user",
+            "content": DECOMPOSITION_PROMPT.format(task=task)
+        }]
+    )
+
+    # Parse the JSON from the LLM response
+    text = response.content[0].text
+    # Extract JSON block if wrapped in markdown fences
+    if "\`\`\`json" in text:
+        text = text.split("\`\`\`json")[1].split("\`\`\`")[0]
+    elif "\`\`\`" in text:
+        text = text.split("\`\`\`")[1].split("\`\`\`")[0]
+
+    data = json.loads(text)
+
+    return [
+        Subtask(
+            id=s["id"],
+            description=s["description"],
+            agent_type=s["agent_type"],
+            dependencies=s.get("dependencies", []),
+        )
+        for s in data["subtasks"]
+    ]
+
+# ---------- Worker agents ----------
+
+WORKER_PROMPTS = {
+    "research": "You are a research specialist. Gather key facts and data. Be concise.",
+    "code": "You are a coding specialist. Write clean, working code. Explain briefly.",
+    "analysis": "You are an analysis specialist. Compare, evaluate, and draw conclusions.",
+    "writing": "You are a writing specialist. Produce clear, well-structured prose.",
+}
+
+def execute_subtask(subtask: Subtask, context: dict[str, str]) -> str:
+    """Execute a single subtask using the appropriate worker agent."""
+
+    # Build context from completed dependencies
+    dep_context = ""
+    for dep_id in subtask.dependencies:
+        if dep_id in context:
+            dep_context += f"\\n--- Result from [{dep_id}] ---\\n{context[dep_id]}\\n"
+
+    system = WORKER_PROMPTS.get(subtask.agent_type, "You are a helpful assistant.")
+
+    messages = [{
+        "role": "user",
+        "content": (
+            f"Task: {subtask.description}"
+            + (f"\\n\\nContext from prior subtasks:{dep_context}" if dep_context else "")
+        ),
+    }]
+
+    response = client.messages.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=1024,
+        system=system,
+        messages=messages,
+    )
+    return response.content[0].text
+
+# ---------- Orchestration engine ----------
+
+def get_ready_tasks(subtasks: list[Subtask]) -> list[Subtask]:
+    """Find subtasks whose dependencies are all completed."""
+    completed_ids = {s.id for s in subtasks if s.status == TaskStatus.COMPLETED}
+    return [
+        s for s in subtasks
+        if s.status == TaskStatus.PENDING
+        and all(dep in completed_ids for dep in s.dependencies)
+    ]
+
+def run_pipeline(task: str) -> str:
+    """Decompose a task, resolve dependencies, and execute with workers."""
+
+    print(f"Decomposing task: {task}\\n")
+    subtasks = decompose_task(task)
+
+    for s in subtasks:
+        deps = ", ".join(s.dependencies) if s.dependencies else "none"
+        print(f"  [{s.id}] ({s.agent_type}) deps=[{deps}] {s.description}")
+
+    print(f"\\n{'='*60}")
+    print(f"Executing {len(subtasks)} subtasks...\\n")
+
+    results: dict[str, str] = {}
+    iteration = 0
+
+    while any(s.status != TaskStatus.COMPLETED for s in subtasks):
+        ready = get_ready_tasks(subtasks)
+        if not ready:
+            failed = [s for s in subtasks if s.status == TaskStatus.FAILED]
+            if failed:
+                raise RuntimeError(f"Deadlock: failed subtasks {[s.id for s in failed]}")
+            raise RuntimeError("Deadlock: no tasks ready but not all completed")
+
+        iteration += 1
+        print(f"--- Wave {iteration}: running {[s.id for s in ready]} in parallel ---")
+
+        # In production, you would use asyncio.gather() here.
+        # Sequential execution shown for clarity.
+        for subtask in ready:
+            subtask.status = TaskStatus.RUNNING
+            try:
+                result = execute_subtask(subtask, results)
+                subtask.result = result
+                subtask.status = TaskStatus.COMPLETED
+                results[subtask.id] = result
+                print(f"  Completed [{subtask.id}]")
+            except Exception as e:
+                subtask.status = TaskStatus.FAILED
+                print(f"  FAILED [{subtask.id}]: {e}")
+
+    print(f"\\n{'='*60}")
+    print(f"All subtasks completed in {iteration} waves.\\n")
+
+    # Aggregate: return the result of the final subtask
+    # (the one with no downstream dependents)
+    all_deps = {dep for s in subtasks for dep in s.dependencies}
+    final_tasks = [s for s in subtasks if s.id not in all_deps]
+
+    return "\\n\\n".join(
+        f"[{s.id}] {s.result}" for s in final_tasks if s.result
+    )
+
+# ---------- Run it ----------
+if __name__ == "__main__":
+    result = run_pipeline(
+        "Write a technical comparison of PostgreSQL vs MongoDB for "
+        "a startup building a SaaS analytics platform. Include "
+        "performance benchmarks, cost analysis, and a recommendation."
+    )
+    print("FINAL OUTPUT:")
+    print(result)
+`} language="python" filename="task_decomposer.py" />
+
+Let's walk through the key design decisions in this implementation:
+
+**The `decompose_task` function** uses an LLM to perform the decomposition itself. This is a common pattern -- rather than hardcoding decomposition rules, you let the language model analyze the task and decide how to split it. The structured JSON output ensures the decomposition is machine-readable.
+
+**The `get_ready_tasks` function** implements dependency resolution. It scans all pending subtasks and returns only those whose dependencies have all completed. This is the core of the execution scheduler -- it determines the "waves" of parallel execution.
+
+**The `execute_subtask` function** demonstrates context passing. When a subtask has dependencies, the results from those upstream tasks are injected into the worker's prompt as context. This is how information flows through the dependency graph -- each worker sees exactly the upstream results it needs, and nothing more.
+
+**The `run_pipeline` function** ties everything together in a wave-based execution loop. Each wave runs all currently-ready tasks (in production, you would use `asyncio.gather()` for true parallelism). After each wave, newly unblocked tasks become ready for the next wave. The loop continues until all tasks are completed.
+
+## From Plan-and-Execute to Multi-Agent Decomposition
+
+If this architecture looks familiar, it should. In Module 4, Lesson 03, you learned how **Plan-and-Execute** agents separate planning from execution within a single agent. Multi-agent task decomposition is the natural evolution of that pattern:
+
+| | Plan-and-Execute (Module 4) | Multi-Agent Decomposition |
+|---|---|---|
+| **Planner** | Single LLM call creates step list | Orchestrator LLM creates subtask graph |
+| **Executor** | Same agent executes all steps | Specialized workers execute their subtasks |
+| **Parallelism** | Sequential by default | Dependency-aware parallel execution |
+| **Replanning** | Replanner updates remaining steps | Aggregator feeds results back to decomposer |
+| **Scalability** | Limited by single agent's context | Scales with worker pool size |
+
+The key insight is that Plan-and-Execute is essentially multi-agent decomposition with a worker pool of size one. When you add specialized workers and dependency-aware scheduling, you get both speed (parallelism) and quality (specialization).
+
+## Result Aggregation Strategies
+
+Decomposition is only half the problem. Once workers complete their subtasks, you need to combine their outputs into a coherent final result. The right **aggregation strategy** depends on the nature of the subtasks.
+
+**Sequential assembly** works when subtasks produce parts of an ordered output -- like sections of a document. The aggregator concatenates results in the correct order, possibly with an editing pass for consistency.
+
+**Reduction** works when subtasks produce comparable outputs -- like sentiment scores from data-parallel analysis. The aggregator computes a summary statistic (average, majority vote, distribution) across all worker results.
+
+**Synthesis** works when subtasks produce complementary information that needs to be woven together -- like research findings from different domains. The aggregator uses an LLM to read all results and produce a unified narrative that incorporates insights from every subtask.
+
+**Hierarchical rollup** works with hierarchical decomposition. Each sub-orchestrator aggregates its workers' results into a summary, then passes that summary up to its parent orchestrator. The top-level aggregator combines summaries from all workstreams.
+
+> **Design rule of thumb:** if a human would copy-paste the results together, use sequential assembly. If a human would calculate a statistic, use reduction. If a human would read everything and write a new summary, use synthesis.
+
+## Common Pitfalls
+
+Building task decomposition systems exposes several failure modes that are not obvious until you encounter them:
+
+**Over-decomposition** -- breaking a simple task into too many subtasks creates coordination overhead that exceeds the benefit. A task like "summarize this article" does not need three agents. Use multi-agent decomposition for genuinely complex tasks with multiple dimensions.
+
+**Missing dependencies** -- if the decomposer fails to declare a dependency between two subtasks, the downstream task will run without the context it needs. Validate the dependency graph before execution: check that no subtask references inputs that are not produced by a declared dependency.
+
+**Result incompatibility** -- workers may produce results in different formats, levels of detail, or even contradictory conclusions. The aggregator must handle normalization and conflict resolution, not just concatenation.
+
+**Fan-out explosion** -- hierarchical decomposition can generate exponentially many subtasks if each level splits aggressively. Set maximum depth and breadth limits, and monitor total subtask count.
+
+## Summary
+
+**Task decomposition and delegation** is the mechanism that turns a collection of specialized agents into a coordinated team. The decomposition pipeline -- analyze, decompose, resolve dependencies, assign, execute, aggregate -- provides a repeatable framework for breaking complex requests into manageable pieces.
+
+The three decomposition strategies -- **functional** (split by expertise), **data-parallel** (split by data partition), and **hierarchical** (recursive decomposition) -- match different task structures. **Push-based delegation** gives the orchestrator control over assignment, while **pull-based delegation** lets workers self-balance load from a shared queue. Most production systems use a hybrid of both.
+
+Managing **dependencies between subtasks** is critical for correctness. A dependency graph determines execution order and enables maximum parallelism by releasing independent subtasks simultaneously. **Result aggregation** -- whether assembly, reduction, synthesis, or hierarchical rollup -- must match the structure of the decomposed work.
+
+This lesson extends the Plan-and-Execute pattern from Module 4 into the multi-agent domain: the single planner becomes a task decomposer, the single executor becomes a worker pool, and the sequential step list becomes a dependency-aware task graph. In the next lesson, we will explore a different collaboration pattern -- **debate and consensus** -- where agents improve each other's outputs through structured argumentation rather than task division.

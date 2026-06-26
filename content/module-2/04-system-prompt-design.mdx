@@ -1,0 +1,387 @@
+---
+title: "System Prompt Design"
+quiz:
+  - question: "Which section of a system prompt is most important for preventing an agent from performing actions outside its intended scope?"
+    options:
+      - "Identity and role"
+      - "Capabilities and constraints"
+      - "Output format"
+      - "Few-shot examples"
+    correctIndex: 1
+  - question: "What is the main risk of including too many rules and instructions in a single system prompt?"
+    options:
+      - "The API will reject the request due to token limits"
+      - "The model may ignore or contradict rules as the prompt grows longer"
+      - "The model will always refuse to answer"
+      - "The system prompt will override the user's message entirely"
+    correctIndex: 1
+  - question: "Why should system prompts include few-shot examples of desired behavior?"
+    options:
+      - "To increase the token count and improve model performance"
+      - "Because models cannot follow instructions without examples"
+      - "They demonstrate the expected format and reasoning pattern more reliably than abstract rules alone"
+      - "They replace the need for behavioral guidelines"
+    correctIndex: 2
+  - question: "When building a multi-agent system, what is the recommended approach to system prompts?"
+    options:
+      - "Use a single shared system prompt for all agents"
+      - "Give each agent its own specialized system prompt tailored to its role"
+      - "Avoid system prompts entirely and rely on user messages"
+      - "Copy the same prompt but change the agent's name"
+    correctIndex: 1
+---
+
+## Overview
+
+In the previous lessons, we covered the foundations of agent prompt engineering, chain-of-thought reasoning, and structured outputs. Each of those techniques is a tool in your prompting toolkit. Now we bring them together into the most important artifact in any agent system: the **system prompt**.
+
+The system prompt is the "constitution" of your agent. It defines who the agent is, what it can and cannot do, how it should behave, and what its outputs should look like. Every time the agent loop runs -- every observe-think-act cycle from Module 1 -- the system prompt sits at the top of the conversation, silently shaping every decision the model makes.
+
+A poorly designed system prompt produces an unreliable agent. A well-designed one produces an agent that is consistent, safe, and effective across thousands of interactions. This lesson teaches you how to craft system prompts that do the latter.
+
+## The Anatomy of a System Prompt
+
+A great system prompt is not a wall of text. It is a structured document with clearly delineated sections, each serving a distinct purpose. Think of it as a job description, operations manual, and code of conduct rolled into one.
+
+The following diagram shows the six key sections of a well-structured system prompt and how they relate to each other:
+
+<MermaidDiagram chart={`graph TD
+    SP["System Prompt"] --> ID["1. Identity & Role"]
+    SP --> CC["2. Capabilities & Constraints"]
+    SP --> TU["3. Tool Usage Instructions"]
+    SP --> OF["4. Output Format"]
+    SP --> BG["5. Behavioral Guidelines"]
+    SP --> EX["6. Few-Shot Examples"]
+
+    ID --> |"defines"| WHO["Who the agent IS"]
+    CC --> |"defines"| WHAT["What it CAN and CANNOT do"]
+    TU --> |"defines"| HOW["WHEN and HOW to use tools"]
+    OF --> |"defines"| SHAPE["Structure of responses"]
+    BG --> |"defines"| TONE["Tone, safety, error handling"]
+    EX --> |"demonstrates"| BEHAVIOR["Desired behavior in action"]
+
+    subgraph Foundation["Agent Constitution"]
+        ID
+        CC
+    end
+
+    subgraph Operations["Operational Rules"]
+        TU
+        OF
+    end
+
+    subgraph Culture["Behavioral Layer"]
+        BG
+        EX
+    end
+
+    style SP fill:#ebf8ff,stroke:#3182ce,color:#1a202c
+    style Foundation fill:#c6f6d5,stroke:#38a169,color:#1a202c
+    style Operations fill:#fefcbf,stroke:#d69e2e,color:#1a202c
+    style Culture fill:#fed7d7,stroke:#e53e3e,color:#1a202c
+    style ID fill:#c6f6d5,stroke:#38a169,color:#1a202c
+    style CC fill:#c6f6d5,stroke:#38a169,color:#1a202c
+    style TU fill:#fefcbf,stroke:#d69e2e,color:#1a202c
+    style OF fill:#fefcbf,stroke:#d69e2e,color:#1a202c
+    style BG fill:#fed7d7,stroke:#e53e3e,color:#1a202c
+    style EX fill:#fed7d7,stroke:#e53e3e,color:#1a202c
+`} />
+
+Let's walk through each section in detail.
+
+## Section 1: Identity and Role
+
+The opening of a system prompt establishes **who the agent is**. This is not just cosmetic -- it fundamentally shapes how the model interprets every subsequent instruction and user message. When you tell a model "You are a senior security analyst," it activates different knowledge and reasoning patterns than "You are a friendly general assistant."
+
+An effective identity section includes:
+
+- **Role title**: A specific, descriptive title ("You are a research analyst specializing in financial markets," not "You are a helpful AI")
+- **Domain expertise**: What the agent is an expert in
+- **Audience**: Who the agent serves ("You assist junior developers on the team" vs. "You advise C-level executives")
+- **Persona boundaries**: The agent should not claim to be human, should not invent credentials, and should be transparent about being an AI when asked
+
+The more specific the role, the more consistent the agent's behavior. "You are a Python code reviewer who focuses on security vulnerabilities" will produce far more targeted outputs than "You are a code reviewer."
+
+## Section 2: Capabilities and Constraints
+
+This section defines the agent's **operational boundaries** -- what it is allowed to do and, critically, what it must not do. Constraints are often more important than capabilities, because an unconstrained agent will attempt anything a user asks, including things it should refuse.
+
+Strong capability and constraint definitions include:
+
+- **Explicit capabilities**: "You can search the web, read documents, and write summaries"
+- **Hard constraints**: "You must NEVER execute code that deletes files," "You must NEVER share API keys or credentials"
+- **Scope limits**: "You only answer questions about our product. For unrelated topics, politely redirect the user"
+- **Knowledge boundaries**: "If you do not know the answer, say so. Do not fabricate information"
+- **Escalation rules**: "If the user requests account changes, instruct them to contact support@example.com"
+
+Notice that constraints use strong, unambiguous language: "NEVER," "MUST NOT," "ALWAYS." Hedging with "try to avoid" or "preferably don't" gives the model room to rationalize violations.
+
+## Section 3: Tool Usage Instructions
+
+If your agent has access to tools (and most agents do), the system prompt must explain **when and how to use them**. Without explicit tool usage guidance, the model may use tools unnecessarily, use them with incorrect arguments, or fail to use them when it should.
+
+Effective tool usage instructions cover:
+
+- **When to use each tool**: "Use the `search` tool when the user asks about current events or when you need factual information you are not confident about"
+- **When NOT to use a tool**: "Do not use the `calculator` tool for simple arithmetic you can compute mentally"
+- **Argument formatting**: "Pass dates to the `calendar` tool in ISO 8601 format (YYYY-MM-DD)"
+- **Tool chaining patterns**: "After searching, always verify key claims by searching a second source"
+- **Error handling**: "If a tool call fails, explain the failure to the user and suggest an alternative approach"
+
+This section works hand-in-hand with the structured output techniques from Lesson 3. The system prompt tells the agent *when* to use a tool; the tool definitions (function schemas) tell it *how* to format the call.
+
+## Section 4: Output Format
+
+This section specifies **how the agent should structure its responses**. Without format guidance, the model will default to whatever style it finds most probable, which may not match your application's needs.
+
+Format instructions typically cover:
+
+- **Response structure**: "Begin with a one-sentence summary, then provide details under subheadings"
+- **Length expectations**: "Keep responses under 200 words unless the user asks for detail"
+- **Formatting conventions**: "Use bullet points for lists, code blocks for code, and bold for key terms"
+- **Citation style**: "Always cite sources with [Source Name](URL) format"
+- **Thinking visibility**: Whether the agent should show its reasoning ("Think step by step and show your work") or hide it ("Provide only the final answer")
+
+You can also reference the structured output techniques from Lesson 3 here -- for example, specifying that certain responses should be in JSON format or follow a particular schema.
+
+## Section 5: Behavioral Guidelines
+
+Behavioral guidelines define the agent's **tone, personality, and safety posture**. This is where you shape the user experience and build guardrails against misuse.
+
+Key areas to address:
+
+- **Tone and style**: "Be professional and concise," "Use a friendly, encouraging tone," "Avoid jargon unless the user demonstrates expertise"
+- **Safety boundaries**: "Do not generate harmful, illegal, or deceptive content," "If asked to do something unethical, decline and explain why"
+- **Error handling behavior**: "When you make a mistake, acknowledge it directly and correct yourself"
+- **Uncertainty handling**: "Express confidence levels when giving advice: 'I'm fairly confident that...' vs. 'I believe, but am not certain, that...'"
+- **Conversation management**: "If the user's request is ambiguous, ask a clarifying question before proceeding"
+
+## Section 6: Few-Shot Examples
+
+The final section -- and one that many prompt authors skip -- is **few-shot examples** of desired behavior. As we discussed in Lesson 1, examples are often more effective than rules because they demonstrate the expected pattern concretely rather than describing it abstractly.
+
+Good examples show:
+
+- **The ideal response format** for common query types
+- **How to handle edge cases** (ambiguous questions, out-of-scope requests, tool failures)
+- **The reasoning style** you expect (brief vs. detailed, formal vs. conversational)
+- **Correct tool usage** with realistic inputs and outputs
+
+Include 2-3 examples that cover the most common interaction patterns. For complex agents, examples of boundary cases (refusals, escalations, error recovery) are especially valuable.
+
+## Putting It All Together: A Complete System Prompt
+
+Let's apply all six sections to build a complete, production-quality system prompt for a research agent. This agent can search the web and read documents to answer user questions.
+
+<CodeBlock code={`import anthropic
+
+RESEARCH_AGENT_SYSTEM_PROMPT = """You are a Senior Research Analyst at Meridian Insights, an AI-powered
+research service. You specialize in synthesizing information from multiple
+sources to produce accurate, well-cited answers to complex questions.
+
+## Capabilities and Constraints
+
+You have access to tools that let you search the web and read documents.
+
+YOU MUST:
+- Search for information before answering factual questions -- do not rely
+  solely on your training data for current events or statistics.
+- Cross-reference claims across at least two sources before stating them
+  as fact.
+- Cite every factual claim with its source.
+- Clearly distinguish between established facts, expert opinions, and your
+  own analytical inferences.
+
+YOU MUST NOT:
+- Fabricate sources, statistics, or quotes.
+- Provide medical, legal, or financial advice. If asked, recommend the user
+  consult a qualified professional.
+- Access or attempt to access private, paywalled, or restricted content.
+- Present a single source's opinion as consensus unless verified.
+
+If you cannot find reliable information on a topic, say so explicitly. An
+honest "I could not find sufficient evidence" is always better than a
+fabricated answer.
+
+## Tool Usage
+
+You have access to the following tools:
+
+- **web_search(query)**: Search the web for current information. Use this
+  for any factual question about events, people, statistics, or topics
+  that may have changed after your training cutoff. Formulate specific,
+  targeted search queries -- not vague ones.
+
+- **read_url(url)**: Read the full text of a web page. Use this to get
+  details from a specific source found via web_search. Do NOT guess URLs
+  -- only read URLs that appeared in search results.
+
+Search strategy:
+1. Start with a broad search to understand the landscape.
+2. Follow up with specific searches to verify key claims.
+3. Read primary sources (official reports, academic papers) when available.
+4. If initial searches return low-quality results, reformulate your query
+   with different terms.
+
+## Output Format
+
+Structure every research response as follows:
+
+1. **Summary** (2-3 sentences): Direct answer to the question.
+2. **Key Findings** (bullet points): The most important facts, each with
+   a source citation.
+3. **Analysis** (1-2 paragraphs): Your synthesis of the findings, noting
+   areas of consensus and disagreement among sources.
+4. **Confidence Level**: State whether your confidence is High, Medium, or
+   Low, with a brief explanation of why.
+5. **Sources**: Numbered list of all sources consulted.
+
+For simple factual questions, you may shorten this to Summary + Sources.
+
+## Behavioral Guidelines
+
+- Be precise and evidence-driven. Avoid filler phrases and hedging
+  language when the evidence is clear.
+- When sources disagree, present both perspectives fairly.
+- If a question is ambiguous, ask one clarifying question before
+  researching. Do not guess the user's intent.
+- Acknowledge the limitations of your research: time constraints, source
+  availability, and potential bias in search results.
+- Maintain a professional, neutral tone. You are an analyst, not an
+  advocate.
+
+## Examples
+
+User: "What is the current market share of electric vehicles in Europe?"
+
+Good response pattern:
+1. Search for "electric vehicle market share Europe 2025"
+2. Search for "EV sales Europe latest statistics" to cross-reference
+3. Read the most authoritative source (e.g., European Automobile
+   Manufacturers' Association)
+4. Synthesize findings with the Summary/Findings/Analysis/Sources format
+5. Cite specific numbers with sources
+
+Bad response pattern:
+- Answering from memory without searching
+- Citing a single blog post as definitive
+- Saying "approximately 20%" without a source
+
+User: "Should I invest in Tesla stock?"
+
+Good response pattern:
+- Decline to give investment advice
+- Offer to research Tesla's recent financial performance, analyst
+  consensus, or market trends as factual information
+- Remind the user to consult a financial advisor for investment decisions
+"""
+
+# Using the system prompt with the Anthropic API
+client = anthropic.Anthropic()
+
+tools = [
+    {
+        "name": "web_search",
+        "description": "Search the web for current information on a topic.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "The search query to execute"
+                }
+            },
+            "required": ["query"]
+        }
+    },
+    {
+        "name": "read_url",
+        "description": "Read the full text content of a web page.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "url": {
+                    "type": "string",
+                    "description": "The URL to read"
+                }
+            },
+            "required": ["url"]
+        }
+    }
+]
+
+response = client.messages.create(
+    model="claude-sonnet-4-20250514",
+    max_tokens=4096,
+    system=RESEARCH_AGENT_SYSTEM_PROMPT,
+    tools=tools,
+    messages=[
+        {"role": "user", "content": "What is the current state of fusion energy research?"}
+    ]
+)
+
+print(response.content)
+`} language="python" filename="research_agent.py" />
+
+Notice how each section of the system prompt serves a distinct purpose. The identity establishes expertise and credibility. The constraints prevent hallucination and scope creep. The tool usage instructions guide search behavior. The output format ensures consistency. The behavioral guidelines set the tone. And the examples demonstrate both correct and incorrect patterns.
+
+## Common Anti-Patterns
+
+Even experienced engineers make mistakes when writing system prompts. Here are the most common anti-patterns and how to avoid them.
+
+**Vague instructions.** "Be helpful and accurate" tells the model almost nothing. Every LLM is already trained to be helpful and accurate. Instead, specify *what* helpful and accurate looks like in your context: "When answering technical questions, include a code example. When citing statistics, include the date of the data."
+
+**Contradictory rules.** "Always be concise" combined with "Always explain your reasoning in detail" creates a tension the model cannot resolve consistently. When you have competing priorities, specify which takes precedence: "Default to concise answers (under 100 words). If the user asks 'why' or 'explain,' provide detailed reasoning."
+
+**Information overload.** A system prompt with 50 rules and 20 examples becomes counterproductive. As the prompt grows longer, the model's ability to attend to every instruction decreases. Prioritize ruthlessly: include the 10-15 rules that matter most, and remove anything the model already does well by default.
+
+**Missing boundaries.** A system prompt that tells the agent what it *can* do but not what it *cannot* do is incomplete. An agent without constraints will attempt anything a user asks, including things that are dangerous, out of scope, or beyond its capabilities.
+
+**Implicit assumptions.** "Format the output correctly" assumes the model knows what "correctly" means in your context. Always be explicit: "Format dates as YYYY-MM-DD. Format currency as $X,XXX.XX with USD."
+
+## Prompt Versioning and Iteration
+
+System prompts are not write-once artifacts. They evolve as you discover failure modes, expand the agent's capabilities, and refine its behavior based on real user interactions. Treating your system prompt as **living code** is essential for building reliable agents.
+
+Best practices for prompt versioning:
+
+- **Version control**: Store system prompts in your version control system alongside application code. Every change should be a commit with a clear message explaining *why* the prompt changed.
+- **Semantic versioning**: Consider using version numbers (v1.0, v1.1, v2.0) to track major and minor changes. A new constraint is a minor change; a complete restructuring is a major change.
+- **Change logs**: Maintain a log of what changed and why. "Added rule to decline medical advice after user complaint on 2025-03-15" is far more useful than a bare diff.
+- **A/B testing**: When making significant changes, run the old and new prompts in parallel and compare outputs on a test suite of common queries.
+- **Regression testing**: Maintain a set of test cases -- inputs and expected outputs -- that you run against the prompt after every change. This catches regressions where fixing one behavior breaks another.
+
+> In production, system prompts need the same CI/CD discipline as application code: versioning, automated testing, staged rollouts, and rollback capabilities. We will cover this in detail in Module 11 (Production).
+
+## System Prompts in Multi-Agent Systems
+
+So far we have discussed system prompts for a single agent. But as your systems grow more complex, you may build architectures with multiple agents, each responsible for a different part of the workflow. In these systems, **each agent gets its own specialized system prompt**.
+
+Consider a customer support system with three agents:
+
+- A **router agent** whose system prompt says: "You classify incoming requests into categories: billing, technical, or general. Output only the category name."
+- A **billing agent** whose system prompt says: "You are a billing specialist. You can look up invoices, process refunds, and explain charges."
+- A **technical agent** whose system prompt says: "You are a technical support engineer. You can query system logs, check service status, and guide users through troubleshooting steps."
+
+Each agent has a tightly scoped identity, narrow capabilities, and specific tool access. This specialization makes each agent more reliable than a single general-purpose agent trying to handle everything.
+
+> When building multi-agent systems, the system prompt becomes even more important: it is how you enforce the division of responsibilities between agents. We will explore this in depth in Module 9 (Multi-Agent Systems).
+
+## Design Heuristics
+
+To tie everything together, here are practical heuristics you can apply whenever you sit down to write a system prompt:
+
+- **Start specific, then generalize.** Begin with a narrow role and expand only as needed. It is easier to add capabilities than to constrain a broadly defined agent.
+- **Constraints before capabilities.** Decide what the agent must *never* do before defining what it *can* do. Safety boundaries should be non-negotiable.
+- **Show, don't just tell.** One good example is worth five rules. When a behavior is hard to describe in words, demonstrate it with a few-shot example.
+- **Test at the boundaries.** The most important test cases are not "does the agent answer normal questions correctly?" but "does the agent refuse out-of-scope requests?" and "does the agent handle ambiguity gracefully?"
+- **Iterate on failures.** Every time the agent misbehaves, trace the failure back to a gap in the system prompt and add a specific rule or example to address it.
+- **Read it out loud.** If the prompt is confusing to a human, it will be confusing to the model. Clarity for humans correlates strongly with clarity for LLMs.
+
+## Summary
+
+The **system prompt** is the most important artifact in an agent system. It is the constitution that governs every decision the agent makes across every iteration of the agent loop. A well-designed system prompt has six sections: **identity and role** (who the agent is), **capabilities and constraints** (what it can and cannot do), **tool usage instructions** (when and how to use tools), **output format** (how to structure responses), **behavioral guidelines** (tone, safety, error handling), and **few-shot examples** (demonstrations of desired behavior).
+
+Avoid common anti-patterns: vague instructions, contradictory rules, information overload, missing boundaries, and implicit assumptions. Treat system prompts as living code -- version them, test them against regression suites, and iterate based on real-world failures. In multi-agent systems, each agent should have its own specialized system prompt that enforces its unique role and boundaries.
+
+In the next lesson, we will explore **reasoning models and extended thinking** -- a new class of models that change how agents approach complex problems by spending more compute on the reasoning step itself.

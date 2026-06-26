@@ -1,0 +1,254 @@
+---
+title: "What Is an Agent?"
+quiz:
+  - question: "Which of the following best describes an agent in the context of AI?"
+    options:
+      - "A program that executes a fixed sequence of instructions without variation"
+      - "An entity that perceives its environment and takes actions to achieve goals"
+      - "Any software system that uses a large language model for text generation"
+      - "A chatbot that responds to user messages in a conversational format"
+    correctIndex: 1
+  - question: "What distinguishes an LLM agent from a traditional rule-based software agent?"
+    options:
+      - "LLM agents do not interact with external environments"
+      - "Rule-based agents can handle novel situations more flexibly"
+      - "LLM agents use natural language understanding to reason about and adapt to novel situations"
+      - "Traditional rule-based agents are always more accurate than LLM agents"
+    correctIndex: 2
+  - question: "In the agent loop, what happens immediately after the agent perceives new information from its environment?"
+    options:
+      - "The agent takes an action to modify the environment"
+      - "The agent reasons about the information and decides on a course of action"
+      - "The agent terminates and returns a final result"
+      - "The agent resets its internal state to default values"
+    correctIndex: 1
+  - question: "A thermostat that reads the current temperature and turns on the heater when it drops below a set point is an example of which type of agent?"
+    options:
+      - "A goal-based agent with complex planning capabilities"
+      - "A simple reflex agent that maps percepts directly to actions"
+      - "A learning agent that improves its behavior over time"
+      - "A utility-based agent that maximizes a performance metric"
+    correctIndex: 1
+---
+
+## Overview
+
+As we saw in *Why Agents Matter*, static LLM calls have fundamental limitations — they respond to a single prompt, produce a single output, and have no ability to observe results, adapt, or take further action. But what exactly transforms an LLM from a passive text generator into an **agent** capable of solving complex, multi-step problems?
+
+In this lesson, we will formally define what an agent is, trace the concept from classical AI through to modern LLM-powered systems, and break down the core components that every agent shares. By the end, you will have a precise mental model for what makes something an agent — and what does not.
+
+## The Classical Definition of an Agent
+
+The concept of an **agent** has deep roots in artificial intelligence. Stuart Russell and Peter Norvig, in their foundational textbook *Artificial Intelligence: A Modern Approach*, define an agent as:
+
+> **An agent is anything that can be viewed as perceiving its environment through sensors and acting upon that environment through actuators.**
+
+This definition is deliberately broad. It applies to humans (eyes as sensors, hands as actuators), robots (cameras and motors), and software systems (API inputs and function calls). The key insight is the **perception-action loop**: an agent does not simply execute a script — it observes, decides, and acts.
+
+Three properties distinguish an agent from ordinary software:
+
+- **Autonomy** — the agent operates without constant human direction, making its own decisions about what to do next
+- **Reactivity** — the agent perceives changes in its environment and responds to them
+- **Goal-directedness** — the agent's actions are oriented toward achieving a specific objective, not just following a predetermined sequence
+
+## The Five Core Components
+
+Every agent, from the simplest thermostat to the most sophisticated AI system, is built from five fundamental components. Understanding these components gives you a framework for analyzing and designing any agent.
+
+<MermaidDiagram chart={`graph TD
+    ENV[("Environment")]
+    PERCEPT["Perception<br/>Observe and interpret inputs"]
+    REASON["Reasoning<br/>Analyze, plan, decide"]
+    ACTION["Action<br/>Execute decisions"]
+    GOAL["Goals<br/>Define success criteria"]
+
+    ENV -->|"signals, data,<br/>observations"| PERCEPT
+    PERCEPT -->|"structured<br/>understanding"| REASON
+    GOAL -->|"objectives and<br/>constraints"| REASON
+    REASON -->|"chosen<br/>action"| ACTION
+    ACTION -->|"changes and<br/>effects"| ENV
+
+    style ENV fill:#fef3c7,stroke:#d69e2e,stroke-width:2px
+    style PERCEPT fill:#e0f0ff,stroke:#3182ce,stroke-width:2px
+    style REASON fill:#ebf8ff,stroke:#3182ce,stroke-width:2px
+    style ACTION fill:#c6f6d5,stroke:#38a169,stroke-width:2px
+    style GOAL fill:#fed7e2,stroke:#d53f8c,stroke-width:2px
+`} />
+
+### 1. Environment
+
+The **environment** is everything external to the agent that it can observe or influence. For a robot, the environment is the physical world. For an LLM agent, the environment might include:
+
+- A user's conversation and requests
+- Files on a filesystem
+- APIs and web services
+- Databases and knowledge bases
+- The outputs of other agents or tools
+
+Environments vary in complexity. They can be **fully observable** (the agent can see everything relevant) or **partially observable** (the agent works with incomplete information). They can be **deterministic** (actions have predictable outcomes) or **stochastic** (outcomes involve uncertainty). Most real-world environments that LLM agents operate in are both partially observable and stochastic — which is precisely what makes agents valuable.
+
+### 2. Perception
+
+**Perception** is the agent's ability to observe and interpret signals from its environment. In classical AI, this might involve processing camera images or sensor readings. For an LLM agent, perception includes:
+
+- Reading and understanding user messages in natural language
+- Parsing structured data returned from tool calls or APIs
+- Interpreting error messages and system feedback
+- Understanding the context of a multi-turn conversation
+
+The LLM's natural language understanding is what makes its perception so powerful — it can interpret ambiguous, informal, and context-dependent inputs that would break a traditional rule-based system.
+
+### 3. Reasoning
+
+**Reasoning** is the cognitive core of the agent — the process of analyzing perceived information, considering goals, evaluating options, and deciding what to do next. This is where LLM agents truly differentiate themselves. Their reasoning capabilities include:
+
+- **Planning** — breaking complex goals into manageable steps
+- **Analysis** — evaluating information and identifying patterns
+- **Decision-making** — choosing among alternative actions
+- **Self-reflection** — assessing whether the current approach is working and adjusting strategy
+
+In an LLM agent, reasoning happens through the model's text generation process, often enhanced by techniques like chain-of-thought prompting and structured deliberation frameworks.
+
+### 4. Action
+
+**Action** is how the agent affects its environment. Without the ability to act, an agent is just an observer. For LLM agents, actions typically include:
+
+- Generating text responses to users
+- Calling external tools and APIs (searching the web, running code, querying databases)
+- Reading and writing files
+- Sending messages to other systems or agents
+- Deciding to stop and return a final answer
+
+The range of available actions defines the agent's **action space** — what it can potentially do. A well-designed agent has actions that are powerful enough to accomplish its goals but constrained enough to remain safe and predictable.
+
+### 5. Goals
+
+**Goals** define what success looks like for the agent. They give the reasoning component something to optimize toward. Goals can be:
+
+- **Explicit** — directly stated by the user ("find me the cheapest flight to Tokyo")
+- **Implicit** — embedded in the system prompt or agent design ("be helpful and accurate")
+- **Hierarchical** — a high-level goal decomposed into sub-goals ("build a web app" → "design the schema" → "create the database" → "write the API")
+
+Without clear goals, an agent has no basis for choosing one action over another. Goals are what transform a sequence of actions into purposeful behavior.
+
+## The Perception-Reasoning-Action Loop
+
+These components do not operate in isolation — they form a continuous loop. The agent perceives, reasons, acts, and then perceives again to see the result of its action. This **feedback loop** is what gives agents their power.
+
+<MermaidDiagram chart={`graph LR
+    subgraph Loop["The Agent Loop"]
+        P["Perceive<br/>Read inputs and<br/>observe results"] --> R["Reason<br/>Analyze situation<br/>and plan next step"]
+        R --> D{"Decision"}
+        D -->|"Act"| A["Execute<br/>Call tool, generate<br/>response, or modify"]
+        D -->|"Done"| F["Final<br/>Answer"]
+        A --> O["Observe<br/>Check result<br/>of action"]
+        O --> P
+    end
+
+    style Loop fill:#f7fafc,stroke:#4a5568,stroke-width:2px
+    style P fill:#e0f0ff,stroke:#3182ce,stroke-width:2px
+    style R fill:#ebf8ff,stroke:#3182ce,stroke-width:2px
+    style D fill:#fefcbf,stroke:#d69e2e,stroke-width:2px
+    style A fill:#c6f6d5,stroke:#38a169,stroke-width:2px
+    style F fill:#c6f6d5,stroke:#276749,stroke-width:2px
+    style O fill:#e9d8fd,stroke:#805ad5,stroke-width:2px
+`} />
+
+Consider what happens when you ask an LLM agent to research a topic and write a summary:
+
+1. **Perceive** — the agent reads your request and understands the topic
+2. **Reason** — it decides it needs to search for information before writing
+3. **Act** — it calls a web search tool with relevant queries
+4. **Perceive** — it reads the search results returned by the tool
+5. **Reason** — it evaluates which results are relevant and identifies gaps
+6. **Act** — it performs additional searches to fill those gaps
+7. **Perceive** — it reads the new results
+8. **Reason** — it determines it now has enough information and plans the summary structure
+9. **Act** — it generates the final summary and returns it to you
+
+This iterative cycle — where each action produces new information that feeds back into reasoning — is fundamentally different from a single prompt-response exchange. The agent is *adapting* based on what it discovers.
+
+## Agents Through the Ages: A Spectrum
+
+Not all agents are created equal. It helps to see them on a spectrum of complexity, from the simplest reactive systems to fully autonomous LLM agents.
+
+### Simple Reflex Agents
+
+A **simple reflex agent** maps percepts directly to actions using fixed rules. The classic example is a **thermostat**: it perceives the temperature, and if the temperature is below the set point, it turns on the heater. No memory, no planning, no learning.
+
+- **Perception**: Read current temperature
+- **Reasoning**: Compare to threshold (a single if-then rule)
+- **Action**: Toggle heater on or off
+
+Thermostats work well in simple, fully observable environments. They fail when the environment is complex or ambiguous.
+
+### Rule-Based Software Agents
+
+Traditional **rule-based agents** extend simple reflex agents with more sophisticated rule sets, state tracking, and conditional logic. Think of a fraud detection system that evaluates transactions against hundreds of rules, or a workflow automation tool that routes documents through an approval chain.
+
+These agents can handle moderately complex environments, but they are brittle — every scenario must be anticipated and encoded in advance. When they encounter a situation not covered by their rules, they fail or produce incorrect results.
+
+### Classical AI Agents
+
+**Classical AI agents** introduce genuine planning and search capabilities. They can reason about sequences of actions, evaluate trade-offs, and find optimal solutions. A chess engine is a canonical example — it searches through millions of possible game states to select the best move.
+
+These agents are powerful within well-defined problem domains, but they struggle with open-ended tasks, natural language understanding, and environments that cannot be formally modeled.
+
+### LLM Agents
+
+**LLM agents** represent a qualitative leap. By using a large language model as the reasoning engine, they combine:
+
+- **Natural language perception** — understanding human intent from informal, ambiguous inputs
+- **Flexible reasoning** — adapting to novel situations without explicitly programmed rules
+- **General knowledge** — drawing on vast training data to inform decisions
+- **Tool use** — extending their capabilities by calling external APIs, running code, and accessing databases
+
+The trade-off is that LLM agents are less precise and predictable than rule-based or classical AI agents within narrow domains. But for open-ended tasks that require understanding context, handling ambiguity, and integrating diverse sources of information, they are unmatched.
+
+| Property | Reflex Agent | Rule-Based Agent | Classical AI Agent | LLM Agent |
+|---|---|---|---|---|
+| Handles ambiguity | No | Limited | No | **Yes** |
+| Novel situations | No | No | Limited | **Yes** |
+| Natural language | No | No | No | **Yes** |
+| Predictability | High | High | High | Moderate |
+| Domain specificity | Very narrow | Narrow | Narrow | **Broad** |
+| Planning ability | None | Limited | **Strong** | Moderate |
+
+## A Self-Driving Car Analogy
+
+To solidify these ideas, consider a **self-driving car** — one of the most complex agent systems ever built. It illustrates all five components at a sophisticated level:
+
+- **Environment** — roads, traffic, weather, pedestrians, traffic signals, and other vehicles
+- **Perception** — cameras, LIDAR, radar, and GPS providing a continuous stream of environmental data
+- **Reasoning** — fusing sensor data into a world model, predicting other vehicles' trajectories, planning a safe path, and deciding when to accelerate, brake, or steer
+- **Action** — controlling the steering wheel, accelerator, and brakes
+- **Goals** — reach the destination safely, obey traffic laws, maximize passenger comfort
+
+Now compare this to an LLM agent helping a developer debug a production issue:
+
+- **Environment** — logs, source code, error messages, documentation, and monitoring dashboards
+- **Perception** — reading and understanding error messages, log patterns, and code structure
+- **Reasoning** — forming hypotheses about the root cause, deciding which logs to examine next, planning a debugging strategy
+- **Action** — searching logs, reading files, running diagnostic commands, suggesting fixes
+- **Goals** — identify the root cause and provide an actionable fix
+
+The domains are completely different, but the agent architecture is the same. This is the power of the agent abstraction — it provides a universal framework for building systems that can perceive, reason, and act.
+
+## What Makes Something Not an Agent?
+
+It is equally important to understand what falls outside the definition of an agent. Here are common systems that are sometimes called agents but do not meet the criteria:
+
+- **A single LLM API call** — there is no loop, no perception of results, no adaptation. It is a function call, not an agent.
+- **A static pipeline** — even if it chains multiple LLM calls together, a fixed pipeline with no conditional branching or feedback is not agentic. The sequence of steps is predetermined.
+- **A CRUD application** — a web app that creates, reads, updates, and deletes records is reactive to user input but does not autonomously reason about goals or decide on actions.
+- **A cron job** — scheduled scripts execute on a timer, not in response to perceived environmental changes with goal-directed reasoning.
+
+The essential test is this: **does the system observe the results of its actions and autonomously decide what to do next in pursuit of a goal?** If the answer is no, it is not an agent.
+
+## Summary
+
+In this lesson, we established a precise definition of an agent: an entity that **perceives** its environment, **reasons** about what it observes in light of its **goals**, and takes **actions** that affect the environment — in a continuous feedback loop. We traced agents from simple thermostats through rule-based systems to modern LLM-powered agents, and we identified the five core components (environment, perception, reasoning, action, goals) that every agent shares.
+
+The key insight is that LLM agents are not a fundamentally new concept — they are the latest and most flexible instantiation of an idea that has been central to AI since its inception. What makes them special is the LLM's ability to reason in natural language, handle ambiguity, and adapt to novel situations.
+
+But what specific capabilities of large language models make this possible? Why can an LLM serve as the reasoning engine for an agent when earlier language models could not? In the next lesson, *LLM Capabilities That Enable Agents*, we will explore exactly that.

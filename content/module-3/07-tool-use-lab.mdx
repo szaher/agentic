@@ -1,0 +1,877 @@
+---
+title: "Tool Use Lab"
+---
+
+## Overview
+
+You have spent six lessons building up every piece of the tool-use puzzle: why tools matter, how function calling works, how to design clean tool interfaces, how to handle errors gracefully, what the Model Context Protocol is, and how to build your own MCP servers. Now it is time to put all of those pieces together.
+
+In this capstone lab, you will build a **research assistant agent** -- an agent that takes a research question, searches the web for information, reads the content of relevant pages, and synthesizes its findings into a structured report. This is not a toy calculator. It is a multi-tool, multi-turn agent that mirrors what production research agents actually do.
+
+By the end of this lab, you will have a working agent that demonstrates every concept from this module in a single cohesive system. You will also see exactly where this approach hits its limits -- which sets the stage for Module 4, where we learn structured agent architectures that solve those problems.
+
+## What We Are Building
+
+The research assistant takes a question like "What are the main approaches to reducing LLM hallucinations?" and autonomously gathers information to answer it. Here is the full flow of a research session:
+
+<MermaidDiagram chart={`sequenceDiagram
+    participant U as User
+    participant A as Agent (LLM)
+    participant S as search_web
+    participant R as read_webpage
+    participant D as get_current_date
+    participant W as save_report
+
+    U->>A: "What are the main approaches<br/>to reducing LLM hallucinations?"
+    A->>D: get_current_date()
+    D-->>A: "2025-01-15"
+    A->>S: search_web("LLM hallucination<br/>reduction techniques 2025")
+    S-->>A: [result1, result2, result3]
+    A->>R: read_webpage(result1.url)
+    R-->>A: page content (truncated)
+    A->>R: read_webpage(result2.url)
+    R-->>A: page content (truncated)
+    A->>S: search_web("RAG retrieval augmented<br/>generation hallucination")
+    S-->>A: [result4, result5, result6]
+    A->>R: read_webpage(result4.url)
+    R-->>A: page content (truncated)
+    A->>W: save_report(title, sections, sources)
+    W-->>A: "Report saved: hallucination_reduction.md"
+    A->>U: "I have researched your question<br/>and saved a report with my findings."
+`} />
+
+Notice the pattern: the agent does not follow a hardcoded script. The LLM decides when to search, what to read, whether to search again with refined terms, and when it has gathered enough information to write the report. This is **autonomous, goal-directed behavior** driven by tools.
+
+## Stage 1: Define the Tools
+
+We need four tools. Each one follows the design principles from lesson 03: clear names, specific descriptions that tell the LLM *when* to use the tool, and well-typed parameter schemas.
+
+<CodeBlock code={`import json
+import datetime
+from typing import Any
+
+
+# --- Tool implementations ---
+
+def search_web(query: str, max_results: int = 3) -> str:
+    """Search the web and return a list of results with titles,
+    URLs, and snippets.
+
+    In production, this would call a real search API (Google, Bing,
+    Tavily, etc.). Here we simulate results to keep the lab
+    self-contained.
+    """
+    # Simulated search results for demonstration
+    simulated_results = {
+        "default": [
+            {
+                "title": f"Research result for: {query}",
+                "url": f"https://example.com/article/{query.replace(' ', '-')[:40]}",
+                "snippet": f"Comprehensive overview of {query}. "
+                           f"This article covers key concepts and recent developments.",
+            },
+            {
+                "title": f"Deep dive: {query}",
+                "url": f"https://example.com/deep-dive/{query.replace(' ', '-')[:40]}",
+                "snippet": f"An in-depth analysis of {query} with practical examples "
+                           f"and expert commentary.",
+            },
+            {
+                "title": f"{query} - Latest Research",
+                "url": f"https://example.com/research/{query.replace(' ', '-')[:40]}",
+                "snippet": f"Recent academic and industry research on {query}, "
+                           f"including benchmarks and comparisons.",
+            },
+        ]
+    }
+
+    results = simulated_results["default"][:max_results]
+    return json.dumps({"results": results, "total_found": len(results)})
+
+
+def read_webpage(url: str) -> str:
+    """Fetch and return the text content of a webpage.
+
+    In production, this would use httpx or requests with
+    readability extraction. Here we return simulated content.
+    """
+    # Simulated page content
+    simulated_content = (
+        f"Content from {url}\\n\\n"
+        "Large language models can produce plausible-sounding but incorrect "
+        "information, known as hallucinations. Key approaches to reducing "
+        "hallucinations include:\\n\\n"
+        "1. Retrieval-Augmented Generation (RAG): Grounding model outputs "
+        "in retrieved documents from a knowledge base.\\n"
+        "2. Fine-tuning on verified data: Training models on curated, "
+        "fact-checked datasets specific to the domain.\\n"
+        "3. Chain-of-thought prompting: Asking models to show their "
+        "reasoning step by step, which reduces logical errors.\\n"
+        "4. Constitutional AI and RLHF: Using reinforcement learning from "
+        "human feedback to penalize fabricated claims.\\n"
+        "5. Tool use and grounding: Giving models access to search engines, "
+        "calculators, and databases so they can verify facts.\\n\\n"
+        "Recent benchmarks show that combining RAG with chain-of-thought "
+        "prompting reduces hallucination rates by up to 60%."
+    )
+
+    # Simulate truncation for very long pages
+    max_chars = 2000
+    if len(simulated_content) > max_chars:
+        simulated_content = simulated_content[:max_chars] + "\\n\\n[Content truncated]"
+
+    return json.dumps({
+        "url": url,
+        "content": simulated_content,
+        "char_count": len(simulated_content),
+    })
+
+
+def get_current_date() -> str:
+    """Return today's date. Useful for time-sensitive research
+    queries and for dating the final report."""
+    today = datetime.date.today()
+    return json.dumps({
+        "date": today.isoformat(),
+        "formatted": today.strftime("%B %d, %Y"),
+    })
+
+
+def save_report(
+    title: str,
+    summary: str,
+    sections: list[dict[str, str]],
+    sources: list[str],
+) -> str:
+    """Save a structured research report. Each section has a
+    'heading' and 'body'. Sources are listed at the end."""
+    filename = title.lower().replace(" ", "_")[:50] + ".md"
+
+    # Build the report content
+    report_lines = [f"# {title}\\n"]
+    report_lines.append(f"*Generated on {datetime.date.today().isoformat()}*\\n")
+    report_lines.append(f"## Summary\\n\\n{summary}\\n")
+
+    for section in sections:
+        report_lines.append(f"## {section['heading']}\\n\\n{section['body']}\\n")
+
+    report_lines.append("## Sources\\n")
+    for i, source in enumerate(sources, 1):
+        report_lines.append(f"{i}. {source}")
+
+    report_content = "\\n".join(report_lines)
+
+    # In production, write to disk or a database
+    print(f"\\n--- Report saved to {filename} ---")
+    print(report_content)
+    print("--- End of report ---\\n")
+
+    return json.dumps({
+        "filename": filename,
+        "char_count": len(report_content),
+        "section_count": len(sections),
+    })
+
+
+# Tool dispatch table
+tool_functions: dict[str, Any] = {
+    "search_web": search_web,
+    "read_webpage": read_webpage,
+    "get_current_date": get_current_date,
+    "save_report": save_report,
+}
+`} language="python" filename="tools.py" />
+
+A few design choices worth calling out:
+
+- **Simulated tools** keep this lab self-contained. Swapping in real implementations (Tavily for search, httpx for web reading) only requires changing the function bodies -- the schemas and agent loop stay identical.
+- **`read_webpage` truncates long content.** This is a real-world concern. Web pages can be massive, and sending tens of thousands of characters to the LLM wastes tokens and degrades performance. Production agents typically use readability extraction and chunking.
+- **`save_report` takes structured input.** Rather than accepting a raw string, it takes a title, summary, sections, and sources. This forces the LLM to organize its findings before writing -- a technique from lesson 03 on designing tool interfaces that shape model behavior.
+- **Every tool returns JSON.** Consistent return formats make it easier for the LLM to parse results and for you to debug the agent's behavior.
+
+## Stage 2: Write the Tool Definitions
+
+Now we describe each tool to the LLM. Remember from lesson 03: descriptions should explain *what* the tool does and *when* to use it. Parameter descriptions should eliminate ambiguity.
+
+<CodeBlock code={`# --- Tool definitions for the API ---
+
+tools = [
+    {
+        "name": "search_web",
+        "description": (
+            "Search the web for information on a topic. Returns a list of "
+            "results with titles, URLs, and snippets. Use this as the first "
+            "step when researching a new topic, or to find additional sources "
+            "when existing information is incomplete. You can refine your "
+            "query based on what you have already learned."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": (
+                        "The search query. Be specific and include key terms. "
+                        "For recent topics, include the year."
+                    ),
+                },
+                "max_results": {
+                    "type": "integer",
+                    "description": "Maximum number of results to return (default 3).",
+                    "default": 3,
+                },
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "read_webpage",
+        "description": (
+            "Fetch and read the text content of a webpage. Use this after "
+            "search_web to read the full content of promising results. "
+            "The content is truncated to 2000 characters for very long pages."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "url": {
+                    "type": "string",
+                    "description": "The full URL of the webpage to read.",
+                },
+            },
+            "required": ["url"],
+        },
+    },
+    {
+        "name": "get_current_date",
+        "description": (
+            "Get today's date. Use this at the beginning of research to "
+            "know what time frame is current, and to date the final report."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+        },
+    },
+    {
+        "name": "save_report",
+        "description": (
+            "Save a structured research report. Use this when you have "
+            "gathered enough information to answer the user's question "
+            "comprehensively. The report should synthesize findings from "
+            "multiple sources, not just copy-paste content."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "title": {
+                    "type": "string",
+                    "description": "A descriptive title for the research report.",
+                },
+                "summary": {
+                    "type": "string",
+                    "description": (
+                        "A 2-3 sentence executive summary of the key findings."
+                    ),
+                },
+                "sections": {
+                    "type": "array",
+                    "description": "The main body of the report, divided into sections.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "heading": {
+                                "type": "string",
+                                "description": "The section heading.",
+                            },
+                            "body": {
+                                "type": "string",
+                                "description": "The section content. Synthesize information from sources.",
+                            },
+                        },
+                        "required": ["heading", "body"],
+                    },
+                },
+                "sources": {
+                    "type": "array",
+                    "description": "List of URLs used as sources for this report.",
+                    "items": {"type": "string"},
+                },
+            },
+            "required": ["title", "summary", "sections", "sources"],
+        },
+    },
+]
+`} language="python" filename="tool_definitions.py" />
+
+Compare these definitions to the calculator tools from Module 1. The descriptions are longer and more directive because the tasks are more complex. The `save_report` tool uses a nested schema with arrays of objects -- this is how you guide the LLM toward producing structured, multi-part output through the tool interface itself.
+
+## Stage 3: Write the System Prompt
+
+The system prompt is where we apply everything from Module 2. It defines the agent's role, its research methodology, behavioral guidelines, and stopping conditions. A research agent needs significantly more guidance than a calculator agent because the task is open-ended.
+
+<CodeBlock code={`SYSTEM_PROMPT = """You are a research assistant agent. Your job is to
+answer the user's research question by searching the web, reading
+relevant sources, and producing a well-structured report.
+
+## Research Methodology
+
+Follow this process for every research question:
+
+1. Get the current date so you know what time frame is relevant.
+2. Search the web with a well-crafted query based on the user's
+   question. Include the current year for time-sensitive topics.
+3. Read the most promising results (2-3 pages) to gather
+   detailed information.
+4. If the information is insufficient or you need to explore a
+   subtopic, search again with a refined query.
+5. Once you have enough information, synthesize your findings
+   into a structured report using the save_report tool.
+6. After saving the report, provide a brief summary to the user.
+
+## Behavioral Guidelines
+
+- Always verify information across multiple sources when possible.
+- Distinguish between facts and opinions in your report.
+- If search results are low quality, try alternative search terms
+  rather than giving up.
+- Do NOT fabricate information. If you cannot find an answer,
+  say so in the report.
+- Do NOT read more than 5 pages per research question -- be
+  selective about which results are worth reading.
+- Keep the total number of tool calls under 12 to avoid
+  excessive API usage.
+
+## Stopping Condition
+
+You are done when you have saved a report that adequately answers
+the user's question. Do not continue searching after the report
+is saved unless the user asks a follow-up question.
+"""
+`} language="python" filename="system_prompt.py" />
+
+This prompt applies three key techniques from Module 2:
+
+- **Structured methodology** gives the agent a step-by-step process without being so rigid that it cannot adapt. The agent can skip steps or repeat them based on what it finds.
+- **Behavioral boundaries** set limits (5 pages max, 12 tool calls max) that prevent the agent from spiraling into endless research loops. Without these guardrails, a research agent will keep searching indefinitely.
+- **An explicit stopping condition** tells the model when to stop acting. This is critical for any agent that runs in a loop -- without a clear stopping rule, the loop may never terminate.
+
+## Stage 4: Implement the Agent Loop with Error Handling
+
+The agent loop is the same pattern from Module 1's calculator agent, but with two important additions from lesson 04: **error handling** around tool execution and a **maximum iteration guard** to prevent runaway loops.
+
+<CodeBlock code={`import anthropic
+
+client = anthropic.Anthropic()
+MODEL = "claude-sonnet-4-6"
+MAX_ITERATIONS = 15
+
+
+def run_research_agent(question: str) -> str:
+    """Run the research assistant agent on a question."""
+
+    print(f"\\n{'='*60}")
+    print(f"Research Question: {question}")
+    print(f"{'='*60}")
+
+    messages = [{"role": "user", "content": question}]
+    iteration = 0
+
+    while iteration < MAX_ITERATIONS:
+        iteration += 1
+        print(f"\\n--- Iteration {iteration} ---")
+
+        try:
+            response = client.messages.create(
+                model=MODEL,
+                max_tokens=4096,
+                system=SYSTEM_PROMPT,
+                tools=tools,
+                messages=messages,
+            )
+        except anthropic.APIError as e:
+            print(f"API error: {e}")
+            return f"Research failed due to API error: {e}"
+
+        # Check if the agent is done
+        if response.stop_reason == "end_turn":
+            final_text = ""
+            for block in response.content:
+                if block.type == "text":
+                    final_text += block.text
+            print(f"\\nAgent finished: {final_text[:200]}...")
+            return final_text
+
+        # Process tool calls
+        if response.stop_reason == "tool_use":
+            # Append the assistant's response to conversation
+            messages.append({
+                "role": "assistant",
+                "content": response.content,
+            })
+
+            tool_results = []
+            for block in response.content:
+                if block.type == "text" and block.text:
+                    print(f"Agent thinking: {block.text[:150]}...")
+
+                if block.type == "tool_use":
+                    tool_name = block.name
+                    tool_input = block.input
+                    print(f"  -> Calling: {tool_name}({json.dumps(tool_input)[:100]}...)")
+
+                    # Execute the tool with error handling
+                    result = execute_tool(tool_name, tool_input)
+                    print(f"  <- Result: {result[:120]}...")
+
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": result,
+                    })
+
+            messages.append({
+                "role": "user",
+                "content": tool_results,
+            })
+
+    # If we hit the iteration limit, ask the agent to wrap up
+    print(f"\\nMax iterations ({MAX_ITERATIONS}) reached, requesting wrap-up.")
+    messages.append({
+        "role": "user",
+        "content": (
+            "You have reached the maximum number of steps. Please "
+            "save a report with whatever information you have gathered "
+            "so far, even if the research is incomplete."
+        ),
+    })
+    response = client.messages.create(
+        model=MODEL,
+        max_tokens=4096,
+        system=SYSTEM_PROMPT,
+        tools=tools,
+        messages=messages,
+    )
+
+    for block in response.content:
+        if block.type == "text":
+            return block.text
+
+    return "Research completed (max iterations reached)."
+`} language="python" filename="agent_loop.py" />
+
+The **`execute_tool`** function wraps every tool call in a try/except block. This is the error handling pattern from lesson 04: catch exceptions, return structured error messages that the LLM can understand and reason about, and let the agent decide how to recover.
+
+<CodeBlock code={`def execute_tool(tool_name: str, tool_input: dict) -> str:
+    """Execute a tool by name with error handling.
+
+    Returns a JSON string with either the result or a structured
+    error message the LLM can use to decide what to do next.
+    """
+    if tool_name not in tool_functions:
+        return json.dumps({
+            "error": f"Unknown tool: {tool_name}",
+            "available_tools": list(tool_functions.keys()),
+        })
+
+    try:
+        func = tool_functions[tool_name]
+        result = func(**tool_input)
+        return result
+
+    except TypeError as e:
+        # Wrong arguments passed to the tool
+        return json.dumps({
+            "error": f"Invalid arguments for {tool_name}: {str(e)}",
+            "hint": "Check the parameter names and types.",
+        })
+
+    except Exception as e:
+        # Catch-all for unexpected errors
+        return json.dumps({
+            "error": f"Tool execution failed: {str(e)}",
+            "tool": tool_name,
+            "hint": "You may retry or try a different approach.",
+        })
+`} language="python" filename="execute_tool.py" />
+
+Two key design decisions here:
+
+- **Structured error messages** include a `hint` field that gives the LLM actionable guidance. From lesson 04, we know that vague errors like "something went wrong" cause the agent to either give up or retry blindly. A hint like "Check the parameter names and types" helps the LLM self-correct.
+- **The `available_tools` list** in the unknown-tool error helps the LLM recover if it hallucinates a tool name. Rather than failing silently, it shows the LLM what is actually available.
+
+## Stage 5: Run the Agent
+
+Let's put everything together and run the research assistant on a sample question.
+
+<CodeBlock code={`if __name__ == "__main__":
+    question = (
+        "What are the main approaches to reducing hallucinations "
+        "in large language models?"
+    )
+    result = run_research_agent(question)
+    print(f"\\n{'='*60}")
+    print("FINAL RESPONSE:")
+    print(result)
+`} language="python" filename="run_agent.py" />
+
+Here is what the output looks like when the agent runs (abbreviated for readability):
+
+<CodeBlock code={`============================================================
+Research Question: What are the main approaches to reducing
+hallucinations in large language models?
+============================================================
+
+--- Iteration 1 ---
+  -> Calling: get_current_date({})
+  <- Result: {"date": "2025-01-15", "formatted": "January 15, 2025"}
+
+--- Iteration 2 ---
+Agent thinking: Let me search for current research on LLM
+hallucination reduction techniques...
+  -> Calling: search_web({"query": "LLM hallucination reduction
+     techniques 2025", "max_results": 3})
+  <- Result: {"results": [{"title": "Research result for: LLM
+     hallucination reduction techniques 2025", ...}], ...}
+
+--- Iteration 3 ---
+Agent thinking: Let me read the most relevant results to
+gather detailed information...
+  -> Calling: read_webpage({"url": "https://example.com/article/..."})
+  <- Result: {"url": "...", "content": "Content from ...\\n\\n
+     Large language models can produce plausible-sounding but
+     incorrect information...", ...}
+
+--- Iteration 4 ---
+  -> Calling: read_webpage({"url": "https://example.com/deep-dive/..."})
+  <- Result: {"url": "...", "content": "Content from ...\\n\\n...", ...}
+
+--- Iteration 5 ---
+Agent thinking: I want to learn more specifically about RAG
+approaches to hallucination reduction...
+  -> Calling: search_web({"query": "RAG retrieval augmented
+     generation hallucination prevention"})
+  <- Result: {"results": [...], ...}
+
+--- Iteration 6 ---
+  -> Calling: read_webpage({"url": "https://example.com/article/..."})
+  <- Result: {"url": "...", "content": "...", ...}
+
+--- Iteration 7 ---
+Agent thinking: I now have enough information to write a
+comprehensive report on hallucination reduction techniques...
+  -> Calling: save_report({"title": "Approaches to Reducing
+     LLM Hallucinations", "summary": "...", "sections": [...],
+     "sources": [...]})
+  <- Result: {"filename": "approaches_to_reducing_llm_halluci.md",
+     "char_count": 1842, "section_count": 5}
+
+--- Iteration 8 ---
+Agent finished: I have completed my research and saved a
+detailed report...
+`} language="text" filename="output" />
+
+The agent made its own decisions at every step: it checked the date first, searched with a topical query, read two pages, refined its search to focus on RAG specifically, read one more page, and then decided it had enough information to write the report. Eight iterations, seven tool calls, all driven by the LLM's judgment.
+
+## Anatomy of the Full Agent
+
+Here is the complete, runnable file that combines all the stages.
+
+<CodeBlock code={`"""
+Research Assistant Agent -- Module 3 Capstone Lab
+
+A multi-tool agent that searches the web, reads pages, and
+produces structured research reports.
+
+Usage:
+    export ANTHROPIC_API_KEY="your-key-here"
+    python research_agent.py
+"""
+
+import json
+import datetime
+from typing import Any
+import anthropic
+
+
+# ============================================================
+# Stage 1: Tool implementations
+# ============================================================
+
+def search_web(query: str, max_results: int = 3) -> str:
+    simulated_results = [
+        {
+            "title": f"Research result for: {query}",
+            "url": f"https://example.com/article/{query.replace(' ', '-')[:40]}",
+            "snippet": f"Comprehensive overview of {query}.",
+        },
+        {
+            "title": f"Deep dive: {query}",
+            "url": f"https://example.com/deep-dive/{query.replace(' ', '-')[:40]}",
+            "snippet": f"An in-depth analysis of {query}.",
+        },
+        {
+            "title": f"{query} - Latest Research",
+            "url": f"https://example.com/research/{query.replace(' ', '-')[:40]}",
+            "snippet": f"Recent research on {query}.",
+        },
+    ]
+    results = simulated_results[:max_results]
+    return json.dumps({"results": results, "total_found": len(results)})
+
+
+def read_webpage(url: str) -> str:
+    content = (
+        f"Content from {url}\\n\\n"
+        "Large language models can produce plausible-sounding but "
+        "incorrect information, known as hallucinations. Key "
+        "approaches include: RAG, fine-tuning on verified data, "
+        "chain-of-thought prompting, RLHF, and tool-use grounding."
+    )
+    return json.dumps({"url": url, "content": content[:2000]})
+
+
+def get_current_date() -> str:
+    today = datetime.date.today()
+    return json.dumps({
+        "date": today.isoformat(),
+        "formatted": today.strftime("%B %d, %Y"),
+    })
+
+
+def save_report(
+    title: str,
+    summary: str,
+    sections: list[dict[str, str]],
+    sources: list[str],
+) -> str:
+    filename = title.lower().replace(" ", "_")[:50] + ".md"
+    lines = [f"# {title}\\n", f"## Summary\\n\\n{summary}\\n"]
+    for s in sections:
+        lines.append(f"## {s['heading']}\\n\\n{s['body']}\\n")
+    lines.append("## Sources\\n")
+    for i, src in enumerate(sources, 1):
+        lines.append(f"{i}. {src}")
+    report = "\\n".join(lines)
+    print(f"\\n--- Report: {filename} ({len(report)} chars) ---")
+    return json.dumps({"filename": filename, "char_count": len(report)})
+
+
+tool_functions: dict[str, Any] = {
+    "search_web": search_web,
+    "read_webpage": read_webpage,
+    "get_current_date": get_current_date,
+    "save_report": save_report,
+}
+
+
+# ============================================================
+# Stage 2: Tool definitions
+# ============================================================
+
+tools = [
+    {
+        "name": "search_web",
+        "description": "Search the web for information. Use as the "
+            "first step when researching, or to find additional "
+            "sources when information is incomplete.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Search query. Be specific.",
+                },
+                "max_results": {
+                    "type": "integer",
+                    "description": "Max results (default 3).",
+                    "default": 3,
+                },
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "read_webpage",
+        "description": "Fetch text content of a webpage. Use after "
+            "search_web to read promising results.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "url": {
+                    "type": "string",
+                    "description": "Full URL to read.",
+                },
+            },
+            "required": ["url"],
+        },
+    },
+    {
+        "name": "get_current_date",
+        "description": "Get today's date for time-sensitive queries.",
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+        },
+    },
+    {
+        "name": "save_report",
+        "description": "Save a structured research report. Use when "
+            "you have enough information to answer the question.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "title": {"type": "string"},
+                "summary": {"type": "string"},
+                "sections": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "heading": {"type": "string"},
+                            "body": {"type": "string"},
+                        },
+                        "required": ["heading", "body"],
+                    },
+                },
+                "sources": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                },
+            },
+            "required": ["title", "summary", "sections", "sources"],
+        },
+    },
+]
+
+
+# ============================================================
+# Stage 3: System prompt
+# ============================================================
+
+SYSTEM_PROMPT = """You are a research assistant. Search the web,
+read sources, and produce a structured report.
+
+Process: (1) get today's date, (2) search for the topic,
+(3) read 2-3 promising results, (4) refine and search again if
+needed, (5) save a report, (6) summarize for the user.
+
+Rules: max 5 pages read, max 12 tool calls, do not fabricate
+information, stop after saving the report."""
+
+
+# ============================================================
+# Stage 4: Agent loop with error handling
+# ============================================================
+
+client = anthropic.Anthropic()
+MODEL = "claude-sonnet-4-6"
+MAX_ITERATIONS = 15
+
+
+def execute_tool(tool_name: str, tool_input: dict) -> str:
+    if tool_name not in tool_functions:
+        return json.dumps({
+            "error": f"Unknown tool: {tool_name}",
+            "available_tools": list(tool_functions.keys()),
+        })
+    try:
+        return tool_functions[tool_name](**tool_input)
+    except TypeError as e:
+        return json.dumps({"error": f"Invalid arguments: {e}"})
+    except Exception as e:
+        return json.dumps({"error": f"Failed: {e}"})
+
+
+def run_research_agent(question: str) -> str:
+    messages = [{"role": "user", "content": question}]
+    iteration = 0
+
+    while iteration < MAX_ITERATIONS:
+        iteration += 1
+        response = client.messages.create(
+            model=MODEL,
+            max_tokens=4096,
+            system=SYSTEM_PROMPT,
+            tools=tools,
+            messages=messages,
+        )
+
+        if response.stop_reason == "end_turn":
+            for block in response.content:
+                if block.type == "text":
+                    return block.text
+
+        if response.stop_reason == "tool_use":
+            messages.append({
+                "role": "assistant",
+                "content": response.content,
+            })
+            tool_results = []
+            for block in response.content:
+                if block.type == "tool_use":
+                    result = execute_tool(block.name, block.input)
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": result,
+                    })
+            messages.append({"role": "user", "content": tool_results})
+
+    return "Max iterations reached."
+
+
+if __name__ == "__main__":
+    answer = run_research_agent(
+        "What are the main approaches to reducing "
+        "hallucinations in large language models?"
+    )
+    print(answer)
+`} language="python" filename="research_agent.py" />
+
+## What This Lab Taught You
+
+Look at what you built and trace each piece back to the lesson where you learned it:
+
+- **Tool implementations** with clear return formats (lesson 01: why tools matter)
+- **Tool definitions** with JSON Schema that guide the LLM's behavior (lesson 02: function calling basics)
+- **Intentional interface design** -- structured report output, descriptive parameter names, usage hints in descriptions (lesson 03: tool interface design)
+- **Error handling** with structured error messages and recovery hints (lesson 04: error handling and retries)
+- **A maximum iteration guard** that prevents runaway loops (lesson 04)
+- **A well-structured system prompt** with methodology, boundaries, and stopping conditions (Module 2: prompt engineering)
+- **The agent loop** that cycles between LLM reasoning and tool execution (Module 1: the agent loop)
+
+This is the full tool-use toolkit. Every agent you build from here will use these same building blocks.
+
+## Where This Architecture Falls Short
+
+The research agent works, but step back and look at its architecture critically. The agent's "strategy" is entirely implicit -- it lives inside the system prompt as natural language instructions, and the LLM follows them loosely. This creates several problems:
+
+- **No explicit plan.** The agent decides what to do one step at a time. It cannot look ahead, prioritize, or allocate its limited tool calls across sub-tasks. If the question has three parts, the agent might spend all its iterations on the first part and never reach the others.
+
+- **No self-reflection.** The agent never pauses to evaluate the quality of information it has gathered. It might write a report based on one mediocre source when a better source is one search away.
+
+- **No structured reasoning.** The LLM interleaves thinking and acting in whatever order feels natural. Sometimes it thinks carefully before acting; sometimes it fires off a tool call impulsively. There is no guarantee of consistency.
+
+- **No task decomposition.** For a complex research question, the agent treats everything as a single flat task. It cannot break the question into sub-questions, research each one independently, and then synthesize.
+
+These are not bugs in our code. They are fundamental limitations of the **ad-hoc agent loop** -- a while loop that hands all control to the LLM with no structural guidance beyond the system prompt.
+
+## What Comes Next
+
+In **Module 4: Agent Architectures**, we solve these problems with proven architectural patterns:
+
+- **ReAct** (Reason + Act) forces the agent to explicitly state its reasoning before every action, making the thought process visible and consistent.
+- **Plan-and-Execute** separates planning from execution -- the agent creates a full plan first, then executes each step, tracking progress and adapting as it goes.
+- **Self-Reflection** adds an evaluation step where the agent critiques its own output and decides whether to refine it.
+- **Routing architectures** let you dispatch different types of questions to specialized sub-agents, each with their own tools and prompts.
+
+These patterns do not replace anything you built in this lab. They build on top of it. The tools, schemas, error handling, and agent loop you implemented here are the foundation. Module 4 adds the *structure* that makes agents reliable, predictable, and capable of handling complex tasks.
+
+## Summary
+
+You built a research assistant agent that combines every concept from Module 3 into a working system. The agent uses four tools -- `search_web`, `read_webpage`, `get_current_date`, and `save_report` -- to autonomously research a question and produce a structured report. The implementation applies tool design principles, error handling patterns, structured system prompts, and the core agent loop.
+
+This capstone demonstrates that tool use is the mechanism that transforms an LLM from a text generator into an agent that can interact with the world. But it also reveals that the simple while-loop architecture has real limits: no planning, no self-reflection, no task decomposition. Module 4 introduces the architectural patterns that address these limitations head-on.

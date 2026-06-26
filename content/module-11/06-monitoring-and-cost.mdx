@@ -1,0 +1,416 @@
+---
+title: "Monitoring, Observability, and Cost"
+quiz:
+  - question: "Why is structured JSON logging preferred over plain-text logging for production agent systems?"
+    options:
+      - "JSON logs are smaller in file size than plain-text logs"
+      - "Plain-text logs cannot be written to files, only to the console"
+      - "Structured JSON logs can be parsed, indexed, and queried programmatically by log aggregation tools, making it possible to filter by trace ID, model name, token count, or any other field at scale"
+      - "JSON is the only format supported by cloud logging services"
+    correctIndex: 2
+  - question: "In a model cascade cost optimization strategy, what determines whether a request is escalated from a cheaper model to a more expensive one?"
+    options:
+      - "The request is always sent to all models simultaneously, and the cheapest successful response is used"
+      - "A confidence score or quality check on the cheaper model's response determines whether escalation is needed -- most requests are handled cheaply, and only hard cases move up"
+      - "Escalation happens on a fixed schedule, alternating between cheap and expensive models"
+      - "The user manually selects which model to use for each request"
+    correctIndex: 1
+  - question: "What is the primary purpose of cost attribution in a multi-tenant agent system?"
+    options:
+      - "To make the agent run faster by allocating more compute to high-paying tenants"
+      - "To track which tenants, features, or workflows consume which resources, enabling accurate billing, budget enforcement, and identification of cost optimization opportunities"
+      - "To prevent tenants from using the agent more than once per day"
+      - "To ensure all tenants pay the same flat rate regardless of usage"
+    correctIndex: 1
+  - question: "An agent's p99 latency has spiked from 3 seconds to 25 seconds, but the average latency is unchanged. Which monitoring approach would catch this issue FIRST?"
+    options:
+      - "Checking the total daily cost dashboard for a spending increase"
+      - "Reading the plain-text application logs for error messages"
+      - "A percentile-based latency alert on the p95 or p99 metric, which fires when tail latency exceeds a threshold even if the average looks normal"
+      - "Counting the total number of API requests per hour"
+    correctIndex: 2
+---
+
+## Overview
+
+In Module 10, Lesson 5, you learned how to instrument an agent with **distributed tracing** -- attaching trace IDs to every LLM call, tool execution, and reasoning step so you can reconstruct the full execution path when something goes wrong. Tracing answers the question *what happened during this run?*
+
+But tracing alone is not enough for production. You also need to answer: *How is the system performing right now?* *Are we about to exceed our budget?* *Which tenant is driving that cost spike?* *Why did latency double at 3 AM?*
+
+This is where **monitoring and observability** come in. Monitoring means collecting metrics, setting thresholds, and firing alerts when something crosses a boundary. Observability means having enough structured data -- logs, metrics, and traces -- that you can diagnose *any* failure without deploying new instrumentation. For agent systems, there is a third critical dimension: **cost management**. Every LLM call burns tokens, and tokens cost money. Without active cost tracking and optimization, a successful agent can quietly bankrupt your project.
+
+This lesson covers the full observability stack for production agents, from structured logging through metrics and alerting, and then dives deep into cost optimization strategies including token budgeting, caching, model cascading (connecting back to Module 5, Lesson 5), and cost attribution per tenant and feature.
+
+## The Agent Observability Stack
+
+Traditional applications rely on the **three pillars of observability**: logs, metrics, and traces. Agent systems need all three, but with agent-specific dimensions added to each one. The following diagram shows how these components fit together in a production monitoring architecture.
+
+<MermaidDiagram chart={`graph LR
+    subgraph Agent["Agent Runtime"]
+        A[Agent Request] --> B[Structured Logger]
+        A --> C[Metrics Collector]
+        A --> D[Trace Exporter]
+    end
+    subgraph Pipeline["Data Pipeline"]
+        B --> E[Log Aggregator<br/>e.g. ELK, Loki]
+        C --> F[Metrics Store<br/>e.g. Prometheus, Datadog]
+        D --> G[Trace Backend<br/>e.g. Jaeger, Tempo]
+    end
+    subgraph Visibility["Visibility Layer"]
+        E --> H[Dashboards<br/>e.g. Grafana]
+        F --> H
+        G --> H
+        H --> I[Alert Manager]
+        I --> J[PagerDuty / Slack / Email]
+    end
+    style Agent fill:#ebf8ff,stroke:#3182ce
+    style Pipeline fill:#f0fff4,stroke:#68d391
+    style Visibility fill:#fefcbf,stroke:#d69e2e
+`} />
+
+Each pillar serves a distinct purpose:
+
+- **Structured logging** captures the narrative of what happened -- which model was called, what the prompt contained, what the response was, and how many tokens were consumed. Logs are the raw material for post-incident investigation.
+- **Metrics** capture numerical summaries over time -- request count, latency percentiles, token usage, error rates, and cost. Metrics power dashboards and alerts.
+- **Distributed traces** capture the causal chain of operations within a single request, as you learned in Module 10, Lesson 5. Traces let you pinpoint *where* in a multi-step agent run the problem occurred.
+
+## Structured Logging for Agents
+
+The first rule of production logging is: **never use plain-text logs**. A line like `INFO: Called Claude Sonnet, got response` is useless at scale. You cannot filter it, aggregate it, or alert on it. Instead, every log entry should be a **structured JSON object** with well-defined fields that log aggregation tools can parse, index, and query.
+
+For agent systems, the key fields to include in every log entry are:
+
+- **trace_id** and **span_id** -- links the log entry to the distributed trace (from Module 10, Lesson 5)
+- **model** -- which LLM was called (e.g., `claude-sonnet-4-20250514`)
+- **input_tokens** and **output_tokens** -- token counts for cost tracking
+- **latency_ms** -- wall-clock time for the operation
+- **tenant_id** -- which customer or user triggered the request (for cost attribution)
+- **status** -- success, failure, or timeout
+- **operation** -- what the agent was doing (e.g., `llm_call`, `tool_execution`, `planning`)
+
+<CodeBlock code={`import json
+import logging
+import time
+from datetime import datetime, timezone
+
+
+class StructuredAgentLogger:
+    """JSON-structured logger for agent operations."""
+
+    def __init__(self, service_name: str):
+        self.service_name = service_name
+        self.logger = logging.getLogger(service_name)
+        handler = logging.StreamHandler()
+        handler.setFormatter(logging.Formatter("%(message)s"))
+        self.logger.addHandler(handler)
+        self.logger.setLevel(logging.INFO)
+
+    def log(self, operation: str, **fields):
+        entry = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "service": self.service_name,
+            "operation": operation,
+            **fields,
+        }
+        self.logger.info(json.dumps(entry))
+
+    def log_llm_call(
+        self,
+        *,
+        trace_id: str,
+        span_id: str,
+        model: str,
+        input_tokens: int,
+        output_tokens: int,
+        latency_ms: float,
+        status: str,
+        tenant_id: str | None = None,
+    ):
+        self.log(
+            "llm_call",
+            trace_id=trace_id,
+            span_id=span_id,
+            model=model,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            total_tokens=input_tokens + output_tokens,
+            latency_ms=round(latency_ms, 2),
+            status=status,
+            tenant_id=tenant_id,
+        )
+`} language="python" filename="structured_logger.py" />
+
+Every log entry is a flat JSON object that log aggregation tools like the **ELK stack** (Elasticsearch, Logstash, Kibana), **Grafana Loki**, or **Datadog Logs** can ingest directly. You can then write queries like "show me all LLM calls for tenant X where latency exceeded 5 seconds" or "count failures by model over the last hour."
+
+## Metrics That Matter for Agents
+
+Not all metrics are equally important. For agent systems, focus on these categories:
+
+**Latency metrics** track how long operations take. Report these as percentiles (p50, p95, p99), not averages. An average latency of 2 seconds hides the fact that 1% of your requests take 30 seconds -- and those are the ones your users complain about.
+
+**Token usage metrics** track consumption of your most expensive resource. Break these down by model, operation type, tenant, and feature. Token usage directly translates to cost.
+
+**Success rate metrics** track how often the agent completes its task without errors, fallbacks, or human escalation. A success rate below your target triggers investigation.
+
+**Cost metrics** translate token usage into dollar amounts using each model's pricing. These are the metrics your finance team cares about.
+
+**Business metrics** track the outcomes your agent is supposed to produce -- queries answered, tasks completed, customer satisfaction scores. These connect the technical system to the business value it delivers.
+
+## Dashboards and Alerting
+
+Metrics are useless if nobody looks at them. A well-designed **dashboard** provides at-a-glance system health, while **alerts** notify you when something needs attention.
+
+Structure your dashboard in layers:
+
+- **Executive view** -- total cost, total requests, overall success rate, cost per successful request
+- **Operational view** -- latency percentiles, error rates by type, token usage by model, active traces
+- **Debugging view** -- slowest requests, highest-cost requests, most common error messages, recent traces with failures
+
+For alerting, define thresholds on the metrics that indicate real problems:
+
+- **p99 latency** exceeds 10 seconds -- the tail is getting too long
+- **Error rate** exceeds 5% over a 5-minute window -- something is breaking
+- **Hourly cost** exceeds 120% of the rolling average -- unexpected cost spike
+- **Token budget** for a tenant exceeds 80% of their allocation -- approaching the limit
+
+> **Key principle:** Alert on symptoms (high latency, high error rate) rather than causes (CPU usage, memory). Causes are for investigation *after* the alert fires.
+
+## Token Budgeting
+
+A **token budget** is a hard or soft limit on how many tokens an agent can consume per request, per tenant, per hour, or per day. Without token budgets, a single runaway agent loop can consume thousands of dollars in minutes.
+
+Token budgets operate at multiple levels:
+
+- **Per-request budget** -- limits the total tokens for a single agent run (e.g., 50,000 tokens max). Prevents infinite loops from draining your account.
+- **Per-tenant budget** -- limits a customer's daily or monthly token usage. Enables fair sharing and prevents one customer from consuming all resources.
+- **Per-feature budget** -- limits tokens for specific agent capabilities (e.g., code generation gets a higher budget than summarization). Allocates resources to high-value features.
+- **System-wide budget** -- a global circuit breaker that shuts down non-critical agent features if total spend exceeds a threshold.
+
+## Cost Optimization Strategies
+
+There are three primary strategies for reducing agent costs without sacrificing quality: **caching**, **model cascading**, and **prompt compression**. The following diagram shows how these strategies connect in a cost optimization pipeline.
+
+<MermaidDiagram chart={`flowchart TD
+    REQ[Incoming Request] --> CACHE{Cache Hit?}
+    CACHE -->|Yes| CACHED[Return Cached Response<br/>Cost: ~$0]
+    CACHE -->|No| COMPRESS[Prompt Compression<br/>Remove redundancy, summarize context]
+    COMPRESS --> CASCADE{Model Cascade}
+    CASCADE --> T1[Tier 1: Haiku<br/>Fast and cheap]
+    T1 -->|High confidence| RESP1[Return Response]
+    T1 -->|Low confidence| T2[Tier 2: Sonnet<br/>Balanced]
+    T2 -->|High confidence| RESP2[Return Response]
+    T2 -->|Low confidence| T3[Tier 3: Opus<br/>Most capable]
+    T3 --> RESP3[Return Response]
+    RESP1 --> STORE[Store in Cache]
+    RESP2 --> STORE
+    RESP3 --> STORE
+    style REQ fill:#ebf8ff,stroke:#3182ce
+    style CACHE fill:#fefcbf,stroke:#d69e2e
+    style COMPRESS fill:#e9d8fd,stroke:#b794f4
+    style CASCADE fill:#fed7d7,stroke:#fc8181
+    style T1 fill:#f0fff4,stroke:#68d391
+    style T2 fill:#fefcbf,stroke:#d69e2e
+    style T3 fill:#fed7d7,stroke:#fc8181
+    style CACHED fill:#f0fff4,stroke:#68d391
+`} />
+
+**Caching** is the highest-impact optimization. Many agent requests are similar or identical -- a customer asking "what is your return policy?" will hit the same knowledge base and produce the same answer every time. By caching responses keyed on a semantic hash of the input, you can serve repeat requests at near-zero cost. Even a modest cache hit rate of 30% translates to a 30% reduction in LLM spend.
+
+**Model cascading** routes requests to the cheapest model that can handle them, as you learned in Module 5, Lesson 5. The key insight is that 70-80% of requests are simple enough for a fast, cheap model. Only the remaining 20-30% need the full power of a large model. By starting cheap and escalating only when quality is insufficient, you dramatically reduce average cost per request.
+
+**Prompt compression** reduces the number of input tokens without losing essential information. Techniques include summarizing long conversation histories instead of sending the full transcript, removing redundant context that was already processed in a previous step, and using shorter system prompts that convey the same instructions in fewer tokens.
+
+## Cost Attribution
+
+In multi-tenant systems, you need to know not just *how much* you are spending, but *who and what* is driving the spend. **Cost attribution** tags every LLM call with metadata that lets you break down costs by tenant, feature, workflow, and model.
+
+The following code implements a monitoring middleware that tracks both performance metrics and costs, combining structured logging, metrics collection, and cost attribution into a single composable layer.
+
+<CodeBlock code={`import time
+import uuid
+from dataclasses import dataclass, field
+from collections import defaultdict
+
+
+# Pricing per 1M tokens (input / output) as of early 2025.
+MODEL_PRICING = {
+    "claude-haiku": {"input": 0.25, "output": 1.25},
+    "claude-sonnet": {"input": 3.00, "output": 15.00},
+    "claude-opus": {"input": 15.00, "output": 75.00},
+}
+
+
+@dataclass
+class LLMCallMetrics:
+    """Metrics captured for a single LLM call."""
+    trace_id: str
+    model: str
+    input_tokens: int
+    output_tokens: int
+    latency_ms: float
+    status: str  # "success", "error", "timeout"
+    tenant_id: str | None = None
+    feature: str | None = None
+    cost_usd: float = 0.0
+
+    def __post_init__(self):
+        pricing = MODEL_PRICING.get(self.model, {"input": 3.0, "output": 15.0})
+        self.cost_usd = (
+            self.input_tokens * pricing["input"] / 1_000_000
+            + self.output_tokens * pricing["output"] / 1_000_000
+        )
+
+
+@dataclass
+class CostTracker:
+    """Tracks cumulative costs by tenant, feature, and model."""
+    costs_by_tenant: dict[str, float] = field(
+        default_factory=lambda: defaultdict(float)
+    )
+    costs_by_feature: dict[str, float] = field(
+        default_factory=lambda: defaultdict(float)
+    )
+    costs_by_model: dict[str, float] = field(
+        default_factory=lambda: defaultdict(float)
+    )
+    total_cost: float = 0.0
+    total_requests: int = 0
+
+    def record(self, metrics: LLMCallMetrics):
+        self.total_cost += metrics.cost_usd
+        self.total_requests += 1
+        self.costs_by_model[metrics.model] += metrics.cost_usd
+        if metrics.tenant_id:
+            self.costs_by_tenant[metrics.tenant_id] += metrics.cost_usd
+        if metrics.feature:
+            self.costs_by_feature[metrics.feature] += metrics.cost_usd
+
+    def get_summary(self) -> dict:
+        return {
+            "total_cost_usd": round(self.total_cost, 6),
+            "total_requests": self.total_requests,
+            "avg_cost_per_request": round(
+                self.total_cost / max(self.total_requests, 1), 6
+            ),
+            "by_tenant": dict(self.costs_by_tenant),
+            "by_feature": dict(self.costs_by_feature),
+            "by_model": dict(self.costs_by_model),
+        }
+
+
+class MonitoringMiddleware:
+    """Middleware that wraps LLM calls with metrics and cost tracking.
+
+    Integrates with the middleware pattern from Module 5, Lesson 3.
+    Attaches trace context from Module 10, Lesson 5.
+    """
+
+    def __init__(self, logger, cost_tracker: CostTracker):
+        self.logger = logger
+        self.cost_tracker = cost_tracker
+        self.token_budgets: dict[str, int] = {}  # tenant_id -> max daily tokens
+
+    def set_budget(self, tenant_id: str, max_daily_tokens: int):
+        self.token_budgets[tenant_id] = max_daily_tokens
+
+    async def __call__(self, llm_call, *, model, messages, tenant_id=None,
+                       feature=None, trace_id=None, **kwargs):
+        """Wrap an LLM call with monitoring, budgeting, and cost tracking."""
+        trace_id = trace_id or str(uuid.uuid4())
+        span_id = str(uuid.uuid4())[:8]
+
+        # --- Budget check before calling ---
+        if tenant_id and tenant_id in self.token_budgets:
+            current_spend = self.cost_tracker.costs_by_tenant.get(tenant_id, 0)
+            budget_limit = self.token_budgets[tenant_id]
+            # Rough estimate: $1 ≈ 66K Sonnet input tokens
+            if current_spend > budget_limit:
+                self.logger.log(
+                    "budget_exceeded",
+                    trace_id=trace_id,
+                    tenant_id=tenant_id,
+                    current_spend=current_spend,
+                    budget_limit=budget_limit,
+                )
+                raise BudgetExceededError(
+                    f"Tenant {tenant_id} exceeded budget: "
+                    f"${current_spend:.4f} > ${budget_limit}"
+                )
+
+        # --- Execute the LLM call with timing ---
+        start = time.perf_counter()
+        try:
+            response = await llm_call(model=model, messages=messages, **kwargs)
+            elapsed_ms = (time.perf_counter() - start) * 1000
+            status = "success"
+        except Exception as e:
+            elapsed_ms = (time.perf_counter() - start) * 1000
+            status = "error"
+            self.logger.log(
+                "llm_call_error",
+                trace_id=trace_id,
+                span_id=span_id,
+                model=model,
+                error=str(e),
+                latency_ms=round(elapsed_ms, 2),
+                tenant_id=tenant_id,
+            )
+            raise
+
+        # --- Record metrics and cost ---
+        metrics = LLMCallMetrics(
+            trace_id=trace_id,
+            model=model,
+            input_tokens=response.usage.input_tokens,
+            output_tokens=response.usage.output_tokens,
+            latency_ms=elapsed_ms,
+            status=status,
+            tenant_id=tenant_id,
+            feature=feature,
+        )
+        self.cost_tracker.record(metrics)
+
+        # --- Emit structured log ---
+        self.logger.log_llm_call(
+            trace_id=trace_id,
+            span_id=span_id,
+            model=model,
+            input_tokens=metrics.input_tokens,
+            output_tokens=metrics.output_tokens,
+            latency_ms=metrics.latency_ms,
+            status=status,
+            tenant_id=tenant_id,
+        )
+
+        return response
+
+
+class BudgetExceededError(Exception):
+    """Raised when a tenant exceeds their token/cost budget."""
+    pass
+`} language="python" filename="monitoring_middleware.py" />
+
+This middleware connects several patterns from earlier in the course:
+
+- The **middleware and hooks pattern** from Module 5, Lesson 3 -- wrapping a function call with before/after logic
+- The **distributed tracing** from Module 10, Lesson 5 -- propagating trace IDs and span IDs through every operation
+- The **model cascading** from Module 5, Lesson 5 -- cost tracking that makes cascading decisions data-driven
+
+## Putting It All Together
+
+A complete observability setup for a production agent combines all the components discussed in this lesson. Here is how they connect in practice:
+
+1. **Every LLM call** passes through the monitoring middleware, which records timing, tokens, and cost.
+2. **Structured logs** are emitted as JSON and shipped to a log aggregator.
+3. **Metrics** (latency histograms, token counters, cost gauges) are exported to a metrics store like Prometheus.
+4. **Traces** link individual spans into a full execution tree, as covered in Module 10, Lesson 5.
+5. **Dashboards** visualize metrics in real time, with drill-down from cost summaries to individual traces.
+6. **Alerts** fire when metrics cross predefined thresholds, notifying on-call engineers via PagerDuty or Slack.
+7. **Token budgets** enforce spending limits per tenant, preventing runaway costs.
+8. **Cost attribution** breaks down spending by tenant, feature, and model, enabling accurate billing and optimization.
+
+> **Key takeaway:** Observability is not something you add after launch. Instrument from day one. The monitoring middleware pattern shown above adds fewer than 20 lines of overhead per LLM call, but the visibility it provides is the difference between operating confidently and operating blind.
+
+## Summary
+
+Production agent systems require a full observability stack: structured JSON logging for investigation, metrics with percentile-based alerting for real-time health, and distributed tracing for causal debugging. Cost management is equally critical -- token budgets prevent runaway spending, caching eliminates redundant calls, model cascading routes requests to the cheapest capable model, and prompt compression reduces input tokens. Cost attribution tags every call with tenant and feature metadata so you can answer not just "how much are we spending?" but "who is spending it and on what?" In the next lesson, you will apply these patterns hands-on in the Production Lab, building a fully instrumented and cost-aware agent deployment.

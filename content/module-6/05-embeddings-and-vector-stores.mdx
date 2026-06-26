@@ -1,0 +1,430 @@
+---
+title: "Embeddings and Vector Stores"
+quiz:
+  - question: "An embedding model produces 1536-dimensional vectors. Two document chunks have a cosine similarity of 0.92. What does this tell you?"
+    options:
+      - "The documents are exactly 92% identical in wording"
+      - "The documents are semantically very similar -- their meaning vectors point in nearly the same direction in the 1536-dimensional space"
+      - "The documents share 92% of their vocabulary"
+      - "The embedding model is 92% confident the documents are related"
+    correctIndex: 1
+  - question: "You are building a RAG system for a legal firm with 10 million contract clauses that need sub-second query latency. Which vector store architecture is most appropriate?"
+    options:
+      - "FAISS with a flat (brute-force) index stored in memory on a single machine"
+      - "A managed cloud vector database like Pinecone that provides automatic sharding, replication, and approximate nearest neighbor search"
+      - "ChromaDB running in-process alongside the application"
+      - "PostgreSQL with pgvector using exact nearest neighbor queries"
+    correctIndex: 1
+  - question: "Why does HNSW generally outperform IVF for recall at the same query latency?"
+    options:
+      - "HNSW uses less memory than IVF"
+      - "HNSW searches the entire dataset exhaustively while IVF does not"
+      - "HNSW builds a multi-layer graph of navigable connections, allowing it to traverse from coarse regions to fine-grained neighborhoods without being restricted to a single cluster like IVF"
+      - "HNSW uses a simpler distance metric that is faster to compute"
+    correctIndex: 2
+  - question: "When should you choose a smaller embedding dimension (e.g., 256) over a larger one (e.g., 3072)?"
+    options:
+      - "Always -- smaller dimensions are strictly better because they are faster"
+      - "When your documents are short and simple, so fine-grained semantic distinctions are unnecessary, and you need to optimize for storage and latency at scale"
+      - "When you need the highest possible retrieval accuracy regardless of cost"
+      - "Only when using cosine similarity instead of dot product"
+    correctIndex: 1
+---
+
+## Overview
+
+In the previous lesson, you learned how RAG combines retrieval with generation to ground agents in factual knowledge. But we treated the retrieval step as a black box -- you put text in, and relevant results came back. In this lesson, we open that box. How does a system know that "cardiovascular disease" and "heart condition" are semantically related, even though they share no words? How does it search through millions of documents in milliseconds? The answers are **embeddings** and **vector stores**.
+
+Embeddings are the mathematical foundation that makes semantic search possible. A vector store is the infrastructure that makes it fast. Together, they form the retrieval engine at the heart of every RAG system. Understanding how they work -- not just how to call their APIs -- will help you make informed decisions about dimension sizes, distance metrics, indexing algorithms, and database choices that directly impact your agent's retrieval quality and cost.
+
+## What Embeddings Represent
+
+An **embedding** is a dense numerical vector that captures the semantic meaning of a piece of text. Unlike keyword search, which matches exact words, embeddings encode *meaning* into a fixed-length array of floating-point numbers. The key insight is that texts with similar meanings end up close together in this high-dimensional space, even if they use completely different words.
+
+When you pass the sentence "The patient has a heart condition" through an embedding model, you get back something like a 1536-dimensional vector -- an array of 1536 numbers. The sentence "Cardiovascular disease was diagnosed" produces a different vector, but one that points in nearly the same direction in that 1536-dimensional space. Meanwhile, "The restaurant serves excellent pasta" produces a vector pointing in a completely different direction.
+
+This works because embedding models are trained on massive text corpora to learn that certain words and phrases appear in similar contexts. Through this training, the model learns to place semantically related concepts near each other in the vector space. The resulting vectors encode nuances that keyword matching cannot capture: synonyms, paraphrases, conceptual relationships, and even cross-lingual meaning.
+
+> **Key insight:** Embeddings transform the problem of "find similar text" from a linguistic problem (comparing words and grammar) into a geometric problem (finding nearby points in space). Geometry is something computers are extremely good at.
+
+## The Embedding Pipeline
+
+Every RAG system follows the same pipeline to get from raw text to searchable vectors. Understanding each stage helps you diagnose problems and optimize performance.
+
+<MermaidDiagram chart={`graph LR
+    subgraph Ingestion["Ingestion Pipeline (offline)"]
+        DOC["Raw Documents"] --> CHUNK["Chunking<br/>──────────<br/>Split into<br/>passages"]
+        CHUNK --> TOK["Tokenizer<br/>──────────<br/>Text to<br/>token IDs"]
+        TOK --> MODEL["Embedding Model<br/>──────────<br/>Tokens to<br/>dense vector"]
+        MODEL --> VEC["Vectors<br/>──────────<br/>e.g., 1536<br/>floats"]
+        VEC --> IDX["Index<br/>──────────<br/>ANN structure<br/>for fast search"]
+    end
+    subgraph Query["Query Pipeline (online)"]
+        Q["User Query"] --> QTOK["Tokenizer"]
+        QTOK --> QMODEL["Same Embedding<br/>Model"]
+        QMODEL --> QVEC["Query Vector"]
+        QVEC --> SEARCH["Similarity<br/>Search"]
+        IDX --> SEARCH
+        SEARCH --> TOP["Top-K<br/>Results"]
+    end
+    style Ingestion fill:#ebf8ff,stroke:#3182ce,stroke-width:2px
+    style Query fill:#f0fff4,stroke:#38a169,stroke-width:2px
+    style DOC fill:#e2e8f0,stroke:#4a5568
+    style CHUNK fill:#bee3f8,stroke:#3182ce
+    style TOK fill:#bee3f8,stroke:#3182ce
+    style MODEL fill:#bee3f8,stroke:#3182ce
+    style VEC fill:#bee3f8,stroke:#3182ce
+    style IDX fill:#bee3f8,stroke:#3182ce
+    style Q fill:#c6f6d5,stroke:#38a169
+    style QTOK fill:#c6f6d5,stroke:#38a169
+    style QMODEL fill:#c6f6d5,stroke:#38a169
+    style QVEC fill:#c6f6d5,stroke:#38a169
+    style SEARCH fill:#c6f6d5,stroke:#38a169
+    style TOP fill:#c6f6d5,stroke:#38a169
+`} />
+
+The pipeline has two phases:
+
+- **Ingestion (offline):** Your documents are chunked into passages, each passage is converted to a vector by the embedding model, and the vectors are stored in an index. This is a batch process you run when your knowledge base changes.
+
+- **Query (online):** The user's query is converted to a vector using the *same* embedding model, then the index is searched for the vectors closest to the query vector. The corresponding text passages are returned as results.
+
+A critical requirement: the **same embedding model** must be used for both ingestion and query. Vectors from different models live in incompatible spaces -- comparing them is meaningless. If you switch models, you must re-embed your entire document collection.
+
+## Distance Metrics: Measuring Similarity
+
+Once you have vectors, you need a way to measure how "close" two vectors are. This is where **distance metrics** come in. The choice of metric affects both retrieval quality and performance.
+
+**Cosine similarity** measures the angle between two vectors, ignoring their magnitude. Two vectors pointing in the same direction have a cosine similarity of 1.0, perpendicular vectors score 0.0, and opposite vectors score -1.0. This is the most widely used metric for text embeddings because it focuses on *direction* (meaning) rather than *length* (which can vary with text length).
+
+**Euclidean distance** (L2) measures the straight-line distance between two points in the vector space. Smaller values mean more similar. It considers both direction and magnitude, which can be useful when vector lengths carry meaningful information, but for most text embedding models, cosine similarity is preferred.
+
+**Dot product** (inner product) multiplies corresponding dimensions and sums the results. It combines direction and magnitude. When vectors are normalized to unit length (which many embedding models do), dot product and cosine similarity produce identical rankings. Dot product is computationally cheaper, so many vector stores use it internally after normalizing the vectors.
+
+> **Practical rule:** Use **cosine similarity** as your default for text embeddings. Switch to dot product only if your vectors are already normalized and you need the slight speed advantage. Use Euclidean distance only for specialized use cases where magnitude matters.
+
+## Indexing Algorithms: Making Search Fast
+
+A brute-force search compares the query vector against every stored vector. This gives perfect results (exact nearest neighbors) but scales linearly with dataset size -- searching 10 million vectors means 10 million distance computations per query. At scale, this is too slow.
+
+**Approximate Nearest Neighbor (ANN)** algorithms trade a small amount of accuracy for dramatic speed improvements. Instead of searching everything, they use clever data structures to narrow the search to a small subset of candidates.
+
+### HNSW (Hierarchical Navigable Small World)
+
+**HNSW** builds a multi-layer graph where each node is a vector and edges connect nearby vectors. The top layer is sparse (few nodes, long-range connections), and each lower layer adds more nodes with shorter-range connections. To search, you start at the top layer and greedily navigate toward the query vector, then drop to the next layer for finer-grained navigation, repeating until you reach the bottom layer.
+
+Think of it like navigating a city: the top layer is a highway map (few exits, fast travel), the middle layers are main roads, and the bottom layer is every street. You take the highway to the right neighborhood, then use local streets to find the exact address.
+
+**Strengths:** Excellent recall (typically 95-99%+ of true nearest neighbors). Fast query times even at large scale. No training step required -- vectors are inserted directly.
+
+**Weaknesses:** High memory usage -- the graph structure is stored in RAM alongside the vectors. Insertion is slower than IVF because the graph must be updated.
+
+### IVF (Inverted File Index)
+
+**IVF** partitions the vector space into clusters using k-means clustering. Each vector is assigned to its nearest cluster centroid. To search, you first identify the closest centroids to the query vector, then search only the vectors within those clusters.
+
+**Strengths:** Lower memory overhead than HNSW. Faster insertion. Works well with disk-based storage because you only need to load relevant clusters.
+
+**Weaknesses:** Lower recall than HNSW at the same speed -- if the nearest neighbor is in a cluster that you did not search, you miss it. Requires a training step (the k-means clustering) before you can add vectors. Query quality depends heavily on the number of clusters searched (`nprobe`).
+
+<MermaidDiagram chart={`graph TD
+    subgraph HNSW_Algo["HNSW: Multi-Layer Graph"]
+        direction TB
+        L2["Layer 2 (sparse)"] --> L1["Layer 1 (medium)"]
+        L1 --> L0["Layer 0 (dense, all vectors)"]
+        L2 -.->|"Jump to<br/>neighborhood"| L1
+        L1 -.->|"Refine<br/>locally"| L0
+    end
+    subgraph IVF_Algo["IVF: Cluster-Based"]
+        direction TB
+        CENTROIDS["Cluster Centroids<br/>──────────<br/>Find closest clusters"] --> C1["Cluster 1<br/>vectors"]
+        CENTROIDS --> C2["Cluster 2<br/>vectors"]
+        CENTROIDS --> C3["Cluster 3<br/>vectors"]
+        CENTROIDS --> CN["Cluster N<br/>vectors"]
+        C2 -.- SEARCHED["Search only<br/>selected clusters"]
+        C3 -.- SEARCHED
+    end
+    style HNSW_Algo fill:#ebf8ff,stroke:#3182ce,stroke-width:2px
+    style IVF_Algo fill:#fff5f5,stroke:#e53e3e,stroke-width:2px
+    style L2 fill:#bee3f8,stroke:#3182ce
+    style L1 fill:#90cdf4,stroke:#3182ce
+    style L0 fill:#63b3ed,stroke:#2b6cb0
+    style CENTROIDS fill:#fed7d7,stroke:#e53e3e
+    style C1 fill:#feb2b2,stroke:#fc8181
+    style C2 fill:#fefcbf,stroke:#d69e2e
+    style C3 fill:#fefcbf,stroke:#d69e2e
+    style CN fill:#feb2b2,stroke:#fc8181
+    style SEARCHED fill:#c6f6d5,stroke:#38a169
+`} />
+
+In practice, **HNSW is the default choice** for most applications because its recall-speed trade-off is superior. IVF is preferred when memory is constrained or when the dataset is too large to fit the HNSW graph in RAM.
+
+## Choosing Embedding Dimensions
+
+Embedding models produce vectors of a fixed dimension -- 256, 768, 1024, 1536, or 3072 are common sizes. The dimension represents the expressiveness of the semantic space: more dimensions can encode finer-grained distinctions, but at a cost.
+
+**Higher dimensions** (1536, 3072):
+- Capture more nuanced semantic relationships
+- Better at distinguishing between subtly different concepts
+- Higher storage cost -- a 3072-dim vector uses 12KB (32-bit floats)
+- Slower similarity computation (more multiplications per comparison)
+- Risk of overfitting on small datasets
+
+**Lower dimensions** (256, 512):
+- Faster to compute and search
+- Lower storage and memory requirements
+- Sufficient for many practical applications, especially with well-trained models
+- May lose fine-grained distinctions between closely related concepts
+
+**The practical sweet spot** for most applications is 768-1536 dimensions. Modern embedding models like Voyage 3 (1024-dim) and OpenAI's `text-embedding-3-small` (1536-dim) hit a strong balance between quality and efficiency. Some models support **Matryoshka embeddings**, where you can truncate the vector to a smaller dimension (e.g., use only the first 512 of 1536 dimensions) with graceful quality degradation -- useful when you need to trade precision for speed.
+
+## Comparing Vector Stores
+
+Choosing a vector store depends on your scale, infrastructure preferences, and operational requirements. Here is how the major options compare:
+
+| Feature | ChromaDB | FAISS | pgvector | Pinecone | Weaviate |
+|---------|----------|-------|----------|----------|----------|
+| **Type** | Embedded DB | Library | PostgreSQL extension | Managed cloud | Self-hosted / cloud |
+| **Best for** | Prototypes, small apps | Research, single-machine perf | Teams already on PostgreSQL | Production SaaS, zero-ops | Hybrid search, multi-modal |
+| **Max scale** | ~1M vectors | ~1B vectors (single machine) | ~10M vectors | ~1B+ vectors | ~1B+ vectors |
+| **Index types** | HNSW | HNSW, IVF, PQ, flat | HNSW, IVF | Proprietary ANN | HNSW |
+| **Persistence** | SQLite / DuckDB | File-based | PostgreSQL tables | Fully managed | Disk / cloud storage |
+| **Filtering** | Metadata filters | Requires custom code | SQL WHERE clauses | Metadata filters | GraphQL + filters |
+| **Ops overhead** | Minimal | None (library) | Existing PG ops | None (managed) | Moderate |
+| **Cost model** | Free / open-source | Free / open-source | Free + PG hosting | Pay per vector + query | Free + hosting |
+
+**ChromaDB** is ideal for learning, prototyping, and applications with fewer than a million vectors. It runs in-process with no external dependencies, has a clean Python API, and handles persistence automatically. If you are building a RAG agent and want to get started in minutes, start here.
+
+**FAISS** (Facebook AI Similarity Search) is a battle-tested library, not a database. It gives you fine-grained control over index types, quantization, and GPU acceleration. It excels when you need maximum single-machine performance but requires you to handle persistence, metadata, and filtering yourself.
+
+**pgvector** extends PostgreSQL with vector operations. If your team already runs PostgreSQL, this avoids adding a new database to your infrastructure. You get the full power of SQL for filtering and joining vector results with relational data. The trade-off is that PostgreSQL was not designed for vector workloads, so performance at very large scale lags behind purpose-built solutions.
+
+**Pinecone** is a fully managed cloud service. You send vectors, it handles indexing, sharding, replication, and scaling. Ideal for teams that want production-grade vector search without operational overhead. The trade-off is vendor lock-in and per-query pricing.
+
+**Weaviate** offers a strong hybrid search capability (combining vector search with keyword search in a single query) and supports multi-modal data (text, images, audio). It can be self-hosted or used as a cloud service.
+
+## Working with Embeddings and ChromaDB
+
+Let's build a complete example: embed documents, store them in ChromaDB, and query for similar content. We will use Voyage AI embeddings (Anthropic's recommended embedding provider), but the pattern is identical with any embedding model.
+
+<CodeBlock code={`import voyageai
+import chromadb
+
+
+# ── 1. Initialize the embedding model and vector store ──────────
+
+# Voyage AI client (set VOYAGE_API_KEY in your environment)
+voyage = voyageai.Client()
+MODEL = "voyage-3"           # 1024-dim, strong general-purpose model
+
+# ChromaDB persists to disk so vectors survive restarts
+chroma_client = chromadb.PersistentClient(path="./vector_store")
+
+# A collection is like a table -- one per knowledge domain
+collection = chroma_client.get_or_create_collection(
+    name="agent_knowledge",
+    metadata={"hnsw:space": "cosine"},   # use cosine similarity
+)
+
+
+# ── 2. Embed and store documents ────────────────────────────────
+
+documents = [
+    "ReAct agents interleave reasoning and action. The agent thinks "
+    "about what to do, takes an action, observes the result, and "
+    "repeats until the task is complete.",
+
+    "Plan-and-Execute agents separate planning from execution. "
+    "First the agent creates a complete plan, then a separate "
+    "executor carries out each step.",
+
+    "Tool use allows LLMs to interact with external systems. "
+    "The model generates a structured tool call, the runtime "
+    "executes it, and the result is fed back to the model.",
+
+    "Retrieval-Augmented Generation combines a retriever that "
+    "finds relevant documents with a generator that produces "
+    "answers grounded in those documents.",
+
+    "Embedding models convert text into dense numerical vectors "
+    "that capture semantic meaning. Similar texts produce vectors "
+    "that are close together in the embedding space.",
+]
+
+# Generate embeddings for all documents in one batch
+embeddings = voyage.embed(
+    documents,
+    model=MODEL,
+    input_type="document",    # tells the model these are passages to index
+).embeddings
+
+# Store in ChromaDB with metadata for filtering
+collection.add(
+    ids=[f"doc-{i}" for i in range(len(documents))],
+    embeddings=embeddings,
+    documents=documents,
+    metadatas=[
+        {"topic": "react", "module": 3},
+        {"topic": "plan-execute", "module": 3},
+        {"topic": "tools", "module": 4},
+        {"topic": "rag", "module": 6},
+        {"topic": "embeddings", "module": 6},
+    ],
+)
+print(f"Stored {len(documents)} documents ({len(embeddings[0])}-dim vectors)")
+
+
+# ── 3. Query: find relevant documents ──────────────────────────
+
+query = "How do agents decide what action to take next?"
+
+# Embed the query (note: input_type="query" for queries)
+query_embedding = voyage.embed(
+    [query],
+    model=MODEL,
+    input_type="query",
+).embeddings[0]
+
+# Search for the 3 most similar documents
+results = collection.query(
+    query_embeddings=[query_embedding],
+    n_results=3,
+    include=["documents", "distances", "metadatas"],
+)
+
+print(f"\\nQuery: {query}\\n")
+for i, (doc, dist, meta) in enumerate(zip(
+    results["documents"][0],
+    results["distances"][0],
+    results["metadatas"][0],
+)):
+    similarity = 1 - dist   # ChromaDB returns distance, not similarity
+    print(f"  {i+1}. [similarity={similarity:.3f}] (topic={meta['topic']})")
+    print(f"     {doc[:100]}...\\n")
+`} language="python" filename="embedding_pipeline.py" />
+
+Several design decisions are worth noting:
+
+- **`input_type` matters.** Voyage (and many modern embedding models) distinguish between documents being indexed and queries being searched. The model applies slightly different transformations to each, improving retrieval accuracy. Always use `"document"` when embedding passages for storage and `"query"` when embedding search queries.
+
+- **Batch embedding** is dramatically faster than embedding one document at a time. Voyage supports up to 128 documents per call. For large ingestion jobs, batch your documents to minimize API round-trips.
+
+- **`hnsw:space`** tells ChromaDB which distance metric to use in the HNSW index. Setting it to `"cosine"` at collection creation time is important -- changing it later requires rebuilding the entire index.
+
+- **Metadata filtering** lets you narrow search to specific subsets before the vector similarity search runs. Filtering by `module` or `topic` reduces the search space and improves relevance when your knowledge base spans multiple domains.
+
+## Adding Metadata Filtering to Queries
+
+In production, you rarely want to search across your entire vector store. Metadata filtering lets you scope queries to relevant subsets:
+
+<CodeBlock code={`# Search only within module 6 content
+results = collection.query(
+    query_embeddings=[query_embedding],
+    n_results=3,
+    where={"module": {"$eq": 6}},          # filter by metadata
+    include=["documents", "distances", "metadatas"],
+)
+
+# Combine multiple filters
+results = collection.query(
+    query_embeddings=[query_embedding],
+    n_results=5,
+    where={
+        "$and": [
+            {"module": {"$gte": 3}},        # modules 3 and above
+            {"topic": {"$ne": "tools"}},     # exclude tool-related docs
+        ]
+    },
+    include=["documents", "distances", "metadatas"],
+)
+
+# Filter + similarity threshold (post-filter by distance)
+results = collection.query(
+    query_embeddings=[query_embedding],
+    n_results=10,
+    include=["documents", "distances"],
+)
+
+# Only keep results above a similarity threshold
+SIMILARITY_THRESHOLD = 0.7
+relevant = [
+    (doc, 1 - dist)
+    for doc, dist in zip(results["documents"][0], results["distances"][0])
+    if (1 - dist) >= SIMILARITY_THRESHOLD
+]
+
+print(f"Found {len(relevant)} results above {SIMILARITY_THRESHOLD} similarity")
+for doc, sim in relevant:
+    print(f"  [{sim:.3f}] {doc[:80]}...")
+`} language="python" filename="filtered_queries.py" />
+
+The combination of **vector similarity** (semantic matching) and **metadata filtering** (exact matching on structured fields) is what makes vector stores practical for real applications. Without filtering, a query about "agent memory" might return results about "human memory in psychology" from a different part of your knowledge base.
+
+## Chunking Strategy: The Hidden Lever
+
+Before you can embed documents, you must split them into chunks. This step is easy to overlook but has an outsized impact on retrieval quality. Chunk too large and the embedding becomes a blurry average of many topics. Chunk too small and you lose context that the reader needs to understand the passage.
+
+**Fixed-size chunking** splits text into chunks of N tokens with an overlap of M tokens. Simple and predictable, but it can split sentences or paragraphs mid-thought.
+
+**Recursive character splitting** tries to split on natural boundaries (paragraphs, then sentences, then words) while staying within a size limit. This produces more coherent chunks.
+
+**Semantic chunking** uses the embedding model itself to detect topic boundaries -- it embeds sliding windows of text and splits where the similarity between consecutive windows drops sharply. More expensive but produces the most coherent chunks.
+
+For most applications, **recursive character splitting with 500-1000 token chunks and 50-100 token overlap** is a strong starting point. The overlap ensures that information at chunk boundaries is not lost. You can tune from there based on retrieval quality.
+
+## Putting It Together: Architecture
+
+Here is how embeddings and vector stores fit into the full RAG architecture of an agent system.
+
+<MermaidDiagram chart={`graph TD
+    subgraph OfflinePipeline["Offline: Knowledge Ingestion"]
+        DOCS["Document<br/>Sources"] --> SPLIT["Chunker<br/>──────────<br/>Recursive split<br/>~500 tokens"]
+        SPLIT --> EMBED["Embedding<br/>Model<br/>──────────<br/>Voyage 3"]
+        EMBED --> STORE["Vector Store<br/>──────────<br/>ChromaDB /<br/>Pinecone"]
+    end
+    subgraph OnlinePipeline["Online: Agent Query"]
+        USER["User<br/>Question"] --> AGENT["Agent<br/>──────────<br/>Decides to<br/>search"]
+        AGENT -->|"search query"| QEMBED["Embedding<br/>Model"]
+        QEMBED -->|"query vector"| SEARCH["Vector<br/>Search<br/>──────────<br/>Top-K + filter"]
+        STORE -->|"indexed vectors"| SEARCH
+        SEARCH -->|"relevant chunks"| CONTEXT["Context<br/>Assembly"]
+        CONTEXT -->|"query + chunks"| LLM["LLM<br/>──────────<br/>Generate<br/>answer"]
+        LLM --> RESPONSE["Grounded<br/>Response"]
+    end
+    style OfflinePipeline fill:#ebf8ff,stroke:#3182ce,stroke-width:2px
+    style OnlinePipeline fill:#f0fff4,stroke:#38a169,stroke-width:2px
+    style DOCS fill:#e2e8f0,stroke:#4a5568
+    style SPLIT fill:#bee3f8,stroke:#3182ce
+    style EMBED fill:#bee3f8,stroke:#3182ce
+    style STORE fill:#bee3f8,stroke:#3182ce
+    style USER fill:#c6f6d5,stroke:#38a169
+    style AGENT fill:#c6f6d5,stroke:#38a169
+    style QEMBED fill:#c6f6d5,stroke:#38a169
+    style SEARCH fill:#fefcbf,stroke:#d69e2e
+    style CONTEXT fill:#c6f6d5,stroke:#38a169
+    style LLM fill:#c6f6d5,stroke:#38a169
+    style RESPONSE fill:#c6f6d5,stroke:#38a169
+`} />
+
+Each component is independently tunable:
+- **Chunker** -- adjust chunk size and overlap to balance specificity vs. context
+- **Embedding model** -- choose based on quality, dimension, and cost
+- **Vector store** -- choose based on scale, infrastructure, and operational requirements
+- **Search** -- tune top-K, similarity threshold, and metadata filters
+- **Context assembly** -- decide how many chunks to include and how to format them for the LLM
+
+## Summary
+
+Embeddings and vector stores are the retrieval engine that powers semantic search in RAG systems. Getting them right directly determines whether your agent retrieves the right information or hallucinates because it found irrelevant context.
+
+- **Embeddings** convert text into dense numerical vectors where semantic similarity corresponds to geometric proximity -- similar meanings produce nearby vectors
+- **Cosine similarity** is the default distance metric for text embeddings, measuring directional alignment rather than magnitude
+- **HNSW** is the default indexing algorithm for most applications, offering excellent recall with fast query times at the cost of higher memory usage
+- **IVF** trades recall for lower memory usage by partitioning vectors into clusters and searching only the nearest clusters
+- **Embedding dimensions** of 768-1536 hit the practical sweet spot -- large enough for nuanced semantics, small enough for efficient search
+- **ChromaDB** is the best starting point for prototypes and small-scale applications; **Pinecone** or **Weaviate** for production at scale; **pgvector** for teams already invested in PostgreSQL
+- Always use the **same embedding model** for indexing and querying -- mixing models produces meaningless similarity scores
+- **Metadata filtering** narrows search to relevant subsets before vector similarity runs, dramatically improving precision
+- **Chunking strategy** has an outsized impact on retrieval quality -- start with recursive splitting at 500-1000 tokens with overlap, then tune based on results
+
+In the next lesson, you will learn **Advanced RAG Patterns** -- hybrid search that combines keyword and semantic retrieval, reranking models that refine initial results, query decomposition for complex questions, and agentic RAG where the agent decides *how* to search, not just *what* to search for.

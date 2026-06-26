@@ -1,0 +1,71 @@
+{
+  "id": 4,
+  "title": "Agent Architectures",
+  "description": "Core architectural patterns from ReAct to workflow agents and how to choose between them",
+  "color": "#b794f4",
+  "lessons": [
+    {
+      "slug": "01-architecture-landscape",
+      "title": "The Architecture Landscape",
+      "description": "Why architecture matters and a taxonomy of agent design patterns",
+      "estimatedMinutes": 10,
+      "diagramTypes": ["architecture", "comparison"],
+      "hasCode": false,
+      "hasQuiz": true
+    },
+    {
+      "slug": "02-react-pattern",
+      "title": "ReAct: Reasoning + Acting",
+      "description": "The ReAct loop — interleaving thought, action, and observation",
+      "estimatedMinutes": 12,
+      "diagramTypes": ["flowchart", "sequence"],
+      "hasCode": true,
+      "hasQuiz": true
+    },
+    {
+      "slug": "03-plan-and-execute",
+      "title": "Plan-and-Execute Agents",
+      "description": "Planning upfront, then executing step-by-step with dynamic replanning",
+      "estimatedMinutes": 12,
+      "diagramTypes": ["flowchart", "sequence"],
+      "hasCode": true,
+      "hasQuiz": true
+    },
+    {
+      "slug": "04-self-reflection",
+      "title": "Self-Reflection and Critique",
+      "description": "Agents that evaluate their own output and self-correct before responding",
+      "estimatedMinutes": 12,
+      "diagramTypes": ["flowchart", "sequence"],
+      "hasCode": true,
+      "hasQuiz": true
+    },
+    {
+      "slug": "05-routing-and-handoffs",
+      "title": "Routing and Handoffs",
+      "description": "Classifying inputs and delegating to specialized sub-agents or workflows",
+      "estimatedMinutes": 10,
+      "diagramTypes": ["architecture", "flowchart"],
+      "hasCode": true,
+      "hasQuiz": true
+    },
+    {
+      "slug": "06-workflow-agents",
+      "title": "Workflow and State Machine Agents",
+      "description": "Deterministic control flow with LLM-powered decision nodes",
+      "estimatedMinutes": 12,
+      "diagramTypes": ["state", "flowchart"],
+      "hasCode": true,
+      "hasQuiz": true
+    },
+    {
+      "slug": "07-choosing-architectures",
+      "title": "Choosing the Right Architecture",
+      "description": "Decision framework: matching agent patterns to problem characteristics",
+      "estimatedMinutes": 10,
+      "diagramTypes": ["flowchart", "comparison"],
+      "hasCode": false,
+      "hasQuiz": true
+    }
+  ]
+}

@@ -1,0 +1,353 @@
+---
+title: "Structured Outputs"
+quiz:
+  - question: "Why are structured outputs critical for LLM-based agents?"
+    options:
+      - "They make responses shorter and cheaper"
+      - "They allow downstream code to reliably parse and act on the model's decisions"
+      - "They improve the model's internal reasoning accuracy"
+      - "They eliminate the need for system prompts"
+    correctIndex: 1
+  - question: "What is the main advantage of constrained decoding (e.g., tool_use with an input_schema) over prompt-based JSON?"
+    options:
+      - "It runs faster because the model generates fewer tokens"
+      - "It removes the need for any prompt engineering"
+      - "It works without defining a schema in advance"
+      - "It guarantees the output conforms to a schema, eliminating parse failures"
+    correctIndex: 3
+  - question: "Which failure mode is MOST likely when using prompt-based JSON without schema enforcement?"
+    options:
+      - "The model produces valid JSON but with hallucinated or missing fields"
+      - "The model refuses to generate any output"
+      - "The model generates binary data instead of text"
+      - "The API returns an authentication error"
+    correctIndex: 0
+  - question: "In the Anthropic tool_use API, where does the structured output schema get defined?"
+    options:
+      - "In the system prompt as a natural language description"
+      - "In a separate configuration file uploaded to the model"
+      - "In the input_schema field of a tool definition passed to the API"
+      - "In the user message as a JSON example"
+    correctIndex: 2
+---
+
+## Overview
+
+In the previous two lessons, we explored how to craft effective prompts for agents and how chain-of-thought reasoning helps models break down complex problems. But there is a critical question we have not yet addressed: **how does the rest of your system understand what the model decided to do?**
+
+When a human reads an LLM response, they can interpret nuance, ignore formatting inconsistencies, and extract meaning from loosely structured text. Software cannot. An agent's orchestration code needs to parse the model's output, extract specific fields, and route execution accordingly. If the model returns `"I think we should search the database for the user's order"` instead of `{"tool": "search_orders", "query": "user order #1234"}`, your code has nothing actionable to work with.
+
+**Structured outputs** are techniques that constrain an LLM to produce machine-parseable responses -- valid JSON, typed function calls, or schema-conforming objects -- instead of free-form natural language. They are the bridge between the model's reasoning (which happens in natural language) and your application's execution logic (which requires precise, predictable data structures).
+
+This lesson traces the evolution of structured output techniques from fragile prompt hacks to robust, schema-enforced generation, and explains why mastering them is essential before we move into tool use and function calling in Module 3.
+
+## Why Agents Need Structured Outputs
+
+Consider what happens at each step of the agent loop. The model observes its environment, reasons about what to do, and then must **communicate a decision** back to the orchestrator. That decision might be:
+
+- Which tool to call and with what arguments
+- A classification label (e.g., "escalate", "resolve", "ask for clarification")
+- A data extraction result (e.g., parsed entities from a document)
+- A routing decision (e.g., which sub-agent should handle this request)
+
+Every one of these requires the output to be **predictable in structure**. The orchestrator cannot run `if response == "I'd like to search the database"` -- it needs `response.tool_name == "search_db"`. This is the fundamental tension: LLMs are trained to produce natural language, but agents need them to produce structured data.
+
+<MermaidDiagram chart={`graph LR
+    subgraph Unstructured["Unstructured Output Path"]
+        A1["Prompt"] --> B1["LLM"]
+        B1 --> C1["Free-form text"]
+        C1 --> D1["Regex / string parsing"]
+        D1 --> E1["Fragile extraction"]
+        E1 -.->|"Parse failure"| F1["Error / retry"]
+    end
+    subgraph Structured["Structured Output Path"]
+        A2["Prompt + Schema"] --> B2["LLM"]
+        B2 --> C2["Schema-conforming JSON"]
+        C2 --> D2["Direct deserialization"]
+        D2 --> E2["Validated object"]
+    end
+    style Unstructured fill:#fff5f5,stroke:#fc8181
+    style Structured fill:#f0fff4,stroke:#68d391
+`} />
+
+The diagram above captures the core trade-off. The unstructured path is simple to set up but brittle in production -- any deviation in the model's output format causes a parse failure. The structured path requires more upfront schema definition but delivers reliable, type-safe outputs that your orchestration code can depend on.
+
+## The Evolution of Structured Output Techniques
+
+Structured output techniques have evolved through four generations, each addressing the failures of the previous approach. Understanding this progression helps you choose the right technique for your use case and appreciate why modern approaches like constrained decoding exist.
+
+### Generation 1: Prompt-Based JSON
+
+The earliest approach was simply asking the model to output JSON in the prompt. This is the most accessible technique -- it requires no special API features -- but it is also the most fragile.
+
+<CodeBlock code={`import anthropic
+import json
+
+client = anthropic.Anthropic()
+
+def extract_order_info_naive(user_message: str) -> dict:
+    """Attempt to extract order info by prompting for JSON.
+    This approach is fragile -- the model may not comply."""
+
+    response = client.messages.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=512,
+        messages=[
+            {
+                "role": "user",
+                "content": f"""Extract the order information from the following message.
+Return ONLY valid JSON with these fields:
+- order_id (string)
+- customer_name (string)
+- issue_type (string: "refund", "exchange", "complaint", or "inquiry")
+- priority (string: "low", "medium", or "high")
+
+Message: {user_message}
+
+JSON:"""
+            }
+        ]
+    )
+
+    raw_text = response.content[0].text
+
+    # This is where things break in production
+    try:
+        result = json.loads(raw_text)
+    except json.JSONDecodeError:
+        # Common failures:
+        # - Model wraps JSON in markdown: \`\`\`json ... \`\`\`
+        # - Model adds explanatory text before or after the JSON
+        # - Model produces trailing commas or single quotes
+        # - Model omits closing braces on long outputs
+
+        # Attempt to extract JSON from markdown code blocks
+        import re
+        json_match = re.search(r'\`\`\`(?:json)?\s*(.*?)\s*\`\`\`', raw_text, re.DOTALL)
+        if json_match:
+            result = json.loads(json_match.group(1))
+        else:
+            raise ValueError(f"Could not parse model output as JSON: {raw_text[:200]}")
+
+    # Even if parsing succeeds, the schema may be wrong
+    required_fields = {"order_id", "customer_name", "issue_type", "priority"}
+    missing = required_fields - set(result.keys())
+    if missing:
+        raise ValueError(f"Missing required fields: {missing}")
+
+    return result
+
+# Usage
+try:
+    info = extract_order_info_naive(
+        "Hi, I'm John Smith, order #ORD-7891. I want a refund ASAP."
+    )
+    print(info)
+    # Might work: {"order_id": "ORD-7891", "customer_name": "John Smith",
+    #              "issue_type": "refund", "priority": "high"}
+    # Might fail: model adds commentary, uses wrong field names, etc.
+except (json.JSONDecodeError, ValueError) as e:
+    print(f"Parse failed: {e}")
+`} language="python" filename="naive_json_extraction.py" />
+
+This approach has several well-known failure modes:
+
+- **Markdown wrapping** -- the model surrounds JSON in ` ```json ``` ` code blocks
+- **Preamble text** -- the model says "Here is the JSON:" before the actual output
+- **Schema drift** -- the model invents field names (`orderNumber` instead of `order_id`) or adds unexpected fields
+- **Missing required fields** -- the model omits fields it could not confidently extract, rather than using a null value
+- **Truncation** -- for complex objects, the JSON gets cut off at the token limit, leaving invalid syntax
+
+Despite these issues, prompt-based JSON is still useful for quick prototyping and situations where you control the model and prompt tightly. But it should not be your production strategy for agent systems.
+
+### Generation 2: JSON Mode
+
+Several LLM providers introduced **JSON mode** -- an API-level flag that constrains the model to produce syntactically valid JSON. This eliminates the markdown wrapping and preamble problems, but it does not enforce a specific schema.
+
+With JSON mode, you are guaranteed that the output parses as valid JSON. However, the *shape* of that JSON is still up to the model. You might get `{"id": "ORD-7891"}` instead of `{"order_id": "ORD-7891"}`, or the model might nest fields differently than expected. JSON mode solves the syntax problem but not the schema problem.
+
+> **Key distinction:** JSON mode guarantees syntactic validity (the output is parseable JSON). Schema enforcement guarantees semantic validity (the output has the right fields, types, and constraints). For agents, you need both.
+
+### Generation 3: Tool Use and Function Calling
+
+The real breakthrough for agent systems came with **tool use** (also called **function calling**). Instead of asking the model to produce arbitrary JSON, you define **tools** with explicit input schemas. The model then generates **structured tool calls** that conform to those schemas.
+
+This is the approach we previewed in Module 1 when we discussed LLM capabilities. Tool use was originally designed to let models invoke external functions, but it has a powerful secondary use: **you can define a "tool" purely as an output schema**, with no intention of calling an external function. The model produces structured data that matches your schema, and you use it however you need.
+
+<CodeBlock code={`import anthropic
+
+client = anthropic.Anthropic()
+
+def extract_order_info_structured(user_message: str) -> dict:
+    """Extract order info using tool_use as a structured output mechanism.
+    The 'tool' is never called -- we just use it to get schema-conforming output."""
+
+    # Define the output schema as a tool
+    tools = [
+        {
+            "name": "record_order_info",
+            "description": (
+                "Record the extracted order information. Call this tool with "
+                "the customer's order details extracted from their message."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "order_id": {
+                        "type": "string",
+                        "description": "The order ID (e.g., ORD-7891)"
+                    },
+                    "customer_name": {
+                        "type": "string",
+                        "description": "Full name of the customer"
+                    },
+                    "issue_type": {
+                        "type": "string",
+                        "enum": ["refund", "exchange", "complaint", "inquiry"],
+                        "description": "The category of the customer's issue"
+                    },
+                    "priority": {
+                        "type": "string",
+                        "enum": ["low", "medium", "high"],
+                        "description": "Urgency level based on the customer's tone and request"
+                    },
+                    "summary": {
+                        "type": "string",
+                        "description": "One-sentence summary of the issue"
+                    }
+                },
+                "required": ["order_id", "customer_name", "issue_type", "priority", "summary"]
+            }
+        }
+    ]
+
+    response = client.messages.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=1024,
+        tools=tools,
+        tool_choice={"type": "tool", "name": "record_order_info"},
+        messages=[
+            {
+                "role": "user",
+                "content": f"Extract the order information from this message: {user_message}"
+            }
+        ]
+    )
+
+    # The response is guaranteed to contain a tool_use block
+    # with inputs matching our schema
+    for block in response.content:
+        if block.type == "tool_use":
+            return block.input
+
+    raise RuntimeError("No tool_use block in response")
+
+# Usage -- no try/except for JSON parsing needed
+info = extract_order_info_structured(
+    "Hi, I'm John Smith, order #ORD-7891. I want a refund ASAP."
+)
+print(info)
+# {"order_id": "ORD-7891", "customer_name": "John Smith",
+#  "issue_type": "refund", "priority": "high",
+#  "summary": "Customer requesting refund for order ORD-7891"}
+`} language="python" filename="structured_tool_use_extraction.py" />
+
+Notice the key differences from the naive approach:
+
+- **No JSON parsing code** -- the API returns a Python dictionary directly via `block.input`
+- **No regex fallbacks** -- the output is guaranteed to be valid JSON conforming to the schema
+- **Enum constraints** -- `issue_type` can only be one of the four specified values; the model cannot hallucinate a fifth category
+- **Required fields** -- all five fields are guaranteed to be present
+- **`tool_choice`** -- by setting `tool_choice` to force a specific tool, we ensure the model produces structured output rather than a free-form text response
+
+The `tool_choice` parameter is particularly important. Without it, the model might decide to respond with text instead of a tool call. Setting `{"type": "tool", "name": "record_order_info"}` forces the model to use the tool, guaranteeing structured output.
+
+### Generation 4: Constrained Decoding
+
+The most advanced approach is **constrained decoding** -- where the LLM provider modifies the model's token generation process to make it *impossible* to produce output that violates the schema. Rather than hoping the model complies with the schema (prompt-based) or validating after generation (JSON mode), constrained decoding restricts which tokens the model can select at each step.
+
+When you use Anthropic's `tool_use` with an `input_schema`, constrained decoding ensures that:
+
+- String fields produce valid strings
+- Enum fields produce only the specified values
+- Required fields are never omitted
+- Numeric fields produce valid numbers, not strings
+- The overall JSON structure is always syntactically valid
+
+This is the mechanism behind what OpenAI calls "structured outputs" and what Anthropic achieves through tool definitions with strict schemas. The key insight is that **the constraint is applied during generation, not after** -- the model never has the opportunity to produce invalid output.
+
+## Comparing the Approaches
+
+<MermaidDiagram chart={`graph TD
+    subgraph Approaches["Structured Output Evolution"]
+        G1["Gen 1: Prompt-based JSON"] -->|"Still fragile"| G2["Gen 2: JSON Mode"]
+        G2 -->|"Schema not enforced"| G3["Gen 3: Tool / Function Calling"]
+        G3 -->|"Schema enforcement"| G4["Gen 4: Constrained Decoding"]
+    end
+    G1 -.- P1["Syntax: No guarantee"]
+    G1 -.- S1["Schema: No guarantee"]
+    G2 -.- P2["Syntax: Guaranteed"]
+    G2 -.- S2["Schema: No guarantee"]
+    G3 -.- P3["Syntax: Guaranteed"]
+    G3 -.- S3["Schema: Mostly enforced"]
+    G4 -.- P4["Syntax: Guaranteed"]
+    G4 -.- S4["Schema: Fully enforced"]
+    style G1 fill:#fff5f5,stroke:#fc8181
+    style G2 fill:#fffaf0,stroke:#ed8936
+    style G3 fill:#f0fff4,stroke:#68d391
+    style G4 fill:#ebf8ff,stroke:#4299e1
+`} />
+
+| Approach | Syntax Valid | Schema Enforced | Setup Effort | Best For |
+|---|---|---|---|---|
+| Prompt-based JSON | No guarantee | No guarantee | Low | Prototyping, simple cases |
+| JSON Mode | Guaranteed | No guarantee | Low | When any valid JSON is acceptable |
+| Tool / Function Calling | Guaranteed | Mostly enforced | Medium | Agent tool calls, structured extraction |
+| Constrained Decoding | Guaranteed | Fully enforced | Medium | Production agent systems |
+
+For agent systems, **tool use with schema constraints** (Generations 3-4) is the recommended approach. The upfront cost of defining schemas pays for itself immediately through eliminated parse failures and predictable outputs.
+
+## Common Failure Modes and Mitigations
+
+Even with structured output techniques, there are failure modes you should understand and defend against:
+
+**Hallucinated field values.** The schema guarantees the *structure* is correct, but the *values* are still generated by the model. If the user message does not mention an order ID, the model might hallucinate a plausible-looking one (`"ORD-0000"`) rather than indicating the information is missing. **Mitigation:** Make fields optional when the data might not be present, and use nullable types or sentinel values.
+
+**Over-extraction.** The model may read meaning into ambiguous text and confidently fill in fields that a human would leave blank. For example, inferring `"priority": "high"` from a neutral message. **Mitigation:** Include a `confidence` field in your schema, or add instructions in the tool description to express uncertainty.
+
+**Schema complexity limits.** Very deeply nested schemas or schemas with many conditional fields can confuse the model, leading to increased errors even with constrained decoding. **Mitigation:** Keep schemas flat when possible. If you need complex structures, break them into multiple sequential tool calls.
+
+**Enum leakage.** When using enum constraints, the model is forced to choose one of the allowed values. If the real answer does not fit any enum value, the model picks the closest match rather than signaling a mismatch. **Mitigation:** Include an `"other"` value in enums, and pair it with a free-text field for elaboration.
+
+> **Practical tip:** Design your schemas defensively. Assume the model will fill in every field with something plausible, even when the source data is ambiguous. Use optional fields, confidence scores, and `"other"` enum values to give the model a way to express uncertainty within the structured format.
+
+## Designing Effective Output Schemas
+
+Good schema design is as much a prompting skill as writing good system prompts. Here are principles that improve structured output quality:
+
+- **Descriptive field descriptions** -- the model reads the `description` strings in your schema to understand what each field should contain. `"description": "The customer's full name as stated in their message"` works better than `"description": "name"`.
+
+- **Constrain where possible** -- use `enum` for categorical fields, `minimum`/`maximum` for numeric ranges, and `pattern` for string formats. Every constraint you add is a constraint the model cannot violate.
+
+- **Order matters** -- list the most important and easiest-to-extract fields first. The model generates fields sequentially, and earlier fields provide context for later ones.
+
+- **Use the tool description wisely** -- the `description` field on the tool itself is a prompt. Use it to explain *when* and *how* the tool should be called: `"Record the extracted order information. If any field cannot be determined from the message, use null."`.
+
+- **Keep it flat** -- prefer `{"customer_name": "...", "customer_email": "..."}` over `{"customer": {"name": "...", "email": "..."}}` unless nesting genuinely models your domain.
+
+## The Bridge to Function Calling
+
+Everything we have covered in this lesson -- schema definition, constrained generation, tool definitions -- is the foundation for **function calling**, which we will explore in depth in Module 3 (Tool Use & Function Calling). The distinction is subtle but important:
+
+- **Structured output** means getting the model to produce data in a predictable format. The "tool" may be a pure output schema with no actual function behind it.
+- **Function calling** means the model selects and parameterizes a real external function that your code then executes. The structured output *is* the function call.
+
+In practice, the same API mechanism -- tool definitions with input schemas -- serves both purposes. In Module 3, we will shift focus from "how do I get structured data out of the model?" to "how do I let the model invoke real tools, handle results, and chain multiple calls together?" The schema design skills you learned here will transfer directly.
+
+## Summary
+
+**Structured outputs** solve the fundamental interface problem between LLMs (which think in natural language) and agent orchestration code (which requires predictable data structures). We traced the evolution from fragile prompt-based JSON through JSON mode, tool use, and constrained decoding -- each generation eliminating a class of failures from the previous approach.
+
+For production agent systems, use **tool definitions with explicit input schemas** (Anthropic's `tool_use` with `input_schema`). This approach gives you schema-enforced generation with enum constraints, required fields, and typed values -- all without manual JSON parsing or regex extraction. Design your schemas defensively with descriptive field descriptions, constrained types, and optional fields for ambiguous data.
+
+Structured outputs are not just a convenience -- they are a prerequisite for reliable agents. An agent that cannot consistently express its decisions in a parseable format cannot reliably act on the world. With this foundation in place, we are ready to explore **system prompt design** in the next lesson, and then move into the full power of **tool use and function calling** in Module 3.

@@ -1,0 +1,213 @@
+---
+title: "Why Design Patterns Matter"
+quiz:
+  - question: "What is the key difference between an agent architecture and a design pattern?"
+    options:
+      - "Architectures are for production agents; design patterns are for prototypes"
+      - "Architectures describe WHAT the agent does (reasoning strategy); design patterns describe HOW the code is organized (implementation structure)"
+      - "Design patterns replace architectures once a project matures"
+      - "Architectures are language-specific; design patterns are language-agnostic"
+    correctIndex: 1
+  - question: "Why does ad-hoc agent code become problematic as a project grows?"
+    options:
+      - "LLMs cannot process code written without patterns"
+      - "Ad-hoc code always runs slower than pattern-based code"
+      - "Cross-cutting concerns like logging, error handling, and context management get duplicated or forgotten, making the system fragile and hard to change"
+      - "Ad-hoc code cannot use tools or call APIs"
+    correctIndex: 2
+  - question: "Which design pattern ensures that a long-running agent can resume from where it left off after a crash?"
+    options:
+      - "Tool Registry"
+      - "Middleware and Hooks"
+      - "Idempotency and Checkpointing"
+      - "Context Window Management"
+    correctIndex: 2
+  - question: "How do design patterns relate to production readiness (Module 11)?"
+    options:
+      - "They are unrelated -- production concerns are handled by infrastructure alone"
+      - "Design patterns are only useful during development and are removed before deployment"
+      - "Patterns provide the internal structure that production infrastructure depends on -- you cannot monitor what you cannot intercept, or retry what is not idempotent"
+      - "Production agents should avoid design patterns to minimize latency"
+    correctIndex: 2
+---
+
+## Overview
+
+At the end of Module 4, you built a decision framework for choosing agent architectures. You know when to reach for ReAct, Plan-and-Execute, Self-Reflection, Routing, or Workflow patterns. You can pick the right architecture for a given problem.
+
+But here is a question Module 4 did not answer: once you choose an architecture, how do you *build* it cleanly?
+
+If you have been following along with the code exercises, you have probably noticed something. Your ReAct agent works, but adding logging meant sprinkling `print()` statements through three functions. Your Plan-and-Execute agent works, but when you wanted to swap in a different search tool, you had to change code in four places. Your Routing agent works, but adding a new handler required copying boilerplate from an existing one and hoping you did not forget anything.
+
+The architecture was right. The code was messy.
+
+This module introduces **design patterns** for agent systems -- reusable solutions to the recurring implementation problems that every agent builder hits. This first lesson explains why these patterns matter, how they differ from architectures, and previews the six patterns you will learn in the lessons ahead.
+
+## Architectures vs. Design Patterns
+
+These two concepts solve different problems, and confusing them is one of the most common mistakes in agent development.
+
+**Architectures** answer the question: *What does the agent do?* They define the agent's reasoning strategy -- whether it thinks before each action (ReAct), plans upfront (Plan-and-Execute), critiques its own output (Self-Reflection), or follows a fixed graph (Workflow). Architecture is about the *shape* of the agent's cognitive process.
+
+**Design patterns** answer a different question: *How is the code organized?* They define how tools are registered and discovered, how you intercept actions for logging or validation, how context is managed as conversations grow, how failures are handled gracefully, and how long-running tasks survive crashes. Patterns are about the *structure* of the implementation.
+
+Here is the critical relationship: design patterns are **orthogonal** to architectures. A Tool Registry works the same way whether your agent uses ReAct or Plan-and-Execute. Middleware applies equally to a Routing agent and a Workflow agent. Checkpointing is valuable regardless of which reasoning strategy you chose. Patterns are **cross-cutting concerns** that apply across all architectures.
+
+<MermaidDiagram chart={`graph TD
+    subgraph Architectures["Architectures (WHAT the agent does)"]
+        RE["ReAct"]
+        PE["Plan-and-Execute"]
+        RF["Self-Reflection"]
+        RO["Routing"]
+        WF["Workflow"]
+    end
+    subgraph Patterns["Design Patterns (HOW the code is organized)"]
+        TR["Tool Registry"]
+        MW["Middleware & Hooks"]
+        CM["Context Management"]
+        FC["Fallback Chains"]
+        IC["Idempotency & Checkpointing"]
+    end
+    TR -.->|applies to| RE
+    TR -.->|applies to| PE
+    TR -.->|applies to| RF
+    TR -.->|applies to| RO
+    TR -.->|applies to| WF
+    MW -.->|applies to| RE
+    MW -.->|applies to| PE
+    MW -.->|applies to| RF
+    MW -.->|applies to| RO
+    MW -.->|applies to| WF
+    style Architectures fill:#f5f0ff,stroke:#b794f4
+    style Patterns fill:#ebf8ff,stroke:#3182ce
+    style RE fill:#fefcbf,stroke:#d69e2e
+    style PE fill:#fefcbf,stroke:#d69e2e
+    style RF fill:#e6fffa,stroke:#38b2ac
+    style RO fill:#ebf8ff,stroke:#63b3ed
+    style WF fill:#e2e8f0,stroke:#718096
+    style TR fill:#fed7d7,stroke:#fc8181
+    style MW fill:#fed7d7,stroke:#fc8181
+    style CM fill:#fed7d7,stroke:#fc8181
+    style FC fill:#fed7d7,stroke:#fc8181
+    style IC fill:#fed7d7,stroke:#fc8181
+`} />
+
+Notice how the dotted lines cross from every pattern to every architecture. This is what "cross-cutting" means -- patterns are not tied to any single architecture. They are the engineering layer that sits beneath all of them.
+
+## The Ad-Hoc Problem
+
+To understand why patterns matter, let's look at what happens without them. Consider a ReAct agent that searches the web and answers questions. In an ad-hoc implementation, a single function does everything:
+
+- It defines the tools inline as dictionaries
+- It calls the LLM and parses the response
+- It logs actions with `print()` statements scattered through the code
+- It handles errors with bare `try/except` blocks
+- It manages context by truncating the message list when it gets too long
+- It has no retry logic -- if a tool call fails, the whole agent fails
+
+This works for a prototype. Now imagine what happens when requirements change:
+
+**"Add a new tool."** You write another dictionary in the same function, add another branch to the tool-dispatch `if/elif` chain, and hope the tool's schema matches what the LLM expects.
+
+**"Add logging to every tool call."** You find every place a tool is invoked and add logging before and after each one. You miss one. A bug in production goes unlogged.
+
+**"Switch to a cheaper model for simple queries."** You add a conditional at the top of the function. Now the function handles model selection, tool dispatch, context management, and error handling. It is 200 lines long and growing.
+
+**"Make it resumable after crashes."** You realize there is no good place to save state. The entire agent's progress lives in local variables inside one function. You would have to restructure everything.
+
+Each change is individually small. But they compound. After six months of requirements, the ad-hoc agent is a tangled monolith where every concern is interleaved with every other concern. Adding a feature means understanding the whole thing. Fixing a bug means risking a regression somewhere else. Onboarding a new team member means a week of reading spaghetti code.
+
+## What Patterns Give You
+
+Design patterns solve this by giving each concern its own home. Compare the ad-hoc approach with a pattern-based approach to the same problems:
+
+<MermaidDiagram chart={`graph LR
+    subgraph AdHoc["Ad-Hoc Agent"]
+        direction TB
+        AH1["Tools defined inline"]
+        AH2["Logging scattered everywhere"]
+        AH3["Context truncated manually"]
+        AH4["Errors caught inconsistently"]
+        AH5["No crash recovery"]
+        AH6["All in one function"]
+        AH1 --- AH2 --- AH3 --- AH4 --- AH5 --- AH6
+    end
+    subgraph PatternBased["Pattern-Based Agent"]
+        direction TB
+        PB1["Tool Registry<br/>manages all tools"]
+        PB2["Middleware pipeline<br/>handles logging"]
+        PB3["Context Manager<br/>optimizes window"]
+        PB4["Fallback Chain<br/>handles errors"]
+        PB5["Checkpoint Store<br/>enables recovery"]
+        PB6["Each concern isolated"]
+        PB1 --- PB2 --- PB3 --- PB4 --- PB5 --- PB6
+    end
+    AdHoc -->|"refactor"| PatternBased
+    style AdHoc fill:#fed7d7,stroke:#fc8181
+    style PatternBased fill:#f0fff4,stroke:#68d391
+    style AH1 fill:#fff5f5,stroke:#feb2b2
+    style AH2 fill:#fff5f5,stroke:#feb2b2
+    style AH3 fill:#fff5f5,stroke:#feb2b2
+    style AH4 fill:#fff5f5,stroke:#feb2b2
+    style AH5 fill:#fff5f5,stroke:#feb2b2
+    style AH6 fill:#fff5f5,stroke:#feb2b2
+    style PB1 fill:#f0fff4,stroke:#9ae6b4
+    style PB2 fill:#f0fff4,stroke:#9ae6b4
+    style PB3 fill:#f0fff4,stroke:#9ae6b4
+    style PB4 fill:#f0fff4,stroke:#9ae6b4
+    style PB5 fill:#f0fff4,stroke:#9ae6b4
+    style PB6 fill:#f0fff4,stroke:#9ae6b4
+`} />
+
+With patterns, each of the changes we described earlier becomes straightforward:
+
+**"Add a new tool."** Register it with the Tool Registry. The agent discovers it automatically. No dispatch code to modify.
+
+**"Add logging to every tool call."** Add a logging middleware to the middleware pipeline. It intercepts every tool call in one place. Nothing else changes.
+
+**"Switch to a cheaper model for simple queries."** Add a fallback chain that tries the cheap model first and escalates to the expensive one when the cheap model fails or declines.
+
+**"Make it resumable after crashes."** The checkpoint store already saves state after each step. On restart, the agent loads the last checkpoint and continues.
+
+The difference is not just aesthetics. It is the difference between a system that can evolve and one that cannot.
+
+## The Six Patterns
+
+This module covers six design patterns. Each one addresses a specific cross-cutting concern that arises in every non-trivial agent system.
+
+**Pattern 1: Tool Registry** -- A centralized system for registering, discovering, and selecting tools at runtime. Instead of hardcoding tool definitions in your agent, you register them once and the agent discovers what is available dynamically. This makes it trivial to add, remove, or swap tools without changing agent code. It also enables runtime tool selection -- giving the agent only the tools relevant to the current task.
+
+**Pattern 2: Middleware and Hooks** -- An interception layer that wraps agent actions. Every tool call, every LLM invocation, and every state transition passes through a pipeline of middleware functions. Each middleware can log, validate, rate-limit, transform, or block the action. This is how you add observability, enforce safety guardrails, and implement access control -- without touching the core agent logic.
+
+**Pattern 3: Context Window Management** -- Strategies for keeping relevant information in the LLM's context as conversations grow beyond the token limit. This includes summarization, sliding windows, priority-based retention, and semantic chunking. Without this pattern, long-running agents either crash when they exceed the context limit or lose critical information when you naively truncate the conversation history.
+
+**Pattern 4: Fallback and Escalation Chains** -- A cascading strategy for handling failures gracefully. When a tool call fails, try a different tool. When a cheap model cannot handle a query, escalate to a more capable one. When no automated approach works, escalate to a human. This pattern ensures that agents degrade gracefully instead of failing catastrophically.
+
+**Pattern 5: Idempotency and Checkpointing** -- Making agent actions safe to retry and agent runs safe to resume. Idempotency means that executing the same action twice produces the same result -- critical when network errors or crashes cause retries. Checkpointing means saving the agent's state at key points so it can resume after a failure instead of starting over.
+
+**Pattern 6: Putting It All Together** -- In the lab, you will refactor a naive agent using the patterns from this module, seeing how they compose into a clean, maintainable system.
+
+## Why Now: The Bridge to Production
+
+You might wonder: if these patterns are so useful, why did we not teach them in Module 1? The answer is pedagogical. You needed to feel the pain first.
+
+In Modules 1 through 3, you built agents that worked. In Module 4, you learned to choose the right architecture. But if you tried to build anything beyond a demo, you hit the ad-hoc wall. Tools were hardcoded. Logging was inconsistent. Error handling was an afterthought. Context windows overflowed. The architecture was correct, but the engineering was not there yet.
+
+Design patterns are the engineering layer that turns a correct architecture into a deployable system.
+
+This is also the bridge to Module 11: Production, Deployment, and Safety. When you get to production, you will need monitoring, retries, circuit breakers, and graceful degradation. Those production concerns *depend* on the patterns you learn here. You cannot monitor tool calls if you have no middleware to intercept them. You cannot retry failed actions if those actions are not idempotent. You cannot resume after a crash if you have no checkpoints. You cannot enforce guardrails if there is no interception layer to enforce them through.
+
+> **Key insight:** Design patterns are not optional polish you add before deployment. They are the structural foundation that production infrastructure plugs into. Build them in from the start, and going to production is a matter of configuration. Skip them, and going to production means rewriting your agent from scratch.
+
+## Summary
+
+Agent architectures and design patterns solve different problems. Architectures define *what* the agent does -- its reasoning strategy. Design patterns define *how* the code is organized -- the implementation structure that makes the system maintainable, observable, and resilient.
+
+- **Architectures** (ReAct, Plan-and-Execute, Reflection, Routing, Workflow) describe the agent's cognitive strategy
+- **Design patterns** (Tool Registry, Middleware, Context Management, Fallback Chains, Checkpointing) describe the code's organizational structure
+- Patterns are **cross-cutting concerns** -- they apply to every architecture, not just one
+- Ad-hoc agent code works for prototypes but collapses under real-world requirements like logging, tool changes, error handling, and crash recovery
+- Pattern-based agents give each concern its own home, making the system **modular**, **testable**, and **evolvable**
+- These patterns are the **structural foundation** that production infrastructure depends on -- monitoring needs middleware, retries need idempotency, and recovery needs checkpoints
+
+In the next lesson, we start with the first and most fundamental pattern: **The Tool Registry**. You will learn how to replace hardcoded tool definitions with a dynamic registry that makes adding, removing, and selecting tools a one-line operation.

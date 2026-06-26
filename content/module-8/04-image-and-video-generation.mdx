@@ -1,0 +1,620 @@
+---
+title: "Image and Video Generation"
+quiz:
+  - question: "Why do agents benefit from iterative image generation rather than single-shot generation?"
+    options:
+      - "Single-shot generation is not supported by any API"
+      - "Iterative refinement lets the agent evaluate output, adjust prompts, and converge on the user's intent -- just like a human designer would revise a draft"
+      - "Iterative generation is always faster than single-shot"
+      - "LLMs cannot call image generation APIs without multiple attempts"
+    correctIndex: 1
+  - question: "What is the role of a prompt engineering step before calling an image generation API?"
+    options:
+      - "It compresses the user's request to save API tokens"
+      - "It converts the user's natural language into a structured, detail-rich prompt optimized for the generation model's strengths and style vocabulary"
+      - "It translates the prompt into a different language"
+      - "It is only needed for video generation, not image generation"
+    correctIndex: 1
+  - question: "Which of the following is a key difference between image generation and video generation from an agent's perspective?"
+    options:
+      - "Image generation requires tool use but video generation does not"
+      - "Video generation APIs are always synchronous while image generation is asynchronous"
+      - "Video generation is typically asynchronous with longer processing times, requiring the agent to poll for completion rather than receiving immediate results"
+      - "There is no meaningful difference -- agents treat them identically"
+    correctIndex: 2
+  - question: "When an agent wraps DALL-E as a tool, what should the tool's return value include besides the image URL?"
+    options:
+      - "The revised prompt that DALL-E actually used, so the agent can reason about what was generated and refine if needed"
+      - "Only the raw bytes of the image"
+      - "The model's internal weights for the generated image"
+      - "A full training log of the diffusion process"
+    correctIndex: 0
+---
+
+## Overview
+
+In the previous lessons, we gave agents the ability to **see** (vision-language models) and **hear** (audio and speech). Those are perception capabilities -- the agent consumes existing media and extracts meaning. Now we flip the direction. In this lesson, agents become **creators** of visual content: generating images from text descriptions, producing short videos from prompts, and iteratively refining their output until it matches the user's intent.
+
+This is not just about calling an API and returning a picture. The interesting part is what happens *around* the API call. An agent that generates images must engineer effective prompts for the generation model, evaluate whether the output matches the request, handle failures and content policy rejections, and decide when to refine versus when to deliver. These are the same tool-use patterns you learned in Module 3, applied to a new and uniquely challenging domain -- one where the "correctness" of output is subjective and often requires multiple iterations.
+
+## The Image Generation Pipeline
+
+When a user asks an agent to create an image, the request passes through several stages before a final image is delivered. Understanding this pipeline is essential for building agents that produce high-quality visual content reliably.
+
+<MermaidDiagram chart={`flowchart TD
+    A["User Request<br/>'Create a logo for my coffee shop'"] --> B["Prompt Engineering<br/>Expand and optimize for<br/>the generation model"]
+    B --> C["Generation API Call<br/>DALL-E 3 / Stable Diffusion /<br/>Midjourney"]
+    C --> D{"Content Policy<br/>Check"}
+    D -->|Rejected| E["Revise Prompt<br/>Remove flagged elements"]
+    E --> B
+    D -->|Passed| F["Post-Processing<br/>Resize, format, metadata"]
+    F --> G{"User Satisfied?"}
+    G -->|No| H["Collect Feedback<br/>What to change?"]
+    H --> B
+    G -->|Yes| I["Deliver Final Image"]
+    style A fill:#ebf8ff,stroke:#3182ce
+    style B fill:#fefcbf,stroke:#d69e2e
+    style C fill:#e6fffa,stroke:#38b2ac
+    style D fill:#fff5f5,stroke:#fc8181
+    style F fill:#f0fff4,stroke:#68d391
+    style I fill:#f0fff4,stroke:#68d391
+`} />
+
+The key insight is that this is a **loop**, not a linear process. The agent does not fire-and-forget. It engineers the prompt, calls the API, checks the result, and refines -- potentially multiple times. This iterative refinement is what separates a useful generation agent from a thin API wrapper.
+
+## Prompt Engineering for Image Generation
+
+The gap between what a user says and what an image generation model needs is often enormous. A user might say "a cozy coffee shop." A generation model produces its best work when given something like "a warm interior photograph of a small artisan coffee shop, morning light streaming through large windows, exposed brick walls, wooden tables with steaming ceramic cups, shallow depth of field, shot on 35mm film." Bridging this gap is the agent's first and most important job.
+
+**Prompt expansion** is the technique where the agent's LLM takes a brief user request and transforms it into a rich, detailed prompt optimized for the generation model. This is where the agent's language understanding becomes a genuine advantage -- it can ask clarifying questions, infer style preferences from context, and translate abstract concepts ("make it feel professional") into concrete visual descriptors.
+
+The expanded prompt typically includes several dimensions:
+
+- **Subject** -- what is depicted (objects, people, scenes)
+- **Style** -- artistic approach (photorealistic, watercolor, digital art, isometric)
+- **Composition** -- framing, perspective, layout
+- **Lighting** -- natural, studio, dramatic, soft
+- **Color palette** -- warm tones, monochromatic, vibrant
+- **Technical parameters** -- aspect ratio, resolution, camera lens simulation
+
+<CodeBlock code={`import anthropic
+import openai
+
+# The agent's LLM expands a brief user request into a rich generation prompt
+def expand_prompt_for_generation(user_request: str, style_preferences: dict) -> str:
+    """Use the agent's LLM to craft an optimized image generation prompt."""
+    client = anthropic.Anthropic()
+
+    style_context = ""
+    if style_preferences:
+        style_context = f"""
+The user has these style preferences:
+- Art style: {style_preferences.get('style', 'photorealistic')}
+- Color mood: {style_preferences.get('mood', 'neutral')}
+- Aspect ratio: {style_preferences.get('aspect_ratio', '1:1')}
+"""
+
+    message = client.messages.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=300,
+        messages=[{
+            "role": "user",
+            "content": f"""Transform this image request into a detailed prompt
+optimized for DALL-E 3. Include subject, style, composition, lighting,
+and color details. Output ONLY the prompt text, nothing else.
+{style_context}
+User request: {user_request}"""
+        }]
+    )
+    return message.content[0].text
+
+
+# Example: expand a simple request
+expanded = expand_prompt_for_generation(
+    user_request="a logo for my coffee shop called 'Morning Brew'",
+    style_preferences={"style": "minimalist", "mood": "warm", "aspect_ratio": "1:1"}
+)
+print(f"Expanded prompt:\\n{expanded}")
+# Output might be: "A minimalist logo design for 'Morning Brew' coffee shop,
+# featuring a stylized steaming coffee cup silhouette, warm amber and cream
+# color palette, clean sans-serif typography, centered composition on a
+# white background, flat design style with subtle gradient accents..."
+`} language="python" filename="prompt_expansion.py" />
+
+This prompt expansion step is the bridge between human intent and model capability. Without it, users must learn the generation model's "language" themselves -- knowing that "35mm film" produces a certain look, or that "isometric" triggers a specific perspective. The agent absorbs that expertise.
+
+## Integrating DALL-E 3
+
+**DALL-E 3** is OpenAI's image generation model, accessible through their API. From an agent's perspective, it is a tool -- you send a text prompt and receive an image. But DALL-E 3 has a distinctive feature that makes it especially interesting for agents: it **rewrites your prompt internally** to improve generation quality, and it returns the revised prompt alongside the image. This means the agent can see what DALL-E actually generated from, which is invaluable for iterative refinement.
+
+<CodeBlock code={`import openai
+import base64
+from pathlib import Path
+
+
+def generate_image_dalle(
+    prompt: str,
+    size: str = "1024x1024",
+    quality: str = "standard",
+    style: str = "vivid",
+) -> dict:
+    """Generate an image using DALL-E 3 and return the result."""
+    client = openai.OpenAI()
+
+    try:
+        response = client.images.generate(
+            model="dall-e-3",
+            prompt=prompt,
+            size=size,        # 1024x1024, 1792x1024, or 1024x1792
+            quality=quality,  # "standard" or "hd"
+            style=style,      # "vivid" or "natural"
+            n=1,
+            response_format="url",
+        )
+
+        image_data = response.data[0]
+        return {
+            "success": True,
+            "image_url": image_data.url,
+            "revised_prompt": image_data.revised_prompt,
+            "original_prompt": prompt,
+        }
+
+    except openai.BadRequestError as e:
+        # Content policy rejection
+        return {
+            "success": False,
+            "error": "content_policy",
+            "message": str(e),
+            "original_prompt": prompt,
+        }
+    except openai.RateLimitError:
+        return {
+            "success": False,
+            "error": "rate_limit",
+            "message": "Rate limit exceeded. Try again shortly.",
+            "original_prompt": prompt,
+        }
+
+
+# Generate an image
+result = generate_image_dalle(
+    prompt="A minimalist logo for 'Morning Brew' coffee shop, warm amber tones",
+    size="1024x1024",
+    quality="hd",
+    style="natural",
+)
+
+if result["success"]:
+    print(f"Image URL: {result['image_url']}")
+    print(f"DALL-E revised prompt: {result['revised_prompt']}")
+else:
+    print(f"Failed: {result['error']} -- {result['message']}")
+`} language="python" filename="dalle_integration.py" />
+
+Notice the error handling. Content policy rejections are not bugs -- they are expected events that the agent must handle gracefully. The agent should analyze *why* the prompt was rejected, revise it to remove problematic elements, and retry. This is exactly the kind of error recovery we discussed in Module 3's lesson on error handling and retries.
+
+## Integrating Stable Diffusion
+
+**Stable Diffusion** offers a different approach to image generation. While DALL-E is a hosted API, Stable Diffusion can run locally or through hosted endpoints like Stability AI's API. For agents, the key difference is control: Stable Diffusion exposes parameters like **guidance scale**, **number of inference steps**, and **negative prompts** that give the agent fine-grained control over generation.
+
+**Negative prompts** are a concept unique to diffusion models -- they tell the model what to *avoid* in the generated image. An agent can use negative prompts strategically: "blurry, low quality, distorted faces, extra fingers" is a common baseline that improves output quality.
+
+<CodeBlock code={`import requests
+import base64
+
+
+def generate_image_stability(
+    prompt: str,
+    negative_prompt: str = "blurry, low quality, distorted, artifacts",
+    width: int = 1024,
+    height: int = 1024,
+    cfg_scale: float = 7.0,
+    steps: int = 30,
+    style_preset: str | None = None,
+) -> dict:
+    """Generate an image using Stability AI's API."""
+    api_key = "your-stability-api-key"
+
+    body = {
+        "text_prompts": [
+            {"text": prompt, "weight": 1.0},
+            {"text": negative_prompt, "weight": -1.0},
+        ],
+        "cfg_scale": cfg_scale,
+        "width": width,
+        "height": height,
+        "steps": steps,
+        "samples": 1,
+    }
+
+    if style_preset:
+        body["style_preset"] = style_preset  # e.g., "photographic", "anime"
+
+    response = requests.post(
+        "https://api.stability.ai/v1/generation/stable-diffusion-xl-1024-v1-0/text-to-image",
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}",
+        },
+        json=body,
+    )
+
+    if response.status_code == 200:
+        data = response.json()
+        image_b64 = data["artifacts"][0]["base64"]
+        return {
+            "success": True,
+            "image_base64": image_b64,
+            "finish_reason": data["artifacts"][0]["finishReason"],
+            "prompt": prompt,
+        }
+    else:
+        return {
+            "success": False,
+            "error": response.status_code,
+            "message": response.text,
+        }
+
+
+# Generate with specific style control
+result = generate_image_stability(
+    prompt="Cozy artisan coffee shop interior, morning sunlight, warm tones",
+    negative_prompt="dark, gloomy, empty, modern, sterile, cold lighting",
+    style_preset="photographic",
+    cfg_scale=8.0,  # Higher = stricter prompt adherence
+    steps=40,       # More steps = higher quality, slower generation
+)
+`} language="python" filename="stability_integration.py" />
+
+The choice between DALL-E and Stable Diffusion depends on the agent's requirements. DALL-E excels at understanding complex prompts and produces consistently high-quality results with minimal parameter tuning. Stable Diffusion offers more control, supports negative prompts, and can be self-hosted for cost savings or data privacy. A sophisticated agent might offer both as tools and choose based on the task.
+
+## Video Generation
+
+**Video generation** extends the same principles to moving images, but introduces a critical difference for agents: time. Image generation typically completes in seconds. Video generation can take minutes. This means the agent must handle **asynchronous workflows** -- submitting a generation job, polling for completion, and managing the wait gracefully.
+
+Models like **Runway Gen-3**, **Pika**, and **Luma Dream Machine** offer text-to-video and image-to-video capabilities. From an agent's perspective, these are asynchronous tools: you submit a request and receive a job ID, then poll until the result is ready.
+
+<CodeBlock code={`import time
+import requests
+
+
+def generate_video_async(
+    prompt: str,
+    duration: int = 4,
+    aspect_ratio: str = "16:9",
+    source_image_url: str | None = None,
+) -> dict:
+    """Submit a video generation job (generic async pattern).
+
+    This demonstrates the async polling pattern common across video
+    generation APIs like Runway, Pika, and Luma.
+    """
+    api_key = "your-api-key"
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+
+    # Step 1: Submit the generation job
+    payload = {
+        "prompt": prompt,
+        "duration": duration,
+        "aspect_ratio": aspect_ratio,
+    }
+    if source_image_url:
+        payload["image_url"] = source_image_url  # image-to-video mode
+
+    submit_response = requests.post(
+        "https://api.example.com/v1/video/generate",
+        headers=headers,
+        json=payload,
+    )
+
+    if submit_response.status_code != 202:
+        return {"success": False, "error": submit_response.text}
+
+    job_id = submit_response.json()["job_id"]
+
+    # Step 2: Poll for completion (with timeout and backoff)
+    max_wait = 300  # 5 minutes
+    poll_interval = 5
+    elapsed = 0
+
+    while elapsed < max_wait:
+        status_response = requests.get(
+            f"https://api.example.com/v1/video/status/{job_id}",
+            headers=headers,
+        )
+        status = status_response.json()
+
+        if status["state"] == "completed":
+            return {
+                "success": True,
+                "video_url": status["output_url"],
+                "duration": status["duration"],
+                "prompt": prompt,
+            }
+        elif status["state"] == "failed":
+            return {
+                "success": False,
+                "error": status.get("error", "Generation failed"),
+                "prompt": prompt,
+            }
+
+        time.sleep(poll_interval)
+        elapsed += poll_interval
+        poll_interval = min(poll_interval * 1.5, 30)  # Exponential backoff
+
+    return {"success": False, "error": "timeout", "job_id": job_id}
+
+
+# Submit a video generation job
+result = generate_video_async(
+    prompt="A steaming cup of coffee on a wooden table, morning light slowly "
+           "shifting across the scene, shallow depth of field, cinematic",
+    duration=4,
+    aspect_ratio="16:9",
+)
+
+if result["success"]:
+    print(f"Video ready: {result['video_url']}")
+else:
+    print(f"Generation failed: {result['error']}")
+`} language="python" filename="video_generation.py" />
+
+The exponential backoff pattern is important. Video generation APIs have rate limits and generation times vary. An agent that polls every second wastes resources and risks hitting rate limits. The backoff pattern starts with short intervals and gradually increases, balancing responsiveness with efficiency.
+
+## Agent-Controlled Generation Architecture
+
+The real power emerges when you combine all of these pieces into a coherent agent architecture. The agent sits at the center, orchestrating prompt engineering, model selection, generation, evaluation, and iterative refinement -- all driven by the LLM's reasoning capabilities.
+
+<MermaidDiagram chart={`graph TD
+    subgraph Agent["Generation Agent"]
+        LLM["LLM Controller<br/>Claude / GPT-4"]
+        PE["Prompt Engineer<br/>Expand & optimize"]
+        EVAL["Output Evaluator<br/>Does it match intent?"]
+    end
+
+    subgraph ImageTools["Image Generation Tools"]
+        DALLE["DALL-E 3<br/>High-quality, prompt rewriting"]
+        SD["Stable Diffusion<br/>Fine control, negative prompts"]
+    end
+
+    subgraph VideoTools["Video Generation Tools"]
+        RUNWAY["Runway Gen-3<br/>Text & image to video"]
+        PIKA["Pika<br/>Short-form video"]
+    end
+
+    subgraph PostProcess["Post-Processing"]
+        RESIZE["Resize & Format"]
+        META["Add Metadata"]
+        STORE["Store & Deliver"]
+    end
+
+    LLM --> PE
+    PE --> DALLE
+    PE --> SD
+    PE --> RUNWAY
+    PE --> PIKA
+    DALLE --> EVAL
+    SD --> EVAL
+    RUNWAY --> EVAL
+    PIKA --> EVAL
+    EVAL -->|"Needs refinement"| PE
+    EVAL -->|"Approved"| RESIZE
+    RESIZE --> META
+    META --> STORE
+
+    style Agent fill:#ebf8ff,stroke:#3182ce
+    style ImageTools fill:#fefcbf,stroke:#d69e2e
+    style VideoTools fill:#fff5f5,stroke:#fc8181
+    style PostProcess fill:#f0fff4,stroke:#68d391
+`} />
+
+The architecture follows a pattern you should recognize from Module 3: the LLM controller decides *which* tool to use and *what* arguments to pass, then interprets the result to decide the next action. The generation APIs are tools in the same sense that a web search or database query is a tool -- the agent calls them, evaluates the response, and decides whether to act further.
+
+## Building the Complete Generation Agent
+
+Let's bring everything together into a complete agent that uses image generation as a tool. This agent accepts natural language requests, engineers prompts, generates images, and iteratively refines them based on feedback.
+
+<CodeBlock code={`import anthropic
+import json
+
+# Define image generation as a tool for the agent
+GENERATION_TOOLS = [
+    {
+        "name": "generate_image",
+        "description": (
+            "Generate an image from a text prompt using DALL-E 3. "
+            "The prompt should be detailed and descriptive. Returns the "
+            "image URL and the revised prompt that DALL-E actually used. "
+            "Use this for creating illustrations, logos, photos, art, "
+            "diagrams, and any other visual content."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "prompt": {
+                    "type": "string",
+                    "description": "Detailed image generation prompt with subject, style, composition, and lighting",
+                },
+                "size": {
+                    "type": "string",
+                    "enum": ["1024x1024", "1792x1024", "1024x1792"],
+                    "description": "Image dimensions. Use 1792x1024 for landscape, 1024x1792 for portrait",
+                },
+                "quality": {
+                    "type": "string",
+                    "enum": ["standard", "hd"],
+                    "description": "Use 'hd' for detailed images where quality matters",
+                },
+                "style": {
+                    "type": "string",
+                    "enum": ["vivid", "natural"],
+                    "description": "'vivid' for dramatic/artistic, 'natural' for realistic/subdued",
+                },
+            },
+            "required": ["prompt"],
+        },
+    },
+    {
+        "name": "generate_video",
+        "description": (
+            "Generate a short video (4-10 seconds) from a text prompt. "
+            "This is an async operation -- returns a job ID that must be "
+            "polled for completion. Use for animations, product demos, "
+            "and cinematic clips."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "prompt": {
+                    "type": "string",
+                    "description": "Detailed video generation prompt including motion and scene description",
+                },
+                "duration": {
+                    "type": "integer",
+                    "enum": [4, 6, 8, 10],
+                    "description": "Video duration in seconds",
+                },
+            },
+            "required": ["prompt"],
+        },
+    },
+]
+
+SYSTEM_PROMPT = """You are a creative visual content agent. Your mission is
+to help users generate images and videos that match their vision.
+
+## Workflow
+1. When the user describes what they want, ask clarifying questions if
+   the request is vague (style? mood? aspect ratio? use case?).
+2. Engineer a detailed prompt optimized for the generation model.
+   Include subject, style, composition, lighting, and color details.
+3. Call the appropriate generation tool.
+4. Present the result and ask if the user wants refinements.
+5. If refining, adjust the prompt based on feedback and regenerate.
+
+## Guidelines
+- Always engineer the prompt before generating -- never pass the user's
+  raw text directly to the generation tool.
+- For logos and brand assets, use 'natural' style and 'hd' quality.
+- For artistic illustrations, use 'vivid' style.
+- If generation fails due to content policy, explain what was flagged
+  and suggest an alternative approach.
+- Limit refinement to 3 iterations. After that, suggest the user
+  rephrase their core request.
+"""
+
+
+def handle_tool_call(tool_name: str, tool_input: dict) -> str:
+    """Route tool calls to the appropriate generation function."""
+    if tool_name == "generate_image":
+        result = generate_image_dalle(
+            prompt=tool_input["prompt"],
+            size=tool_input.get("size", "1024x1024"),
+            quality=tool_input.get("quality", "standard"),
+            style=tool_input.get("style", "vivid"),
+        )
+        return json.dumps(result)
+    elif tool_name == "generate_video":
+        result = generate_video_async(
+            prompt=tool_input["prompt"],
+            duration=tool_input.get("duration", 4),
+        )
+        return json.dumps(result)
+    return json.dumps({"error": f"Unknown tool: {tool_name}"})
+
+
+def run_generation_agent(user_message: str):
+    """Run the generation agent loop with tool use."""
+    client = anthropic.Anthropic()
+    messages = [{"role": "user", "content": user_message}]
+
+    while True:
+        response = client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=1024,
+            system=SYSTEM_PROMPT,
+            tools=GENERATION_TOOLS,
+            messages=messages,
+        )
+
+        # If the model wants to use a tool, execute it and continue
+        if response.stop_reason == "tool_use":
+            # Collect all tool calls from this response
+            assistant_content = response.content
+            tool_results = []
+
+            for block in assistant_content:
+                if block.type == "tool_use":
+                    print(f"Calling tool: {block.name}")
+                    result = handle_tool_call(block.name, block.input)
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": result,
+                    })
+
+            messages.append({"role": "assistant", "content": assistant_content})
+            messages.append({"role": "user", "content": tool_results})
+            continue
+
+        # Model is done -- extract and return the text response
+        final_text = ""
+        for block in response.content:
+            if hasattr(block, "text"):
+                final_text += block.text
+
+        print(f"Agent: {final_text}")
+        return final_text
+
+
+# Run the agent
+run_generation_agent(
+    "Create a professional hero image for a SaaS landing page. "
+    "The product is a project management tool. Make it modern and clean."
+)
+`} language="python" filename="generation_agent.py" />
+
+This agent follows the same tool-use loop pattern from Module 3: the LLM reasons about the request, decides to call a tool, receives the result, and either refines or delivers. The generation-specific intelligence lives in the system prompt -- the prompt engineering workflow, the style guidelines, and the refinement limits.
+
+## Iterative Refinement in Practice
+
+The most important capability of a generation agent is **iterative refinement** -- the ability to evaluate its own output and improve it. In practice, this means the agent generates an image, describes what it sees (using the vision capabilities from Lesson 02), compares that description to the user's intent, and decides whether refinement is needed.
+
+This creates a feedback loop:
+
+1. **Generate** -- call the generation API with an engineered prompt
+2. **Evaluate** -- use vision-language capabilities to describe the result
+3. **Compare** -- check whether the description matches the user's intent
+4. **Refine** -- adjust the prompt to fix discrepancies and regenerate
+
+This loop is what transforms a simple API wrapper into a genuine creative assistant. The agent does not just generate -- it *evaluates and iterates*, converging on the user's vision through successive refinement.
+
+> **Key takeaway:** The generation API is the tool. The agent's value is everything *around* it -- understanding the user's intent, engineering effective prompts, evaluating results, and iteratively refining until the output matches the vision.
+
+## Choosing the Right Model
+
+Different generation models have different strengths. An agent that has access to multiple models can choose strategically based on the task:
+
+| Capability | DALL-E 3 | Stable Diffusion XL | Runway Gen-3 | Pika |
+|---|---|---|---|---|
+| Input | Text | Text + negative prompt | Text / image | Text / image |
+| Output | Image | Image | Video (4-16s) | Video (3-8s) |
+| Latency | 5-15 seconds | 5-30 seconds | 1-5 minutes | 1-3 minutes |
+| Control | Moderate | High (cfg, steps) | Moderate | Moderate |
+| Best for | General images | Style-specific work | Cinematic video | Quick animations |
+| API style | Synchronous | Synchronous | Async (polling) | Async (polling) |
+
+An intelligent agent uses this knowledge to route requests. A logo request goes to DALL-E with `quality: "hd"` and `style: "natural"`. A photorealistic product shot might go to Stable Diffusion with a high `cfg_scale` and specific negative prompts. A product demo clip goes to Runway. The routing decision is itself an act of reasoning -- exactly what LLM-based agents excel at.
+
+## Summary
+
+Image and video generation transforms agents from consumers of visual content into **creators** of it. The key principles are:
+
+- **Prompt engineering** is the critical first step -- the agent's LLM bridges the gap between casual user requests and the detailed, structured prompts that generation models need.
+- **DALL-E 3** offers high-quality generation with automatic prompt rewriting, making it the simplest integration path. **Stable Diffusion** provides fine-grained control through parameters like guidance scale, inference steps, and negative prompts.
+- **Video generation** introduces asynchronous workflows -- the agent must submit jobs, poll for completion with exponential backoff, and handle longer processing times gracefully.
+- **Iterative refinement** is what separates a generation agent from an API wrapper. The agent evaluates output, compares it to the user's intent, and refines the prompt -- creating a feedback loop that converges on the desired result.
+- Generation APIs are **tools** in the same sense we explored in Module 3 -- the agent calls them through function calling, interprets the results, and decides the next action based on its reasoning.
+
+In the next lesson, we will explore **cross-modal reasoning** -- agents that combine multiple modalities in a single task, such as seeing a chart, generating a description, and producing an audio narration of the findings.

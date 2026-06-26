@@ -1,0 +1,71 @@
+{
+  "id": 12,
+  "title": "Advanced Patterns & Real-World Applications",
+  "description": "Cutting-edge agent patterns, specialized domains, and a capstone project",
+  "color": "#63b3ed",
+  "lessons": [
+    {
+      "slug": "01-computer-use-agents",
+      "title": "Computer Use Agents",
+      "description": "Agents that see and interact with GUIs: browser automation and desktop control",
+      "estimatedMinutes": 12,
+      "diagramTypes": ["architecture", "sequence"],
+      "hasCode": true,
+      "hasQuiz": true
+    },
+    {
+      "slug": "02-coding-agents",
+      "title": "Coding Agents",
+      "description": "Agents that write, test, and debug code: from autocomplete to autonomous SWE",
+      "estimatedMinutes": 12,
+      "diagramTypes": ["architecture", "flowchart"],
+      "hasCode": true,
+      "hasQuiz": true
+    },
+    {
+      "slug": "03-research-agents",
+      "title": "Research and Deep Dive Agents",
+      "description": "Agents that search, synthesize, and fact-check across multiple sources",
+      "estimatedMinutes": 12,
+      "diagramTypes": ["flowchart", "architecture"],
+      "hasCode": true,
+      "hasQuiz": true
+    },
+    {
+      "slug": "04-domain-specific-agents",
+      "title": "Domain-Specific Agents",
+      "description": "Patterns for customer support, data analysis, DevOps, and enterprise workflows",
+      "estimatedMinutes": 12,
+      "diagramTypes": ["architecture", "comparison"],
+      "hasCode": true,
+      "hasQuiz": true
+    },
+    {
+      "slug": "05-agent-alignment-and-ethics",
+      "title": "Agent Alignment and Ethics",
+      "description": "Alignment challenges unique to agents: autonomy, deception, and value specification",
+      "estimatedMinutes": 10,
+      "diagramTypes": ["flowchart"],
+      "hasCode": false,
+      "hasQuiz": true
+    },
+    {
+      "slug": "06-frontier-research",
+      "title": "Frontier Research",
+      "description": "World models, self-improvement, open-ended agents, and where the field is heading",
+      "estimatedMinutes": 10,
+      "diagramTypes": ["architecture"],
+      "hasCode": false,
+      "hasQuiz": true
+    },
+    {
+      "slug": "07-capstone-project",
+      "title": "Capstone Project",
+      "description": "Design and build a production-grade multi-agent system for a real-world use case",
+      "estimatedMinutes": 15,
+      "diagramTypes": ["architecture"],
+      "hasCode": true,
+      "hasQuiz": false
+    }
+  ]
+}

@@ -1,0 +1,410 @@
+---
+title: "Retrieval-Augmented Generation (RAG)"
+quiz:
+  - question: "What is the primary advantage of RAG over fine-tuning for adding domain knowledge to an LLM?"
+    options:
+      - "RAG produces faster inference times because the model is smaller"
+      - "RAG allows you to update knowledge without retraining the model, and the sources can be cited"
+      - "RAG eliminates the need for prompt engineering entirely"
+      - "RAG works without any external infrastructure or data storage"
+    correctIndex: 1
+  - question: "In a RAG pipeline, what is the purpose of the chunking step during document indexing?"
+    options:
+      - "To compress documents so they use fewer tokens in the LLM's context window"
+      - "To encrypt documents before storing them in the vector database"
+      - "To split large documents into smaller pieces that can be embedded and retrieved individually"
+      - "To remove duplicate content across multiple documents"
+    correctIndex: 2
+  - question: "Why does chunk overlap matter when splitting documents?"
+    options:
+      - "It preserves context that would otherwise be lost at chunk boundaries, so retrieval does not miss information split across two chunks"
+      - "It increases the total number of chunks, which improves search speed"
+      - "It reduces the memory required by the vector store"
+      - "It ensures every chunk is exactly the same size"
+    correctIndex: 0
+  - question: "What role does the system prompt play in a RAG pipeline when passing retrieved context to the LLM?"
+    options:
+      - "It stores the retrieved documents permanently in the model's weights"
+      - "It replaces the vector search step by telling the model which documents to retrieve"
+      - "It instructs the model to answer based on the provided context and to say when it does not know"
+      - "It converts the retrieved text into embeddings before the model processes it"
+    correctIndex: 2
+---
+
+## Overview
+
+In the previous lessons, you explored why agents need memory, how conversation memory works within a session, and how long-term memory persists knowledge across sessions. But there is a harder problem lurking: how does an agent answer questions about knowledge it was never trained on? Your company's internal documentation, a product catalog updated yesterday, a research paper published last week -- none of this exists in the LLM's weights.
+
+One approach is fine-tuning: retraining the model on your data. But fine-tuning is expensive, slow to update, and does not tell you *where* an answer came from. **Retrieval-Augmented Generation** -- universally known as **RAG** -- takes a different approach. Instead of baking knowledge into the model, you retrieve the relevant documents at query time, inject them into the prompt, and let the model generate a grounded response. The knowledge stays outside the model, in a searchable store you control.
+
+RAG is arguably the most important pattern in applied LLM engineering. It is how chatbots answer questions about private data, how coding assistants reference your codebase, and how enterprise agents stay current without retraining. This lesson covers the core architecture, the indexing pipeline that prepares your data, and a working Python implementation you can extend.
+
+## Why RAG Beats Fine-Tuning for Knowledge
+
+Before diving into architecture, it is worth understanding *why* RAG has become the default approach for knowledge-grounded agents. The comparison with fine-tuning is instructive.
+
+**Fine-tuning** modifies the model's weights so it "learns" new information. This works for teaching a model a new *style* or *behavior* (like generating SQL or following a specific format), but it is a poor fit for factual knowledge:
+
+- **Staleness** -- the model's knowledge is frozen at training time. When your documents change, you must retrain.
+- **Cost** -- fine-tuning requires GPU hours and careful dataset preparation for every update.
+- **No citations** -- the model cannot tell you which document it drew an answer from.
+- **Hallucination** -- fine-tuned models still hallucinate. They just hallucinate more confidently about your domain.
+
+**RAG** sidesteps all of these problems:
+
+- **Always current** -- update the document store and the next query sees the new data.
+- **Cheap to update** -- adding a document means embedding it and inserting a few vectors, not retraining a model.
+- **Citable** -- every retrieved chunk carries metadata (source file, page number, URL), so the agent can show its sources.
+- **Grounded** -- the model generates from actual text in its context window, not from vague weight patterns.
+
+> RAG and fine-tuning are not mutually exclusive. Fine-tuning teaches the model *how* to behave; RAG teaches it *what* to know. Some production systems use both. But if you need an agent to answer questions from a document corpus, RAG is where you start.
+
+## The RAG Architecture
+
+A RAG system has two pipelines: an **indexing pipeline** that runs offline to prepare your documents, and a **query pipeline** that runs in real time when a user asks a question.
+
+<MermaidDiagram chart={`graph LR
+    subgraph QueryPipeline["Query Pipeline (real-time)"]
+        Q[User Query] --> E1[Embed Query]
+        E1 --> S[Vector Search]
+        S --> R[Retrieved Chunks]
+        R --> A[Assemble Prompt]
+        A --> LLM[LLM Generate]
+        LLM --> Resp[Grounded Response]
+    end
+    subgraph IndexPipeline["Indexing Pipeline (offline)"]
+        D[Documents] --> C[Chunk]
+        C --> E2[Embed Chunks]
+        E2 --> VS[(Vector Store)]
+    end
+    VS -.->|"similarity search"| S
+    style QueryPipeline fill:#ebf8ff,stroke:#3182ce
+    style IndexPipeline fill:#f0fff4,stroke:#38a169
+    style VS fill:#fefcbf,stroke:#d69e2e
+`} />
+
+The two pipelines connect through the **vector store**: the indexing pipeline writes to it, and the query pipeline reads from it. Let's trace each one.
+
+## The Indexing Pipeline
+
+Before your agent can retrieve anything, you need to prepare your documents. The indexing pipeline transforms raw documents into searchable vectors.
+
+<MermaidDiagram chart={`flowchart TD
+    A[Raw Documents] --> B[Load & Parse]
+    B --> C["Split into Chunks<br/>(500-1000 tokens each)"]
+    C --> D[Generate Embeddings]
+    D --> E[(Store in Vector DB)]
+    B -->|"Extract"| F[Metadata<br/>source, page, date]
+    F --> E
+    C -->|"chunk_id, position"| E
+    style A fill:#fed7d7,stroke:#e53e3e
+    style C fill:#fefcbf,stroke:#d69e2e
+    style D fill:#bee3f8,stroke:#3182ce
+    style E fill:#c6f6d5,stroke:#38a169
+`} />
+
+Each step solves a specific problem:
+
+**Loading and parsing** converts your raw files -- PDFs, web pages, Markdown, databases -- into plain text. Different source types need different parsers, but the output is always text.
+
+**Chunking** splits that text into smaller pieces. This is the step where most RAG implementations succeed or fail, because the chunk size and strategy directly affect retrieval quality. We will cover chunking strategies in detail below.
+
+**Embedding** converts each text chunk into a dense vector (a list of floating-point numbers) that captures its semantic meaning. Texts with similar meanings produce vectors that are close together in the embedding space. We will cover embeddings in depth in lesson 05.
+
+**Storing** writes each vector alongside the original chunk text and its metadata (source file, page number, creation date) into a **vector database** -- a database optimized for similarity search across high-dimensional vectors.
+
+## Chunking Strategies
+
+**Chunking** is the process of splitting documents into retrieval units. The chunk size is a critical trade-off:
+
+- **Too large** -- chunks exceed the context window budget, retrieval returns irrelevant padding alongside the useful text, and the model struggles to find the answer within walls of text.
+- **Too small** -- chunks lose context. A single sentence about "it" makes no sense without the paragraph that defines what "it" refers to.
+
+The three most common strategies are:
+
+**Fixed-size chunking** splits text every N characters or tokens, with an overlap window. Simple and predictable, but it cuts through sentences, paragraphs, and sections without regard for meaning.
+
+**Recursive character splitting** tries to split on natural boundaries -- double newlines (paragraphs) first, then single newlines, then sentences, then characters -- falling back to smaller separators only when a chunk would exceed the target size. This preserves structure better than fixed-size splitting.
+
+**Semantic chunking** uses the document's own structure -- headings, sections, code blocks, list items -- to define chunk boundaries. This produces the most meaningful chunks but requires format-specific logic.
+
+Most production systems start with recursive character splitting at 500-1000 tokens with 10-20% overlap. **Chunk overlap** means each chunk shares some text with its neighbors, ensuring that information at the boundary of two chunks is not lost during retrieval.
+
+## The Query Pipeline
+
+When a user asks a question, the query pipeline runs in real time:
+
+1. **Embed the query** -- the user's question is converted to a vector using the same embedding model that indexed the documents.
+2. **Search** -- the vector store finds the K most similar chunk vectors (typically K = 3 to 10). This is called **approximate nearest neighbor** search.
+3. **Assemble the prompt** -- the retrieved chunks are injected into the LLM's prompt, usually in the system message or as a clearly delineated context block.
+4. **Generate** -- the LLM reads the context and produces an answer grounded in the retrieved documents.
+
+This is where RAG connects to the prompt engineering techniques from Module 2. The way you structure the context injection prompt -- how you frame the retrieved chunks, what instructions you give the model, whether you tell it to cite sources or admit uncertainty -- directly determines the quality of the final response.
+
+## Building a Naive RAG Pipeline
+
+Let's build a working RAG pipeline from scratch. This implementation uses a simple in-memory vector store so you can understand every step without external dependencies. In production, you would replace this with a dedicated vector database like ChromaDB, Pinecone, or pgvector.
+
+First, the document loading and chunking layer:
+
+<CodeBlock code={`import anthropic
+import json
+import math
+
+# --- Document Loading and Chunking ---
+
+def load_documents(sources: list[dict]) -> list[dict]:
+    """Load documents from a list of source definitions.
+    Each source has 'text' and 'metadata' (source name, etc.)."""
+    documents = []
+    for source in sources:
+        documents.append({
+            "text": source["text"],
+            "metadata": source.get("metadata", {})
+        })
+    return documents
+
+
+def chunk_text(
+    text: str,
+    chunk_size: int = 500,
+    chunk_overlap: int = 50,
+    metadata: dict = None,
+) -> list[dict]:
+    """Split text into overlapping chunks using simple character splitting.
+    Returns a list of chunks with text, metadata, and position info."""
+    chunks = []
+    start = 0
+    chunk_index = 0
+
+    while start < len(text):
+        end = start + chunk_size
+
+        # Try to break at a paragraph or sentence boundary
+        if end < len(text):
+            # Look for paragraph break first
+            newline_pos = text.rfind("\\n\\n", start, end)
+            if newline_pos > start + chunk_size // 2:
+                end = newline_pos
+            else:
+                # Fall back to sentence boundary
+                period_pos = text.rfind(". ", start, end)
+                if period_pos > start + chunk_size // 2:
+                    end = period_pos + 1
+
+        chunk_text_content = text[start:end].strip()
+        if chunk_text_content:
+            chunks.append({
+                "text": chunk_text_content,
+                "metadata": {
+                    **(metadata or {}),
+                    "chunk_index": chunk_index,
+                    "start_char": start,
+                },
+            })
+            chunk_index += 1
+
+        # Move forward, minus the overlap
+        start = end - chunk_overlap if end < len(text) else len(text)
+
+    return chunks
+`} language="python" filename="rag_pipeline.py" />
+
+Next, the embedding and retrieval layer. We use a simple cosine similarity approach with a mock embedding function. In production, you would call an embedding API (like Voyage AI or OpenAI's embeddings endpoint):
+
+<CodeBlock code={`# --- Embedding and Vector Store ---
+
+def get_embeddings(texts: list[str]) -> list[list[float]]:
+    """Generate embeddings for a list of texts.
+    In production, call an embedding API (e.g., Voyage AI, OpenAI).
+    This mock uses simple word-frequency vectors for demonstration."""
+    # Build vocabulary from all texts
+    vocab = set()
+    for text in texts:
+        vocab.update(text.lower().split())
+    vocab = sorted(vocab)
+    word_to_idx = {w: i for i, w in enumerate(vocab)}
+
+    # Create simple bag-of-words vectors
+    embeddings = []
+    for text in texts:
+        vec = [0.0] * len(vocab)
+        words = text.lower().split()
+        for word in words:
+            if word in word_to_idx:
+                vec[word_to_idx[word]] += 1.0
+        # Normalize to unit length
+        magnitude = math.sqrt(sum(v * v for v in vec)) or 1.0
+        vec = [v / magnitude for v in vec]
+        embeddings.append(vec)
+    return embeddings
+
+
+def cosine_similarity(a: list[float], b: list[float]) -> float:
+    """Compute cosine similarity between two vectors."""
+    dot = sum(x * y for x, y in zip(a, b))
+    return dot  # Vectors are already normalized
+
+
+class SimpleVectorStore:
+    """In-memory vector store for demonstration.
+    Replace with ChromaDB, Pinecone, or pgvector in production."""
+
+    def __init__(self):
+        self.chunks = []       # Original chunk dicts
+        self.embeddings = []   # Corresponding embedding vectors
+
+    def add(self, chunks: list[dict]):
+        """Index a list of chunks: embed their text and store."""
+        texts = [c["text"] for c in chunks]
+        vectors = get_embeddings(texts)
+        self.chunks.extend(chunks)
+        self.embeddings.extend(vectors)
+        print(f"Indexed {len(chunks)} chunks ({len(self.chunks)} total)")
+
+    def search(self, query: str, top_k: int = 3) -> list[dict]:
+        """Find the top_k most similar chunks to the query."""
+        query_vec = get_embeddings([query])[0]
+        scored = []
+        for i, emb in enumerate(self.embeddings):
+            score = cosine_similarity(query_vec, emb)
+            scored.append((score, i))
+        scored.sort(reverse=True)
+        results = []
+        for score, idx in scored[:top_k]:
+            results.append({
+                "chunk": self.chunks[idx],
+                "score": score,
+            })
+        return results
+`} language="python" filename="rag_pipeline.py" />
+
+Finally, the query pipeline that ties retrieval to generation. Notice how the system prompt structures the context injection -- this connects directly to the prompt engineering patterns from Module 2:
+
+<CodeBlock code={`# --- RAG Query Pipeline ---
+
+def rag_query(query: str, vector_store: SimpleVectorStore, top_k: int = 3) -> str:
+    """Execute a full RAG pipeline: retrieve, augment, generate."""
+    client = anthropic.Anthropic()
+
+    # Step 1: Retrieve relevant chunks
+    results = vector_store.search(query, top_k=top_k)
+
+    # Step 2: Assemble context from retrieved chunks
+    context_blocks = []
+    for i, result in enumerate(results, 1):
+        chunk = result["chunk"]
+        source = chunk["metadata"].get("source", "unknown")
+        context_blocks.append(
+            f"[Source {i}: {source}]\\n{chunk['text']}"
+        )
+    context = "\\n\\n---\\n\\n".join(context_blocks)
+
+    # Step 3: Generate response with context-augmented prompt
+    system_prompt = f"""You are a knowledgeable assistant. Answer the user's question
+based ONLY on the provided context. If the context does not contain
+enough information to answer, say so clearly.
+
+When you use information from the context, reference the source
+(e.g., "According to Source 1...").
+
+<context>
+{context}
+</context>"""
+
+    response = client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=1024,
+        system=system_prompt,
+        messages=[{"role": "user", "content": query}],
+    )
+
+    return response.content[0].text
+
+
+# --- Putting It All Together ---
+
+# Sample documents about a fictional product
+sources = [
+    {
+        "text": (
+            "AcmeDB is a distributed database designed for real-time analytics. "
+            "It supports SQL queries and can handle up to 10 million rows per "
+            "second on a standard cluster. AcmeDB uses columnar storage for "
+            "efficient analytical queries and row-based storage for transactional "
+            "workloads. The query optimizer automatically selects the appropriate "
+            "storage engine based on the query pattern."
+        ),
+        "metadata": {"source": "acmedb-overview.md"},
+    },
+    {
+        "text": (
+            "To install AcmeDB, download the binary for your platform from "
+            "releases.acmedb.io. Run 'acmedb init' to create a new cluster, "
+            "then 'acmedb start' to launch the server. The default port is "
+            "5433. Connect using any PostgreSQL-compatible client. For "
+            "production deployments, configure replication by setting "
+            "replication_factor=3 in acmedb.conf."
+        ),
+        "metadata": {"source": "acmedb-install-guide.md"},
+    },
+    {
+        "text": (
+            "AcmeDB pricing is based on compute units. The free tier includes "
+            "2 compute units and 10GB storage. The Pro plan costs $49/month "
+            "for 8 compute units and 100GB storage. Enterprise plans start at "
+            "$499/month with dedicated support and unlimited storage. All plans "
+            "include automatic backups and point-in-time recovery."
+        ),
+        "metadata": {"source": "acmedb-pricing.md"},
+    },
+]
+
+# Build the index
+documents = load_documents(sources)
+store = SimpleVectorStore()
+for doc in documents:
+    chunks = chunk_text(doc["text"], chunk_size=300, chunk_overlap=30, metadata=doc["metadata"])
+    store.add(chunks)
+
+# Query the RAG pipeline
+answer = rag_query("How do I install AcmeDB?", store)
+print(answer)
+# The model answers using the installation guide chunk, citing Source 2
+`} language="python" filename="rag_pipeline.py" />
+
+This implementation is deliberately simple. A production RAG system would use a real embedding model, a persistent vector database, and more sophisticated chunking. But the *architecture* is identical: chunk, embed, store, retrieve, augment, generate. Everything else is optimization on top of this skeleton.
+
+## How RAG Connects to Prompt Engineering
+
+The "augment" step in RAG is fundamentally a prompt engineering problem. The way you inject retrieved context into the prompt determines whether the model produces a precise, well-sourced answer or a vague paraphrase. Several patterns from Module 2 apply directly:
+
+- **XML tags for structure** -- wrapping context in `<context>` tags (as in the code above) helps the model distinguish between instructions and reference material.
+- **Role framing** -- telling the model "answer based ONLY on the provided context" prevents it from blending retrieved facts with training data.
+- **Uncertainty instructions** -- telling the model to say "I don't know" when the context is insufficient reduces hallucination. Without this instruction, the model will often fabricate plausible-sounding answers.
+- **Citation instructions** -- asking the model to reference sources ("According to Source 2...") makes answers verifiable and builds user trust.
+
+The system prompt in the `rag_query` function above demonstrates all four patterns. Getting this prompt right is often more impactful than tuning the retrieval parameters.
+
+## Common RAG Failure Modes
+
+RAG is powerful but not foolproof. Understanding the common failure modes helps you diagnose problems when your pipeline produces poor answers:
+
+- **Retrieval misses** -- the relevant document exists in the store but the query does not match it. This happens when the query phrasing diverges from the document phrasing. Lesson 06 covers reranking and query expansion to address this.
+- **Context window overload** -- too many chunks or chunks that are too large flood the prompt with noise. The model sees the answer buried in irrelevant text and either misses it or gets confused.
+- **Lost in the middle** -- LLMs pay more attention to information at the beginning and end of the context window than to content in the middle. If your answer is in chunk 5 out of 10, the model may overlook it.
+- **Chunk boundary splits** -- a critical piece of information is split across two chunks and neither chunk alone makes sense. This is why overlap matters.
+- **Stale index** -- documents have been updated but the vector store still contains the old embeddings. Regular re-indexing is essential.
+
+## Summary
+
+**Retrieval-Augmented Generation** is the pattern that lets agents answer questions from knowledge they were never trained on. Instead of modifying the model, you modify the prompt -- retrieving relevant documents and injecting them as context.
+
+The architecture has two pipelines:
+
+- **Indexing** -- load documents, split them into chunks, embed the chunks, and store the vectors
+- **Query** -- embed the user's question, search for similar chunks, assemble a context-augmented prompt, and generate a grounded response
+
+RAG beats fine-tuning for knowledge tasks because it is cheap to update, easy to cite, and always current. The trade-off is that it requires infrastructure (a vector store, an embedding model, a chunking strategy) and careful prompt engineering to get right.
+
+The naive implementation in this lesson works end to end, but production RAG systems need better building blocks. In the next lesson, **Embeddings and Vector Stores**, we will take a deep dive into how embeddings actually work, what makes one embedding model better than another, and how to choose and configure a vector database for your use case. Then in lesson 06, we will revisit the RAG pipeline and layer on advanced techniques like hybrid search, reranking, and query decomposition.

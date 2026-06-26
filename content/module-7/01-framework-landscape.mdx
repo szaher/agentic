@@ -1,0 +1,251 @@
+---
+title: "The Framework Landscape"
+quiz:
+  - question: "A team has built a working agent using raw API calls with custom tool dispatch, a hand-rolled memory store, and bespoke state management. They are now spending 40% of engineering time maintaining this infrastructure instead of improving agent behavior. What does this situation best illustrate?"
+    options:
+      - "The team chose the wrong LLM provider"
+      - "The undifferentiated heavy lifting problem -- frameworks exist to absorb this infrastructure burden so teams can focus on agent logic"
+      - "Raw API agents are always inferior to framework-based agents"
+      - "The team should rewrite their agent in a compiled language for performance"
+    correctIndex: 1
+  - question: "Which layer of the framework spectrum would you choose for an agent that needs a custom multi-step workflow with conditional branching, human-in-the-loop approval, and persistent state across retries?"
+    options:
+      - "Raw API calls -- maximum flexibility for custom workflows"
+      - "An SDK like the OpenAI Agents SDK -- provides the agent loop with light abstractions"
+      - "A graph-based framework like LangGraph -- explicitly models workflows as stateful graphs with conditional edges"
+      - "A platform like Amazon Bedrock Agents -- fully managed, no custom logic needed"
+    correctIndex: 2
+  - question: "A startup is building its first AI feature: a simple chatbot that answers questions about their documentation using RAG. The team has one engineer with limited AI experience. They need to ship in two weeks. Which approach best fits their constraints?"
+    options:
+      - "Build from raw API calls to maintain full control"
+      - "Use LangGraph for its powerful state management"
+      - "Use a high-level framework or platform that bundles RAG, tool use, and hosting to minimize custom code"
+      - "Write a custom orchestrator to future-proof the architecture"
+    correctIndex: 2
+  - question: "Why is understanding how to build agent components from scratch (as you did in Modules 1-6) valuable even when you plan to use a framework?"
+    options:
+      - "Frameworks are always buggy, so you will need to rewrite their internals"
+      - "It impresses hiring managers during technical interviews"
+      - "It allows you to evaluate framework tradeoffs, debug issues that cross abstraction boundaries, and know when a framework's design does not fit your problem"
+      - "It is not valuable -- frameworks completely abstract away the need for low-level understanding"
+    correctIndex: 2
+---
+
+## Overview
+
+In Modules 1 through 6, you built every piece of an agent system from scratch. You wrote agent loops, dispatched tools, managed state, implemented design patterns, and constructed memory systems with conversation buffers, vector stores, and RAG pipelines. You understand the internals because you built the internals.
+
+Now the question changes. Instead of *how does this work?*, the question becomes *should I build this myself?*
+
+The answer, for most production systems, is no. The agent loop you wrote works, but it does not handle retries, rate limits, streaming, token accounting, parallel tool calls, structured logging, or the dozens of other concerns that surface when you move from a prototype to a system that runs in production 24 hours a day. Building all of that yourself is possible -- you proved that in the labs -- but it means spending engineering time on infrastructure that is identical across every agent project, time that could go toward the behavior and domain logic that actually differentiates your agent.
+
+This is where **agent frameworks** enter the picture. A framework absorbs the undifferentiated infrastructure -- the agent loop, tool management, memory integration, state persistence, observability -- and lets you focus on what your agent *does* rather than how it runs. This lesson maps the landscape: what exists, how the options differ, and how to choose.
+
+## Why Frameworks Exist
+
+Every agent you build needs the same foundational components. Regardless of whether your agent is a customer support bot, a code assistant, or a research analyst, it needs an execution loop, a way to call tools, a strategy for managing context, and some form of state tracking. These components are **undifferentiated heavy lifting** -- essential work that does not distinguish your agent from anyone else's.
+
+The pattern is familiar from web development. Every web application needs request routing, authentication, database access, and session management. In the early days of the web, developers built all of this from scratch. Then frameworks like Django, Rails, and Express emerged, absorbing the common infrastructure so developers could focus on their application's unique logic. Agent frameworks are following the same trajectory.
+
+The core value proposition of a framework is a trade: you give up some control over the internals, and in return you get battle-tested implementations of components you would otherwise have to build, test, debug, and maintain yourself. The components a typical agent framework provides include:
+
+- **Agent loop** -- the observe-think-act cycle with proper error handling, retries, and timeout management
+- **Tool management** -- registration, schema validation, dispatch, result parsing, and parallel execution
+- **Memory integration** -- conversation history, summarization, and hooks for long-term storage
+- **State persistence** -- checkpointing, serialization, and recovery so agents can survive restarts
+- **Observability** -- structured logging, tracing, token usage tracking, and debugging tools
+- **Safety and guardrails** -- input/output validation, content filtering, and cost controls
+
+You built simplified versions of all of these in Modules 1 through 6. Frameworks provide production-grade versions with edge cases handled, tests written, and documentation maintained by dedicated teams.
+
+## The Framework Spectrum
+
+Not all frameworks operate at the same level of abstraction. The landscape spans a spectrum from raw API calls at the lowest level to fully managed platforms at the highest, with SDKs, frameworks, and orchestrators filling the space in between. Understanding where each option sits on this spectrum is essential for making an informed choice.
+
+<MermaidDiagram chart={`graph LR
+    subgraph Spectrum["The Framework Spectrum"]
+        direction LR
+        RAW["Raw API Calls<br/>─────────────<br/>httpx, requests<br/>urllib, fetch<br/><br/>Full control<br/>No abstractions<br/>You build everything"]
+        SDK["Provider SDKs<br/>─────────────<br/>OpenAI Agents SDK<br/>Anthropic SDK<br/><br/>Typed clients<br/>Agent loop built-in<br/>Thin abstractions"]
+        FW["Frameworks<br/>─────────────<br/>LangGraph<br/>Haystack<br/>DSPy<br/><br/>Workflow modeling<br/>State management<br/>Composable pipelines"]
+        ORCH["Orchestrators<br/>─────────────<br/>CrewAI<br/>AutoGen<br/><br/>Multi-agent roles<br/>Team coordination<br/>Conversation patterns"]
+        PLAT["Platforms<br/>─────────────<br/>AWS Bedrock Agents<br/>Google Vertex Agents<br/><br/>Fully managed<br/>Hosted infra<br/>Minimal code"]
+    end
+    RAW --> SDK --> FW --> ORCH --> PLAT
+    style RAW fill:#fff5f5,stroke:#fc8181,stroke-width:2px
+    style SDK fill:#fef3c7,stroke:#d97706,stroke-width:2px
+    style FW fill:#f0fff4,stroke:#38a169,stroke-width:2px
+    style ORCH fill:#ebf8ff,stroke:#3182ce,stroke-width:2px
+    style PLAT fill:#e9d8fd,stroke:#805ad5,stroke-width:2px
+    style Spectrum fill:#f7fafc,stroke:#a0aec0,stroke-width:1px
+`} />
+
+As you move from left to right on this spectrum, three things change simultaneously:
+
+**Abstraction increases.** Raw API calls expose every HTTP detail. Platforms hide nearly everything. Each step to the right replaces low-level decisions with opinionated defaults.
+
+**Control decreases.** With raw API calls, you decide exactly how retries work, how tools are dispatched, and how state is stored. With a platform, those decisions are made for you. Frameworks sit in the middle, giving you extension points where you can override defaults.
+
+**Time to first agent decreases.** Building from raw API calls takes weeks. Using a platform, you can have a working agent in hours. But "working" and "doing exactly what you need" are different things, and the gap between them is where framework choice matters most.
+
+## What a Framework Provides
+
+Behind the varying levels of abstraction, frameworks converge on a common architecture. They all provide some version of the same core components, differing in how they expose them and how much control they give you.
+
+<MermaidDiagram chart={`graph TD
+    subgraph Framework["What an Agent Framework Provides"]
+        direction TB
+        subgraph Core["Core Runtime"]
+            LOOP["Agent Loop<br/>Observe → Think → Act<br/>Error handling, retries,<br/>max iterations, timeouts"]
+            TOOLS["Tool Management<br/>Schema generation,<br/>dispatch, validation,<br/>parallel execution"]
+        end
+        subgraph State["State Layer"]
+            MEM["Memory<br/>Conversation history,<br/>summarization hooks,<br/>external store adapters"]
+            PERSIST["Persistence<br/>Checkpoints, snapshots,<br/>crash recovery,<br/>session continuity"]
+        end
+        subgraph Ops["Operations Layer"]
+            OBS["Observability<br/>Tracing, logging,<br/>token tracking,<br/>latency metrics"]
+            GUARD["Guardrails<br/>Input validation,<br/>output filtering,<br/>cost limits, safety"]
+        end
+    end
+    LOOP --> TOOLS
+    LOOP --> MEM
+    MEM --> PERSIST
+    LOOP --> OBS
+    LOOP --> GUARD
+    USER["Your Agent Logic<br/>─────────────<br/>Domain behavior<br/>Custom tools<br/>Business rules<br/>Prompts"] -->|"plugs into"| LOOP
+    style Framework fill:#f7fafc,stroke:#a0aec0,stroke-width:1px
+    style Core fill:#ebf8ff,stroke:#3182ce,stroke-width:2px
+    style State fill:#f0fff4,stroke:#38a169,stroke-width:2px
+    style Ops fill:#fefcbf,stroke:#d69e2e,stroke-width:2px
+    style USER fill:#fed7e2,stroke:#d53f8c,stroke-width:2px
+    style LOOP fill:#bee3f8,stroke:#3182ce
+    style TOOLS fill:#bee3f8,stroke:#3182ce
+    style MEM fill:#c6f6d5,stroke:#38a169
+    style PERSIST fill:#c6f6d5,stroke:#38a169
+    style OBS fill:#fefcbf,stroke:#d69e2e
+    style GUARD fill:#fefcbf,stroke:#d69e2e
+`} />
+
+Your code -- the domain logic, custom tools, business rules, and prompts -- plugs into the framework's agent loop. The framework handles the plumbing. You define *what* the agent should do; the framework handles *how* it executes.
+
+This is the same inversion of control you see in web frameworks. In Django, you do not write the HTTP server -- you write views and models, and Django calls your code at the right time. In an agent framework, you do not write the observe-think-act loop -- you define tools and prompts, and the framework calls your code when the LLM decides to use a tool.
+
+## The Framework Zoo
+
+The agent framework ecosystem is large and growing fast. Rather than trying to catalog every option, let's focus on the most significant ones, grouped by where they sit on the spectrum.
+
+### Provider SDKs
+
+**OpenAI Agents SDK** is OpenAI's official framework for building agents with their models. It provides a built-in agent loop, tool registration via Python type hints, a handoff mechanism for transferring control between specialized agents, and a guardrails system for input/output validation. It is tightly integrated with OpenAI's models and optimized for their tool-calling format.
+
+**Anthropic Claude SDK** is Anthropic's client library for building agents with Claude. It provides the API client, streaming support, and tool use integration. Claude's **extended thinking** capability -- where the model can reason through complex problems step by step before responding -- is a distinguishing feature that changes how agents approach multi-step reasoning. The SDK supports building agent loops on top of Claude's native tool use.
+
+Both provider SDKs are thin by design. They handle the API interaction and agent loop but leave workflow orchestration, state management, and multi-agent coordination to you or to a higher-level framework.
+
+### Frameworks
+
+**LangGraph** is a graph-based framework for building stateful, multi-step agent workflows. You define your agent as a graph where nodes are processing steps (LLM calls, tool executions, conditional logic) and edges define the flow between them. State is a first-class concept -- it flows through the graph, is checkpointed automatically, and can be inspected or modified at any node. LangGraph excels at complex workflows that need conditional branching, human-in-the-loop approval steps, or parallel execution paths.
+
+**Haystack** takes a pipeline-based approach. You build agents by composing reusable components -- retrievers, readers, generators, rankers -- into directed pipelines. Haystack is particularly strong for RAG-heavy applications where the retrieval pipeline itself is complex and needs fine-grained control.
+
+**DSPy** takes a radically different approach by treating prompts as *learnable parameters*. Instead of manually crafting prompts, you define input-output signatures and let DSPy optimize the prompts through automated evaluation. DSPy treats the prompt engineering problem as a machine learning problem, which is powerful when you have clear evaluation metrics but unfamiliar to developers who think in terms of prompt templates.
+
+### Orchestrators
+
+**CrewAI** models agents as members of a *crew*, each with a defined role, goal, and backstory. You design a team of specialized agents -- a researcher, an analyst, a writer -- and define tasks that the crew collaborates on. CrewAI manages the delegation, communication, and coordination between agents. It is designed for scenarios where the problem naturally decomposes into roles.
+
+**AutoGen** from Microsoft focuses on multi-agent conversation patterns. Agents communicate through structured conversations, and you define the conversational flow -- who speaks when, how agents respond to each other, and when human input is needed. AutoGen provides built-in patterns like round-robin discussion, hierarchical delegation, and group chat.
+
+Both orchestrators sit above the framework level because they assume you already have capable individual agents and focus on how those agents work together. You will explore multi-agent patterns in depth in Module 9.
+
+### Platforms
+
+Fully managed platforms like **Amazon Bedrock Agents** and **Google Vertex AI Agents** provide the entire stack -- model hosting, tool execution, memory, and deployment -- as a managed service. You configure the agent through a console or API, point it at your tools and knowledge bases, and the platform handles execution, scaling, and monitoring. Platforms minimize code but also minimize control. They are best suited for standardized use cases where the platform's built-in patterns match your needs.
+
+## Build vs. Buy: The Tradeoffs
+
+The decision between building from scratch and using a framework is not binary. It is a gradient, and the right position on that gradient depends on your specific situation. Here are the factors that should drive the decision.
+
+**Build from scratch when:**
+
+- Your agent's behavior is highly novel and does not fit any framework's execution model
+- You need absolute control over every aspect of the agent loop, including the exact sequence of API calls and retry logic
+- Your team has deep expertise in the underlying technologies and can maintain custom infrastructure
+- Performance constraints demand optimizations that frameworks cannot provide
+- Regulatory or compliance requirements prohibit third-party dependencies
+
+**Use a provider SDK when:**
+
+- Your agent uses a single LLM provider and does not need to switch
+- You want the agent loop handled for you but need full control over workflow logic
+- You value thin abstractions that do not obscure what is happening at the API level
+- Your primary concern is correct tool calling and conversation management
+
+**Use a framework when:**
+
+- Your agent has complex, multi-step workflows with conditional logic
+- You need persistent state, checkpointing, or crash recovery
+- Your team wants established patterns for common agent architectures
+- You need observability, tracing, and debugging tools out of the box
+- You anticipate needing human-in-the-loop steps or approval workflows
+
+**Use an orchestrator when:**
+
+- Your problem decomposes into distinct roles or specializations
+- Multiple agents need to collaborate, delegate, and communicate
+- You are building a multi-agent system and need coordination patterns
+
+**Use a platform when:**
+
+- You need to ship quickly and your use case matches the platform's patterns
+- Your team does not have the expertise or capacity to manage agent infrastructure
+- You are building a standard application (Q&A over documents, customer support) without highly custom behavior
+- You value managed scaling, monitoring, and security over fine-grained control
+
+The most common mistake is choosing a framework based on popularity rather than fit. A solo developer building a simple RAG chatbot does not need LangGraph's state management. A team building a complex multi-step workflow with human approval does not want to wire that up from raw API calls. Match the abstraction level to the complexity of your problem.
+
+## The Abstraction Tax
+
+Every framework imposes an **abstraction tax** -- the cost you pay for the convenience the framework provides. This tax takes several forms.
+
+**Learning curve.** Every framework introduces its own concepts, terminology, and mental model. LangGraph requires you to think in graphs. CrewAI requires you to think in roles and crews. DSPy requires you to think in signatures and optimizers. Time spent learning a framework is time not spent building your agent.
+
+**Debugging difficulty.** When something goes wrong inside a framework, the stack trace passes through the framework's internals before reaching your code. Understanding *why* the agent did something unexpected often requires understanding how the framework's agent loop works -- which is exactly the knowledge you built in Modules 1 through 6. This is why building from scratch first was not wasted effort. When a framework's behavior surprises you, your understanding of the underlying mechanics is what lets you diagnose the problem.
+
+**Upgrade friction.** The agent framework ecosystem is evolving rapidly. Breaking changes, API redesigns, and paradigm shifts are common. LangChain, one of the earliest and most popular frameworks, has undergone multiple major rewrites. Pinning to a framework version means missing improvements. Upgrading means adapting to changes. Neither is free.
+
+**Constraint mismatch.** Every framework embeds assumptions about how agents should work. When your requirements align with those assumptions, the framework accelerates you. When they do not, you fight the framework. Recognizing this mismatch early -- before you have invested months of development -- is critical.
+
+The abstraction tax is not a reason to avoid frameworks. It is a reason to choose them deliberately, with a clear understanding of what you are trading.
+
+## What's Ahead in This Module
+
+The remaining lessons in this module give you hands-on experience with the most important options across the spectrum. Each lesson follows the same structure: understand the framework's mental model, see how it handles the components you built from scratch in earlier modules, and build a working agent.
+
+- **Lesson 02: OpenAI Agents SDK** -- Build an agent using OpenAI's official SDK. You will see how it handles tool registration, the agent loop, handoffs between specialized agents, and guardrails for input/output validation.
+
+- **Lesson 03: Anthropic Claude Agent SDK** -- Build an agent using Claude's SDK. You will work with Claude's extended thinking, native tool use, and the agent loop pattern, and see how Claude's approach to tool calling and reasoning differs from other providers.
+
+- **Lesson 04: LangGraph** -- Build a stateful agent workflow using LangGraph's graph-based model. You will define nodes, edges, conditional routing, and state schemas, and see how the graph abstraction handles complex multi-step workflows with checkpointing.
+
+- **Lesson 05: CrewAI and AutoGen** -- Build multi-agent systems using role-based orchestrators. You will define crews with specialized agents, assign tasks, and see how these frameworks coordinate collaboration between agents.
+
+- **Lesson 06: Framework Comparison and Selection** -- Compare the frameworks head-to-head on features, performance, flexibility, and ecosystem maturity. You will build a decision framework for choosing the right tool for a given problem.
+
+- **Lesson 07: Framework Lab** -- Build the same agent in three different frameworks and compare the experience: how much code, how much control, how easy to debug, and how well each framework fits the problem.
+
+By the end of this module, you will not just know *about* these frameworks -- you will have built working agents with each of them and developed the judgment to choose the right one for any given project.
+
+## Summary
+
+**Agent frameworks** exist to absorb the undifferentiated infrastructure -- agent loops, tool management, memory, state, observability, and guardrails -- so you can focus on the domain logic and behavior that makes your agent unique.
+
+- The framework landscape spans a **spectrum from raw API calls to fully managed platforms**, with provider SDKs, frameworks, and orchestrators filling the space in between. Each step up the spectrum trades control for convenience.
+- Frameworks converge on a **common architecture**: a core runtime (agent loop + tool management), a state layer (memory + persistence), and an operations layer (observability + guardrails). Your code plugs into this architecture through defined extension points.
+- The major options include **provider SDKs** (OpenAI Agents SDK, Anthropic Claude SDK), **frameworks** (LangGraph, Haystack, DSPy), **orchestrators** (CrewAI, AutoGen), and **platforms** (AWS Bedrock Agents, Google Vertex AI Agents).
+- The **build vs. buy decision** depends on your problem's complexity, your team's expertise, your control requirements, and how well the framework's assumptions match your needs. Choose based on fit, not popularity.
+- Every framework imposes an **abstraction tax** -- learning curve, debugging difficulty, upgrade friction, and constraint mismatch. Understanding agent internals (Modules 1-6) is what lets you pay this tax efficiently, because you can reason about what the framework is doing under the hood.
+- The most common mistake is **choosing the wrong abstraction level**: too high, and you fight the framework's constraints; too low, and you spend all your time on infrastructure. Match the framework to the problem.
+
+In the next lesson, you will get hands-on with the first framework: the **OpenAI Agents SDK**. You will see how it handles the agent loop, tool registration, and multi-agent handoffs -- and compare its approach to the from-scratch implementations you built in earlier modules.

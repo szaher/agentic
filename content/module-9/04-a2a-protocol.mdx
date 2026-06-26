@@ -1,0 +1,504 @@
+---
+title: "Agent-to-Agent (A2A) Protocol"
+quiz:
+  - question: "What is the primary purpose of the A2A protocol?"
+    options:
+      - "To replace MCP as the standard for connecting agents to tools"
+      - "To provide a standard way for AI agents built on different frameworks to discover each other and collaborate on tasks"
+      - "To define how LLMs should format their internal chain-of-thought reasoning"
+      - "To manage authentication tokens between cloud services"
+    correctIndex: 1
+  - question: "What is an Agent Card in the A2A protocol?"
+    options:
+      - "A visual UI component that displays an agent's chat history"
+      - "A configuration file that stores the agent's API keys and secrets"
+      - "A JSON metadata document hosted at a well-known URL that advertises an agent's capabilities, skills, and endpoint"
+      - "A data structure used to compress messages between agents"
+    correctIndex: 2
+  - question: "How does A2A relate to MCP?"
+    options:
+      - "A2A replaces MCP entirely -- you only need one or the other"
+      - "A2A and MCP solve the same problem but for different programming languages"
+      - "A2A is a newer version of MCP with additional features"
+      - "They are complementary: MCP connects agents to tools, while A2A connects agents to other agents"
+    correctIndex: 3
+  - question: "Which of the following correctly describes the A2A Task lifecycle?"
+    options:
+      - "created → queued → running → finished"
+      - "submitted → working → input-required → completed/failed/canceled"
+      - "pending → active → done"
+      - "initialized → discovered → invoked → terminated"
+    correctIndex: 1
+---
+
+## Overview
+
+In the previous lessons, you explored why multi-agent systems exist, learned orchestration patterns for coordinating agents, and studied communication mechanisms like message passing and shared state. All of that assumed your agents live within the same framework -- the same codebase, the same runtime, the same team. But what happens when you need an agent built with LangGraph to collaborate with one built on CrewAI? Or when a travel-planning agent from one company needs to delegate hotel booking to an agent from another?
+
+You hit the same wall that MCP solved for tools -- but at a different level. MCP (which you studied in Module 3) standardizes how agents connect to **tools**. But there was no standard for how agents connect to **other agents**. Every framework had its own internal message format, its own task model, its own discovery mechanism. An agent built in one ecosystem could not talk to an agent in another without custom glue code.
+
+The **Agent-to-Agent (A2A) Protocol** is Google's answer to this problem. Released as an open standard in 2025, A2A defines a universal protocol for agent interoperability -- how agents discover each other, delegate tasks, exchange messages, stream progress updates, and deliver results. If MCP is the USB-C for connecting agents to tools, A2A is the HTTP for connecting agents to each other.
+
+## MCP vs. A2A: Complementary Standards
+
+Before diving into A2A's architecture, it is important to understand how it relates to MCP. These two protocols are not competitors -- they solve different problems at different layers of the agent stack.
+
+<MermaidDiagram chart={`graph TD
+    subgraph AgentSystem["Agent Ecosystem"]
+        subgraph AgentA["Agent A (Travel Planner)"]
+            LLM_A["LLM"]
+            MCP_A["MCP Client"]
+            A2A_A["A2A Client"]
+        end
+        subgraph AgentB["Agent B (Hotel Booking)"]
+            LLM_B["LLM"]
+            MCP_B["MCP Client"]
+            A2A_B["A2A Server"]
+        end
+        subgraph Tools["MCP Servers"]
+            T1["Calendar\nServer"]
+            T2["Payment\nServer"]
+            T3["Database\nServer"]
+        end
+    end
+    A2A_A <-->|"A2A Protocol\n(agent-to-agent)"| A2A_B
+    MCP_A <-->|"MCP Protocol\n(agent-to-tool)"| T1
+    MCP_B <-->|"MCP Protocol\n(agent-to-tool)"| T2
+    MCP_B <-->|"MCP Protocol\n(agent-to-tool)"| T3
+    style AgentA fill:#ebf8ff,stroke:#3182ce
+    style AgentB fill:#f0fff4,stroke:#68d391
+    style Tools fill:#fefcbf,stroke:#d69e2e
+`} />
+
+**MCP** handles the vertical connection -- an agent reaching down to tools, data sources, and services. It answers: "How does my agent use this database? How does it read these files? How does it call this API?"
+
+**A2A** handles the horizontal connection -- an agent reaching across to another agent. It answers: "How does my agent ask that agent for help? How do they exchange progress updates? How does a result come back?"
+
+A single agent can use both protocols simultaneously. It connects to MCP servers for tool access and to other agents via A2A for delegation and collaboration. The two protocols complement each other to create a full interoperability stack.
+
+## The A2A Ecosystem Architecture
+
+A2A defines a structured ecosystem with several core concepts that work together. Let's walk through each one.
+
+<MermaidDiagram chart={`graph TD
+    subgraph Discovery["1. Discovery"]
+        AC["Agent Card\n/.well-known/agent.json"]
+    end
+    subgraph TaskMgmt["2. Task Management"]
+        TL["Task Lifecycle\nsubmitted → working → completed"]
+    end
+    subgraph Messaging["3. Communication"]
+        MSG["Messages & Parts\ntext, files, structured data"]
+    end
+    subgraph Delivery["4. Delivery"]
+        ART["Artifacts\nfinal outputs and results"]
+    end
+    subgraph Streaming["5. Real-Time"]
+        SSE["SSE Streaming\nlive progress updates"]
+        PUSH["Push Notifications\nwebhook callbacks"]
+    end
+    AC -->|"Client discovers\nremote agent"| TL
+    TL -->|"Task generates"| MSG
+    MSG -->|"Work produces"| ART
+    TL -->|"Progress via"| SSE
+    TL -->|"Updates via"| PUSH
+    style Discovery fill:#ebf8ff,stroke:#3182ce
+    style TaskMgmt fill:#f0fff4,stroke:#68d391
+    style Messaging fill:#fefcbf,stroke:#d69e2e
+    style Delivery fill:#fed7d7,stroke:#fc8181
+    style Streaming fill:#e9d8fd,stroke:#805ad5
+`} />
+
+## Agent Cards: Discovery and Self-Description
+
+Every A2A-compatible agent publishes an **Agent Card** -- a JSON metadata document that advertises who the agent is, what it can do, and how to reach it. Agent Cards are hosted at a well-known URL, following the same pattern that `robots.txt` and `openid-configuration` use.
+
+The default location is `https://<agent-host>/.well-known/agent.json`. A client agent looking for collaborators can fetch this URL, parse the card, and decide whether the remote agent is suitable for the task at hand.
+
+<CodeBlock code={`{
+  "name": "Hotel Booking Agent",
+  "description": "Finds and books hotels based on destination, dates, budget, and preferences",
+  "url": "https://hotel-agent.example.com/a2a",
+  "version": "1.0.0",
+  "capabilities": {
+    "streaming": true,
+    "pushNotifications": true,
+    "stateTransitionHistory": true
+  },
+  "skills": [
+    {
+      "id": "search-hotels",
+      "name": "Hotel Search",
+      "description": "Search for available hotels by location, dates, and budget",
+      "tags": ["travel", "hotels", "booking"],
+      "examples": [
+        "Find hotels in Paris for July 10-15 under $200/night",
+        "Search for pet-friendly hotels near downtown Tokyo"
+      ]
+    },
+    {
+      "id": "book-hotel",
+      "name": "Hotel Reservation",
+      "description": "Complete a hotel booking with guest details and payment",
+      "tags": ["travel", "hotels", "reservation"],
+      "examples": [
+        "Book the Marriott for 3 nights starting June 1"
+      ]
+    }
+  ],
+  "defaultInputModes": ["text/plain", "application/json"],
+  "defaultOutputModes": ["text/plain", "application/json"]
+}
+`} language="json" filename="/.well-known/agent.json" />
+
+The key fields in an Agent Card:
+
+- **name** and **description** tell client agents what this agent does in plain language -- an LLM can read these to decide whether to delegate a task here
+- **url** is the A2A endpoint where the client sends requests
+- **capabilities** advertise what protocol features the agent supports -- streaming, push notifications, state history
+- **skills** list the specific things the agent can do, with human-readable examples that help both LLMs and developers understand the agent's scope
+- **defaultInputModes** and **defaultOutputModes** declare what content types the agent accepts and produces
+
+Think of the Agent Card as the agent's resume. A client agent reads multiple Agent Cards, evaluates which remote agent best fits the current task, and then initiates a conversation with it. This discovery step is what makes A2A an **open ecosystem** -- agents do not need to be preconfigured to know about each other.
+
+## Task Lifecycle: The Unit of Work
+
+In A2A, every interaction between a client and a remote agent is organized around a **Task**. A Task is the fundamental unit of work -- it has an ID, a state, a history of messages, and eventually produces artifacts (results).
+
+The Task lifecycle follows a state machine:
+
+<MermaidDiagram chart={`stateDiagram-v2
+    [*] --> submitted: Client sends task
+    submitted --> working: Agent begins processing
+    working --> working: Agent continues work
+    working --> input_required: Agent needs more info
+    input_required --> working: Client provides input
+    working --> completed: Agent finishes successfully
+    working --> failed: Agent encounters error
+    working --> canceled: Client cancels task
+    completed --> [*]
+    failed --> [*]
+    canceled --> [*]
+`} />
+
+- **submitted** -- the client has sent a task to the remote agent, but the agent has not started processing yet
+- **working** -- the agent is actively processing the task; during this state, the agent may send streaming updates to report progress
+- **input-required** -- the agent needs additional information from the client before it can continue; this enables multi-turn collaborative workflows where the remote agent asks clarifying questions
+- **completed** -- the agent has finished successfully and attached artifacts (results) to the task
+- **failed** -- the agent encountered an unrecoverable error
+- **canceled** -- the client decided to abort the task
+
+The `input-required` state is particularly important. It means A2A supports **conversational delegation** -- the remote agent is not a fire-and-forget black box. It can ask follow-up questions, request clarification, and negotiate scope, just like a human colleague would.
+
+## Messages, Parts, and Artifacts
+
+Communication within a Task happens through **Messages**. Each message has a role (`user` for the client agent, `agent` for the remote agent) and contains one or more **Parts**.
+
+**Parts** are the content units inside a message. A2A defines three types:
+
+- **TextPart** -- plain text or markdown content
+- **FilePart** -- binary files (images, PDFs, spreadsheets) sent inline as base64 or referenced by URL
+- **DataPart** -- structured JSON data for machine-readable information
+
+This multi-part design means agents can exchange rich content -- not just text strings. A client can send an image for analysis, receive a spreadsheet back, or exchange structured JSON payloads that both sides can parse programmatically.
+
+**Artifacts** are the final outputs of a Task. When the remote agent completes its work, it packages the results as Artifacts attached to the Task. Artifacts also contain Parts, so a completed hotel booking might produce a TextPart with a confirmation summary and a DataPart with structured booking details (confirmation number, dates, price).
+
+## The A2A Task Flow
+
+Let's trace a complete A2A interaction from discovery to result delivery. This is the sequence that plays out when one agent delegates work to another.
+
+<MermaidDiagram chart={`sequenceDiagram
+    participant Client as Client Agent<br/>(Travel Planner)
+    participant Card as Agent Card<br/>/.well-known/agent.json
+    participant Server as Remote Agent<br/>(Hotel Booking)
+    Note over Client: User asks to plan a trip
+    Client->>Card: GET /.well-known/agent.json
+    Card-->>Client: Agent Card (skills, capabilities, url)
+    Note over Client: Evaluates card, decides to delegate
+    Client->>Server: POST /a2a (tasks/send)<br/>{"task": {"message": "Find hotels in Paris..."}}
+    Server-->>Client: {"task": {"status": "working"}}
+    Note over Server: Agent searches hotel APIs
+    Server-->>Client: SSE: status update "Searching 3 providers..."
+    Server-->>Client: SSE: status update "Found 12 options, filtering..."
+    Server-->>Client: SSE: artifact (top 5 hotel options)
+    Server-->>Client: SSE: status update "completed"
+    Note over Client: Receives results, continues planning
+    Client->>Server: POST /a2a (tasks/send)<br/>{"task": "Book the second option"}
+    Server-->>Client: {"task": {"status": "input-required"}}<br/>"I need guest name and payment method"
+    Client->>Server: POST /a2a (tasks/send)<br/>{"task": "John Doe, Visa ending 4242"}
+    Server-->>Client: SSE: status update "working"
+    Server-->>Client: SSE: artifact (booking confirmation)
+    Server-->>Client: SSE: status update "completed"
+`} />
+
+The flow has four stages:
+
+**Discovery.** The client fetches the Agent Card from the well-known URL. It reads the skills, capabilities, and examples to decide whether this agent is the right fit. An LLM can reason over these descriptions just like it reasons over MCP tool descriptions.
+
+**Task initiation.** The client sends a `tasks/send` request with a new Task containing the initial message. The remote agent acknowledges and begins working.
+
+**Streaming updates.** While the agent works, it streams progress through **Server-Sent Events (SSE)**. The client receives real-time status updates, partial results, and eventually the final artifacts. This is critical for long-running tasks -- the client knows the agent is making progress, not hanging.
+
+**Multi-turn interaction.** If the agent needs more information, it transitions to `input-required` and sends a message explaining what it needs. The client provides the missing information, and the agent resumes working. This back-and-forth can happen multiple times within a single Task.
+
+## Streaming and Push Notifications
+
+A2A provides two mechanisms for real-time updates, suited to different deployment scenarios.
+
+**SSE (Server-Sent Events)** is used when the client wants to watch a task in real time. The client sends a `tasks/sendSubscribe` request instead of `tasks/send`, and the server keeps the HTTP connection open, streaming `TaskStatusUpdateEvent` and `TaskArtifactUpdateEvent` messages as work progresses. This is ideal when the client agent is actively waiting for results.
+
+**Push Notifications** are used when the client does not want to hold a connection open. The client registers a webhook URL with the remote agent via `tasks/pushNotification/set`. The agent calls that webhook whenever the task status changes. This is better for long-running tasks where the client wants to go do other work and get notified when results are ready -- similar to how CI/CD systems send webhook notifications when a build completes.
+
+> **When to use which?** Use SSE streaming when the client needs results quickly and will use them immediately. Use push notifications for tasks that take minutes or hours, where the client should not block waiting.
+
+## Implementing A2A: Server and Client
+
+Let's build a minimal A2A server and client in Python. The server exposes a simple text-summarization agent. The client discovers it and sends a task.
+
+<CodeBlock code={`from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
+import uuid
+
+app = FastAPI()
+
+# Agent Card — describes this agent's capabilities
+AGENT_CARD = {
+    "name": "Summarization Agent",
+    "description": "Summarizes text documents into concise bullet points",
+    "url": "http://localhost:8000/a2a",
+    "version": "1.0.0",
+    "capabilities": {
+        "streaming": False,
+        "pushNotifications": False,
+        "stateTransitionHistory": False,
+    },
+    "skills": [
+        {
+            "id": "summarize",
+            "name": "Text Summarization",
+            "description": "Condense long text into key bullet points",
+            "tags": ["nlp", "summarization"],
+            "examples": ["Summarize this research paper"],
+        }
+    ],
+    "defaultInputModes": ["text/plain"],
+    "defaultOutputModes": ["text/plain"],
+}
+
+# In-memory task store
+tasks: dict[str, dict] = {}
+
+
+@app.get("/.well-known/agent.json")
+async def get_agent_card():
+    """Serve the Agent Card for discovery."""
+    return JSONResponse(content=AGENT_CARD)
+
+
+@app.post("/a2a")
+async def handle_a2a(request: Request):
+    """Handle incoming A2A JSON-RPC requests."""
+    body = await request.json()
+    method = body.get("method")
+
+    if method == "tasks/send":
+        return await handle_task_send(body)
+    elif method == "tasks/get":
+        return await handle_task_get(body)
+    else:
+        return JSONResponse(
+            content={"error": f"Unknown method: {method}"},
+            status_code=400,
+        )
+
+
+async def handle_task_send(body: dict) -> JSONResponse:
+    """Process a new task or continue an existing one."""
+    params = body["params"]
+    task_id = params.get("id", str(uuid.uuid4()))
+    message = params["message"]
+
+    # Extract the text content from the message parts
+    user_text = ""
+    for part in message.get("parts", []):
+        if part.get("type") == "text":
+            user_text += part["text"]
+
+    # Simulate summarization (replace with real LLM call)
+    summary = summarize_text(user_text)
+
+    # Build the completed task with an artifact
+    task = {
+        "id": task_id,
+        "status": {"state": "completed"},
+        "artifacts": [
+            {
+                "parts": [{"type": "text", "text": summary}],
+                "name": "summary",
+            }
+        ],
+    }
+    tasks[task_id] = task
+
+    return JSONResponse(content={"id": body["id"], "result": task})
+
+
+async def handle_task_get(body: dict) -> JSONResponse:
+    """Retrieve the current state of a task."""
+    task_id = body["params"]["id"]
+    task = tasks.get(task_id)
+    if not task:
+        return JSONResponse(
+            content={"error": f"Task {task_id} not found"},
+            status_code=404,
+        )
+    return JSONResponse(content={"id": body["id"], "result": task})
+
+
+def summarize_text(text: str) -> str:
+    """Placeholder summarization — replace with an LLM call."""
+    sentences = text.split(". ")
+    if len(sentences) <= 3:
+        return text
+    return "Key points:\\n" + "\\n".join(
+        f"- {s.strip()}" for s in sentences[:5]
+    )
+`} language="python" filename="a2a_server.py" />
+
+The server implements three things: the Agent Card endpoint for discovery, the `tasks/send` method for receiving work, and the `tasks/get` method for checking task status. In a production implementation, the summarization would call an LLM and might use streaming to report progress, but the protocol structure stays the same.
+
+Now the client side -- an agent that discovers and delegates to the server above:
+
+<CodeBlock code={`import httpx
+import asyncio
+
+
+class A2AClient:
+    """Minimal A2A client for discovering and delegating to remote agents."""
+
+    def __init__(self, agent_base_url: str):
+        self.base_url = agent_base_url
+        self.agent_card = None
+        self.client = httpx.AsyncClient()
+
+    async def discover(self) -> dict:
+        """Fetch the remote agent's Agent Card."""
+        url = f"{self.base_url}/.well-known/agent.json"
+        response = await self.client.get(url)
+        response.raise_for_status()
+        self.agent_card = response.json()
+        return self.agent_card
+
+    async def send_task(self, message_text: str, task_id: str | None = None) -> dict:
+        """Send a task to the remote agent."""
+        if not self.agent_card:
+            await self.discover()
+
+        payload = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tasks/send",
+            "params": {
+                "id": task_id or "task-001",
+                "message": {
+                    "role": "user",
+                    "parts": [{"type": "text", "text": message_text}],
+                },
+            },
+        }
+        response = await self.client.post(
+            self.agent_card["url"], json=payload
+        )
+        response.raise_for_status()
+        return response.json()["result"]
+
+    async def get_task(self, task_id: str) -> dict:
+        """Check the status of an existing task."""
+        payload = {
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tasks/get",
+            "params": {"id": task_id},
+        }
+        response = await self.client.post(
+            self.agent_card["url"], json=payload
+        )
+        response.raise_for_status()
+        return response.json()["result"]
+
+    async def close(self):
+        await self.client.aclose()
+
+
+async def main():
+    client = A2AClient("http://localhost:8000")
+
+    # Step 1: Discover the remote agent
+    card = await client.discover()
+    print(f"Discovered: {card['name']}")
+    print(f"Skills: {[s['name'] for s in card['skills']]}")
+
+    # Step 2: Send a task
+    article = (
+        "Machine learning models require large datasets for training. "
+        "Transfer learning reduces data requirements by reusing pretrained weights. "
+        "Fine-tuning adapts a general model to a specific domain. "
+        "This approach has democratized AI by lowering the barrier to entry. "
+        "Small teams can now build competitive models without massive compute budgets."
+    )
+    result = await client.send_task(article)
+    print(f"\\nTask status: {result['status']['state']}")
+    print(f"Result: {result['artifacts'][0]['parts'][0]['text']}")
+
+    await client.close()
+
+
+asyncio.run(main())
+`} language="python" filename="a2a_client.py" />
+
+Notice the pattern: discover the Agent Card, evaluate the skills, send a task with a message, receive artifacts. This mirrors the MCP lifecycle you already know (initialize, discover, invoke) but at the agent level instead of the tool level.
+
+## A2A vs. MCP: A Side-by-Side Comparison
+
+Now that you understand both protocols, here is how they compare:
+
+| Dimension | MCP | A2A |
+|-----------|-----|-----|
+| **Connects** | Agents to tools | Agents to agents |
+| **Discovery** | Host configures servers | Agent Cards at well-known URLs |
+| **Unit of work** | Tool call (single function) | Task (multi-turn, stateful) |
+| **Communication** | Request-response | Messages with Parts (text, files, data) |
+| **Lifecycle** | Stateless per call | Stateful (submitted → working → completed) |
+| **Streaming** | Server-sent events | SSE + push notifications |
+| **Multi-turn** | Not applicable | input-required state enables back-and-forth |
+| **Created by** | Anthropic | Google |
+| **Relationship** | Complementary | Complementary |
+
+The key difference is the **unit of work**. An MCP tool call is a single function invocation -- call with arguments, get a result. An A2A Task is a potentially long-running, multi-turn collaboration. The remote agent might search multiple sources, ask clarifying questions, iterate on results, and eventually deliver a rich artifact. A2A treats remote agents as intelligent collaborators, not simple functions.
+
+## When to Use A2A
+
+A2A shines in scenarios where agents need to collaborate across organizational or framework boundaries:
+
+- **Cross-framework orchestration** -- your LangGraph supervisor needs to delegate to a CrewAI specialist agent. A2A provides the interoperability layer so they speak the same protocol.
+- **Enterprise agent ecosystems** -- different teams build different agents. A2A lets them discover and use each other's agents without tight coupling.
+- **Agent marketplaces** -- third-party agents can publish Agent Cards and offer their capabilities as services. A client agent discovers and evaluates them dynamically.
+- **Long-running collaborative tasks** -- when the delegated work takes minutes or hours, A2A's task lifecycle, streaming, and push notifications provide the infrastructure that simple function calls cannot.
+
+If your agents are all in the same codebase and the same framework, you probably do not need A2A -- direct function calls or the communication patterns from Lesson 03 are simpler. A2A becomes valuable when you cross boundaries: different frameworks, different teams, different organizations, different runtimes.
+
+> **The interoperability stack:** In a mature multi-agent system, MCP handles the agent-to-tool layer, A2A handles the agent-to-agent layer, and your orchestration pattern (from Lesson 02) handles the coordination logic. Each protocol solves one problem well.
+
+## Summary
+
+The **Agent-to-Agent (A2A) Protocol** is an open standard that enables agents built on different frameworks to discover each other and collaborate on tasks:
+
+- **The problem:** Without a standard, agents from different frameworks cannot interoperate. A2A provides a universal protocol for agent-to-agent communication, complementing MCP's agent-to-tool protocol.
+- **Agent Cards** are JSON metadata documents hosted at `/.well-known/agent.json` that advertise an agent's name, capabilities, skills, and endpoint -- enabling dynamic discovery.
+- **Tasks** are the unit of work in A2A, following a lifecycle: **submitted → working → input-required → completed/failed/canceled**. The `input-required` state enables multi-turn conversational delegation.
+- **Messages and Parts** carry the content of a conversation within a Task. Parts can be text, files, or structured data, enabling rich multi-modal exchange between agents.
+- **Artifacts** are the final outputs attached to a completed Task, packaging the results for the client agent to consume.
+- **Streaming (SSE)** and **push notifications** provide real-time progress updates -- SSE for active monitoring, webhooks for fire-and-forget long-running tasks.
+- **MCP and A2A are complementary:** MCP connects agents to tools (vertical), A2A connects agents to agents (horizontal). A production agent system often uses both.
+- In the next lesson, you will learn how to decompose complex tasks and delegate subtasks to specialized agents -- the orchestration logic that sits on top of protocols like A2A.

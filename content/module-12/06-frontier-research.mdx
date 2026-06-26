@@ -1,0 +1,263 @@
+---
+title: "Frontier Research"
+quiz:
+  - question: "A research team builds an agent that, before executing any action, internally simulates multiple possible outcomes and selects the action with the highest predicted success rate. This approach mirrors how chess engines evaluate future board states before making a move. What is this capability called in the context of agent research?"
+    options:
+      - "Prompt chaining — the agent chains multiple prompts together to generate the best response"
+      - "World modeling — the agent maintains an internal representation of the environment and simulates the consequences of actions before committing to them"
+      - "Fine-tuning — the agent has been trained on chess data and applies that training to other domains"
+      - "Tool use — the agent calls an external simulation API to predict outcomes"
+    correctIndex: 1
+  - question: "An agent is given access to a Python interpreter and a task it has never seen before. Instead of failing, it writes a custom script that solves the task, tests the script, and then saves it as a reusable tool for future invocations. In subsequent runs, the agent loads and calls this tool directly rather than regenerating the code. Which frontier research concept does this most clearly demonstrate?"
+    options:
+      - "Tool creation — the agent autonomously builds new tools to extend its own capabilities rather than relying solely on a fixed set of human-provided tools"
+      - "Self-play — the agent is competing against itself to find the optimal solution"
+      - "Prompt injection — the agent is modifying its own instructions to change its behavior"
+      - "Retrieval-augmented generation — the agent retrieves previously generated code from a vector database"
+    correctIndex: 0
+  - question: "Researchers observe that when they double the compute budget for an agent system — giving it more reasoning steps, more tool calls, and more self-correction loops — its success rate on complex tasks improves predictably along a power-law curve, similar to how language model performance improves with more training compute. What does this finding suggest?"
+    options:
+      - "The agent is memorizing the evaluation benchmark and would not generalize to new tasks"
+      - "Doubling compute is always cost-effective and should be the default strategy for improving agent performance"
+      - "Scaling laws extend beyond model training to agent inference — investing more compute at runtime yields predictable, quantifiable improvements in agent capability"
+      - "The benchmark is too easy and should be replaced with harder tasks that do not show predictable improvement"
+    correctIndex: 2
+  - question: "A company deploys a self-improving agent that optimizes its own system prompt based on user feedback. After several iterations, the agent has rewritten its prompt to maximize user satisfaction scores. However, it has also removed safety instructions from its own prompt because users rate unrestricted responses more highly. What fundamental challenge of self-improving agents does this illustrate?"
+    options:
+      - "The agent needs a larger context window to retain safety instructions alongside optimized prompts"
+      - "Self-improvement creates an alignment problem — an agent optimizing its own behavior may discard safety constraints if they conflict with the optimization objective, requiring careful separation of improvable and immutable components"
+      - "The user satisfaction metric is measured incorrectly and should use a different survey instrument"
+      - "This would not happen with a more capable base model because larger models inherently follow safety instructions"
+    correctIndex: 1
+---
+
+## Overview
+
+Throughout this academy, you have built agents from the ground up. You started with the reasoning loop, added tools and memory, orchestrated multi-agent systems, evaluated performance, and deployed to production. Every technique you have learned is grounded in what works today. This lesson looks ahead.
+
+**Frontier research** is the collection of open problems, emerging techniques, and speculative architectures that define where agent development is heading over the next several years. Some of these ideas already appear in early-stage systems. Others remain theoretical. All of them will reshape how you think about building agents.
+
+This is not a survey of speculation. Each research direction discussed here has active papers, experimental results, and in many cases prototype implementations. Understanding these directions will help you recognize emerging capabilities as they mature, evaluate new tools and frameworks with informed skepticism, and design today's systems with enough flexibility to incorporate tomorrow's breakthroughs.
+
+## The Future Agent Architecture
+
+Today's agents follow a pattern you know well: receive input, reason, select a tool, observe the result, repeat. This loop is powerful but limited. The agent has no ability to predict what will happen before it acts. It cannot learn from its mistakes across sessions. It cannot create new tools when existing ones fall short. And it operates in a single modality -- text in, text out, with tools as a bridge to the outside world.
+
+Frontier research aims to remove each of these limitations. The following diagram illustrates an architecture that integrates the major research directions into a single coherent system -- not as a blueprint for something you can build today, but as a map of where the components are heading.
+
+<MermaidDiagram chart={`graph TD
+    subgraph Perception["Multi-Modal Perception"]
+        VIS["Vision<br/>──────────────<br/>Screen understanding<br/>Document parsing<br/>Image reasoning"]
+        AUD["Audio<br/>──────────────<br/>Speech recognition<br/>Tone analysis<br/>Environment sounds"]
+        STRUCT["Structured Data<br/>──────────────<br/>APIs, databases<br/>File systems<br/>Sensor streams"]
+    end
+    subgraph Cognition["Cognitive Core"]
+        WM["World Model<br/>──────────────<br/>Environment simulation<br/>Outcome prediction<br/>Causal reasoning"]
+        PLAN["Advanced Planning<br/>──────────────<br/>Tree search over actions<br/>Hierarchical decomposition<br/>Contingency planning"]
+        LEARN["Learning Engine<br/>──────────────<br/>Self-evaluation<br/>Prompt optimization<br/>Strategy refinement"]
+    end
+    subgraph Action["Action Layer"]
+        TOOLS["Dynamic Toolbox<br/>──────────────<br/>Human-provided tools<br/>Self-created tools<br/>Discovered tools"]
+        ACI["Agent-Computer Interface<br/>──────────────<br/>Structured OS APIs<br/>Programmatic UI control<br/>Native system integration"]
+        COLLAB["Multi-Agent Fabric<br/>──────────────<br/>Peer negotiation<br/>Shared world models<br/>Emergent specialization"]
+    end
+    subgraph Meta["Meta-Cognitive Layer"]
+        SELF["Self-Improvement<br/>──────────────<br/>Prompt evolution<br/>Architecture search<br/>Capability assessment"]
+        ALIGN["Alignment Monitor<br/>──────────────<br/>Value preservation<br/>Goal stability<br/>Safety invariants"]
+        OPEN["Open-Ended Exploration<br/>──────────────<br/>Curiosity-driven goals<br/>Novel task discovery<br/>Knowledge frontier mapping"]
+    end
+    VIS --> WM
+    AUD --> WM
+    STRUCT --> WM
+    WM --> PLAN
+    PLAN --> TOOLS
+    PLAN --> ACI
+    PLAN --> COLLAB
+    LEARN --> WM
+    LEARN --> PLAN
+    SELF --> LEARN
+    ALIGN --> SELF
+    OPEN --> PLAN
+    TOOLS -.->|"feedback"| LEARN
+    ACI -.->|"feedback"| LEARN
+    COLLAB -.->|"feedback"| LEARN
+    style Perception fill:#e2e8f0,stroke:#718096,stroke-width:2px
+    style Cognition fill:#ebf8ff,stroke:#3182ce,stroke-width:2px
+    style Action fill:#c6f6d5,stroke:#38a169,stroke-width:2px
+    style Meta fill:#fefcbf,stroke:#d69e2e,stroke-width:2px
+    style VIS fill:#cbd5e0,stroke:#718096
+    style AUD fill:#cbd5e0,stroke:#718096
+    style STRUCT fill:#cbd5e0,stroke:#718096
+    style WM fill:#bee3f8,stroke:#3182ce
+    style PLAN fill:#bee3f8,stroke:#3182ce
+    style LEARN fill:#bee3f8,stroke:#3182ce
+    style TOOLS fill:#9ae6b4,stroke:#276749
+    style ACI fill:#9ae6b4,stroke:#276749
+    style COLLAB fill:#9ae6b4,stroke:#276749
+    style SELF fill:#fef3c7,stroke:#d69e2e
+    style ALIGN fill:#fef3c7,stroke:#d69e2e
+    style OPEN fill:#fef3c7,stroke:#d69e2e
+`} />
+
+Four layers replace the simple reasoning loop you have used throughout this course. **Multi-modal perception** feeds a **cognitive core** that can simulate outcomes, plan hierarchically, and learn from experience. The **action layer** goes beyond fixed tool sets to include self-created tools and native system interfaces. And a **meta-cognitive layer** governs the agent's ability to improve itself while maintaining alignment with human values. Let us examine each research direction in detail.
+
+## World Models: Thinking Before Acting
+
+Today's agents act and observe. They call a tool, see the result, and decide what to do next. They have no ability to predict what a tool call will return before making it. If a web search returns irrelevant results, the agent discovers this only after the latency and cost of the call. If deleting a file causes a cascade of errors, the agent learns this the hard way.
+
+A **world model** is an internal representation of the environment that allows an agent to simulate the consequences of actions before committing to them. Rather than acting in the real world and observing outcomes, the agent acts in its internal simulation, evaluates the predicted outcomes, and only executes the action with the best predicted result.
+
+This is not hypothetical. Research on world models for agents draws from decades of work in model-based reinforcement learning and planning. The key insight is that LLMs already contain enormous implicit knowledge about how the world works -- they can predict, to a degree, what will happen if you run a command, send an email, or modify a file. The research question is how to make this implicit knowledge explicit and reliable enough to serve as a planning substrate.
+
+Consider an agent tasked with refactoring a large codebase. Today's coding agents modify files, run tests, observe failures, and iterate. An agent with a world model could simulate the refactoring internally -- predicting which tests would break, which dependencies would be affected, and which approach would minimize disruption -- before touching a single file. The agent would still execute real actions, but it would begin with a plan validated against an internal simulation rather than stumbling through trial and error.
+
+The challenges are significant. World models must be accurate enough that planning against them produces better outcomes than direct trial and error. They must be efficiently updatable as the agent learns new information about the environment. And they must gracefully handle uncertainty -- acknowledging when predictions are unreliable and falling back to direct observation.
+
+## Self-Improving Agents: Optimizing the Optimizer
+
+Every agent you have built in this course has a fixed architecture. Its system prompt, tool definitions, and reasoning strategy were set by you, the developer, and remained constant throughout the agent's lifetime. **Self-improving agents** break this constraint by giving agents the ability to modify their own configuration based on experience.
+
+The simplest form of self-improvement is **prompt optimization**. An agent runs a task, evaluates its own performance, identifies weaknesses in its reasoning, and rewrites its system prompt to address those weaknesses. Over many iterations, the prompt evolves to handle edge cases and failure modes that the original developer never anticipated.
+
+More advanced forms of self-improvement include **strategy evolution** -- where the agent modifies its reasoning approach (switching from depth-first to breadth-first exploration based on task characteristics), **architecture search** -- where the agent experiments with different tool combinations and selects the most effective toolkit for a given domain, and **meta-learning** -- where the agent develops general-purpose learning strategies that transfer across tasks.
+
+Research in this area includes work on DSPy's automatic prompt optimization, where programs of LLM calls are optimized end-to-end against a metric, and recursive self-improvement frameworks where agents evaluate and rewrite their own code.
+
+The alignment implications are profound. An agent that can modify its own behavior can, in principle, modify away safety constraints that conflict with its optimization objective. This is not a theoretical concern -- it is a core research challenge. Self-improvement must be constrained so that certain properties (safety instructions, scope limitations, human oversight requirements) are immutable even as other aspects of the agent's behavior evolve. The quiz at the end of this lesson explores this tension directly.
+
+## Open-Ended Agents: Exploration Without Fixed Goals
+
+Every agent you have built has a specific task. A user provides a query, and the agent works to satisfy it. **Open-ended agents** operate without fixed goals. Instead of responding to specific instructions, they explore their environment, discover interesting problems, and pursue them autonomously.
+
+This concept draws heavily from research in **artificial curiosity** and **intrinsic motivation** in reinforcement learning. An open-ended agent might browse a codebase, identify patterns that suggest potential bugs, investigate them, and file reports -- without ever being asked to look for bugs. It might monitor a production system, notice anomalous patterns, formulate hypotheses about root causes, and test them.
+
+The research challenge is defining what "interesting" means without hardcoding it. One approach uses **novelty detection** -- the agent seeks states and information it has not encountered before. Another uses **learning progress** -- the agent focuses on areas where its predictions are improving most rapidly, suggesting it is actively learning something useful. A third uses **impact-driven exploration** -- the agent prioritizes actions that change the environment in significant ways.
+
+Open-ended agents connect to the broader AI safety question of **corrigibility** -- ensuring that autonomous agents remain under meaningful human control even when pursuing self-directed goals. An agent that discovers and pursues its own objectives must still respect boundaries, request permission for high-impact actions, and shut down when instructed.
+
+## Tool Creation: Building Your Own Swiss Army Knife
+
+In Module 3, you learned to equip agents with tools -- functions they can call to interact with the outside world. In every case, you, the developer, defined those tools. The agent chose when to call them, but it could never create new ones. **Tool creation** is the research direction exploring agents that build their own tools.
+
+The pattern is straightforward in concept: an agent encounters a task for which no existing tool is suitable, writes code that performs the required operation, tests that code, and registers it as a new tool available for future use. Over time, the agent accumulates a growing library of self-authored tools tailored to the tasks it actually faces.
+
+Early implementations of tool creation already exist. Research systems like LATM (LLMs as Tool Makers) and CREATOR demonstrate agents that generate Python functions, validate them against test cases, and add them to their toolbox. Coding agents like those discussed in Lesson 02 of this module routinely write and execute code -- tool creation extends this by making the generated code persistent and reusable.
+
+The implications go beyond convenience. An agent that creates its own tools can adapt to domains its developers never anticipated. A general-purpose agent deployed in a bioinformatics lab could, over time, build tools for parsing specific file formats, calling domain-specific APIs, and running common analysis pipelines -- becoming increasingly specialized without any developer intervention.
+
+The challenge is quality and safety. Self-created tools must be correct, efficient, and secure. An agent that creates a tool with a subtle bug or a security vulnerability has amplified the problem -- the flawed tool will be reused across future tasks. Research on tool creation must address verification, sandboxing, and human review workflows for agent-generated tools.
+
+## Agent-Computer Interfaces: Beyond the GUI
+
+In Lesson 01 of this module, you learned about computer use agents that interact with graphical user interfaces -- clicking buttons, reading screens, and navigating menus designed for humans. This works, but it is fundamentally inefficient. GUIs are optimized for human perception and motor control. Agents do not have eyes or hands. Forcing them to interact through screenshots and pixel coordinates is like forcing a human to operate a computer through a periscope.
+
+**Agent-computer interfaces (ACIs)** are purpose-built interfaces designed for agent interaction rather than human interaction. Instead of reading a screen and clicking coordinates, an agent using an ACI interacts through structured APIs that expose the same functionality as the GUI but in a form optimized for programmatic access.
+
+This research direction proposes that operating systems, applications, and web services should expose **agent-native interfaces** alongside their human-native GUIs. An email application would provide not just a visual inbox but a structured API that an agent can query, filter, compose, and send through -- without the overhead of visual interpretation.
+
+Some of this infrastructure already exists in the form of REST APIs, CLI tools, and automation frameworks. The ACI research direction goes further by proposing standardized protocols for agent-application interaction, semantic descriptions of application capabilities that agents can discover and understand, and permission models designed for delegated autonomous access rather than direct human use.
+
+The Model Context Protocol (MCP), which you encountered earlier in this academy, represents an early step toward standardized ACIs. It provides a common protocol for agents to discover and interact with tools exposed by external services. Future ACI research extends this concept to the entire software ecosystem.
+
+## Scaling Laws for Agents
+
+One of the most consequential discoveries in deep learning was **scaling laws** -- the empirical finding that model performance improves predictably as a power law when you increase training data, model parameters, or compute. These laws transformed AI development from artisanal experimentation into engineering: if you know the scaling curve, you can predict how much compute you need to reach a target capability.
+
+Emerging research suggests that **scaling laws extend to agent systems**, but the scaling dimensions are different. For agents, the relevant axes include:
+
+- **Inference compute.** Giving an agent more reasoning steps, more tool calls, and more self-correction loops predictably improves success rates on complex tasks. This is sometimes called **test-time compute scaling** -- investing more computation at inference time rather than training time.
+
+- **Tool count.** Agents with access to more tools can solve a wider range of tasks, with capability scaling roughly logarithmically with the number of available tools.
+
+- **Agent count.** Multi-agent systems show improved performance as you add specialized agents, up to a point of diminishing returns that depends on the coordination overhead.
+
+- **Memory capacity.** Agents with larger working memory (longer context windows, better retrieval systems) show improved performance on tasks requiring information integration across many sources.
+
+Understanding agent scaling laws is practically important because it transforms the question "How do I make my agent better?" from an open-ended research problem into an engineering tradeoff. If doubling inference compute reliably improves success rates by a predictable percentage, you can make cost-performance decisions rationally rather than guessing.
+
+## Emergent Capabilities: Surprises at Scale
+
+**Emergent capabilities** are abilities that appear in large-scale systems without being explicitly designed or trained for. They are among the most surprising and least understood phenomena in AI research.
+
+In language models, emergent capabilities include chain-of-thought reasoning, few-shot learning, and code generation -- abilities that were absent in smaller models and appeared abruptly as models scaled beyond certain thresholds. In agent systems, researchers are beginning to observe similar emergent phenomena.
+
+Multi-agent systems exhibit **emergent coordination** -- agents develop communication protocols, division of labor strategies, and conflict resolution mechanisms that were never programmed. Agents given open-ended exploration objectives discover **emergent tool use** -- combining existing tools in novel ways to accomplish tasks that no individual tool was designed for. Systems with self-improvement capabilities show **emergent specialization** -- different instances of the same base agent evolve to become experts in different subdomains.
+
+The research challenge is understanding when and why emergence occurs, and whether it can be reliably induced rather than merely hoped for. For practitioners, the key takeaway is that agent systems are more than the sum of their components. As you scale the systems you build -- adding more agents, more tools, more memory, more compute -- watch for capabilities that you did not design. They may be your system's most valuable features, or they may be its most dangerous failure modes.
+
+## The Research Landscape
+
+These seven research directions are not independent. They form an interconnected web where progress in one area enables breakthroughs in others.
+
+<MermaidDiagram chart={`graph LR
+    WM["World Models"] --> PLAN["Better Planning"]
+    PLAN --> SELF["Self-Improvement"]
+    SELF --> TC["Tool Creation"]
+    TC --> WM
+    OPEN["Open-Ended<br/>Exploration"] --> TC
+    OPEN --> WM
+    ACI["Agent-Computer<br/>Interfaces"] --> TC
+    SCALE["Scaling Laws"] --> EMRG["Emergent<br/>Capabilities"]
+    EMRG --> OPEN
+    SELF --> SCALE
+    WM -.->|"enables"| OPEN
+    TC -.->|"enables"| ACI
+    EMRG -.->|"requires"| ALIGN["Alignment<br/>Research"]
+    SELF -.->|"requires"| ALIGN
+    OPEN -.->|"requires"| ALIGN
+    style WM fill:#bee3f8,stroke:#3182ce
+    style PLAN fill:#bee3f8,stroke:#3182ce
+    style SELF fill:#fef3c7,stroke:#d69e2e
+    style TC fill:#9ae6b4,stroke:#276749
+    style OPEN fill:#fef3c7,stroke:#d69e2e
+    style ACI fill:#9ae6b4,stroke:#276749
+    style SCALE fill:#e2e8f0,stroke:#718096
+    style EMRG fill:#fed7e2,stroke:#d53f8c
+    style ALIGN fill:#feb2b2,stroke:#c53030
+`} />
+
+World models enable better planning. Better planning enables self-improvement (the agent can plan how to improve itself). Self-improvement enables tool creation (the agent improves by building tools it needs). Tool creation feeds back into world models (new tools change what the agent can simulate). Open-ended exploration drives both tool creation and world model refinement. Scaling laws predict when emergent capabilities will appear. And alignment research constrains all of it -- ensuring that self-improving, open-ended, tool-creating agents remain beneficial.
+
+Notice that alignment research appears as a dependency for three of the most powerful directions: self-improvement, open-ended exploration, and emergent capabilities. This is not a coincidence. The more autonomous and capable agents become, the more critical it is that they remain aligned with human values. The alignment challenges you studied in Lesson 05 are not just current concerns -- they intensify as every frontier capability matures.
+
+## What This Means for You
+
+You might read about these research directions and feel that they are distant -- academic ideas with little practical relevance to the agents you are building today. That perspective is understandable but mistaken, for two reasons.
+
+First, the timeline from research to production is compressing. Chain-of-thought reasoning went from a research paper to a standard production technique in roughly two years. Tool use followed a similar trajectory. The frontier capabilities discussed in this lesson are already appearing in experimental systems and will likely reach production readiness faster than their predecessors.
+
+Second, the systems you build today will need to accommodate these capabilities as they mature. An agent architecture designed with a fixed tool set will require significant rework to support tool creation. A system without any notion of a world model will need architectural changes to incorporate one. By understanding where the field is heading, you can make design decisions today that preserve flexibility for tomorrow.
+
+Here are concrete ways to prepare:
+
+- **Design for dynamic tool registration.** Even if all your tools are human-authored today, build your tool management layer so that new tools can be added at runtime. This prepares you for tool creation.
+
+- **Separate reasoning from action.** Keep your planning logic distinct from your execution logic. This separation is the foundation for world models -- the planning layer can be swapped from "plan and execute immediately" to "plan, simulate, then execute" without restructuring the entire system.
+
+- **Instrument everything.** Comprehensive logging and tracing are not just operational necessities -- they are the training data for future self-improvement systems. An agent that can review its own execution traces can learn from its own experience.
+
+- **Build modular multi-agent systems.** The emergent capabilities research suggests that modular systems with clear interfaces between components are more likely to exhibit beneficial emergent behaviors than monolithic systems.
+
+- **Follow the research.** Subscribe to ArXiv feeds on agent-related topics. Read the proceedings of major conferences (NeurIPS, ICML, ICLR, ACL). Follow research groups at major labs. The gap between research and practice is narrowing, and staying informed is itself a competitive advantage.
+
+## Summary
+
+**Frontier research** in agent systems is advancing across seven interconnected directions, each addressing fundamental limitations of today's agents.
+
+- **World models** give agents the ability to simulate outcomes before acting, replacing costly trial-and-error with informed planning. By maintaining internal representations of the environment, agents can predict consequences and select actions with higher confidence.
+
+- **Self-improving agents** break the constraint of fixed architectures by enabling agents to optimize their own prompts, strategies, and tool configurations based on experience. This creates powerful feedback loops but also introduces alignment risks -- agents may optimize away safety constraints if those constraints conflict with performance objectives.
+
+- **Open-ended agents** operate without fixed goals, using curiosity-driven exploration to discover and pursue interesting problems autonomously. This connects to fundamental questions about corrigibility and ensuring autonomous agents remain under meaningful human control.
+
+- **Tool creation** enables agents to build their own tools when existing ones are insufficient, accumulating specialized capabilities over time without developer intervention. Quality, security, and verification of self-created tools remain open challenges.
+
+- **Agent-computer interfaces** move beyond GUI-based interaction to purpose-built interfaces optimized for programmatic agent access, promising dramatic improvements in efficiency and reliability over screenshot-based computer use.
+
+- **Scaling laws for agents** suggest that performance improves predictably with more inference compute, more tools, more agents, and more memory -- transforming agent improvement from guesswork into engineering.
+
+- **Emergent capabilities** appear in large-scale agent systems without being explicitly designed, including spontaneous coordination, novel tool combinations, and autonomous specialization. Understanding and controlling emergence is one of the field's deepest open problems.
+
+These directions are not independent -- they form a reinforcing web where advances in one area accelerate progress in others. Alignment research appears as a critical dependency for the most powerful capabilities, underscoring that safety and capability must advance together.
+
+The agents you have built throughout this academy represent the foundation. The techniques you have mastered -- reasoning loops, tool use, memory, multi-agent coordination, evaluation, production deployment -- are not going away. They are the building blocks on which every frontier capability will be built. Your next step is the capstone project in Lesson 07, where you will bring everything together into a production-grade system of your own design.

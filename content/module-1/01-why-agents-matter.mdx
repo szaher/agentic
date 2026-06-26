@@ -1,0 +1,174 @@
+---
+title: "Why Agents Matter"
+quiz:
+  - question: "What is a key limitation of static LLM calls that agents address?"
+    options:
+      - "Static LLM calls are too slow to generate useful responses"
+      - "Static LLM calls cannot take actions, adapt to feedback, or pursue multi-step goals"
+      - "Static LLM calls cannot generate text longer than 100 words"
+      - "Static LLM calls require a GPU to run"
+    correctIndex: 1
+  - question: "Which analogy best describes the difference between a static LLM call and an LLM agent?"
+    options:
+      - "A calculator vs. a spreadsheet"
+      - "A bicycle vs. a car"
+      - "An employee who answers one question vs. one who owns a project end-to-end"
+      - "A phone call vs. a text message"
+    correctIndex: 2
+  - question: "What does the term 'agentic system' generally imply?"
+    options:
+      - "A system that only generates text faster"
+      - "A system that uses multiple GPUs for training"
+      - "A system that can autonomously perceive, reason, plan, and act to achieve goals"
+      - "A system that replaces human developers entirely"
+    correctIndex: 2
+  - question: "Which of the following is NOT a characteristic of the shift from static LLM usage to agentic systems?"
+    options:
+      - "Adding tool use so the model can take real-world actions"
+      - "Introducing memory so the model can learn from past interactions"
+      - "Removing the language model entirely and using rule-based logic"
+      - "Enabling multi-step reasoning with planning and self-correction"
+    correctIndex: 2
+---
+
+## Overview
+
+Large Language Models are remarkable. They can draft essays, explain quantum physics, write code, and translate between languages -- all from a single prompt. Yet for all their power, a raw LLM call is fundamentally **stateless** and **passive**. You send a prompt, you get a response, and the interaction ends. The model cannot check whether its answer was correct, look up today's stock price, run the code it just wrote, or remember what you discussed yesterday.
+
+This lesson explores why that limitation matters and how the field is moving beyond it. We will trace the evolution from simple prompt-and-response interactions to **agentic systems** -- autonomous, goal-driven architectures where the LLM acts as a reasoning engine embedded in a loop of perception, thought, and action.
+
+> This is the opening lesson of the entire academy. Everything you learn here sets the stage for the twelve modules ahead.
+
+## The World Before Agents
+
+To appreciate why agents matter, consider how most applications used LLMs circa 2023. The pattern was straightforward:
+
+1. A user (or application) constructs a **prompt**
+2. The prompt is sent to an LLM via an API call
+3. The LLM returns a **completion** -- a block of generated text
+4. The application displays the result
+
+This is the **single-turn, stateless paradigm**. Think of it like asking a brilliant colleague a question in a hallway: you get a thoughtful answer, but they immediately forget the conversation, have no access to your company's databases, and cannot go run an experiment to verify their response.
+
+This pattern works well for many tasks -- summarization, translation, brainstorming, simple Q&A. But it breaks down the moment a task requires any of the following:
+
+- **Multi-step reasoning** -- solving a problem that takes several dependent steps, where later steps depend on the results of earlier ones
+- **External knowledge** -- accessing information that was not in the training data, such as live databases, APIs, or private documents
+- **Verification** -- checking whether the generated output is actually correct or useful
+- **Action** -- doing something in the real world: sending an email, writing a file, deploying code
+- **Persistence** -- remembering context across interactions to build on prior work
+
+These are not edge cases. They describe most real-world work.
+
+## The Gap: What Static LLMs Cannot Do
+
+Imagine you ask an LLM to "research the top five competitors in our market and produce a comparison report." A static LLM call will generate something that *looks* like a report. But it cannot actually browse the web to find current competitors. It cannot access your company's internal data to compare features. It cannot verify that the companies it names still exist. And it cannot refine its analysis based on your feedback without you manually re-prompting it with all the prior context.
+
+The gap is not intelligence -- the model may reason brilliantly. The gap is **agency**: the ability to perceive an environment, form a plan, take actions, observe results, and adapt.
+
+This is the fundamental insight that launched the agentic AI movement:
+
+> An LLM is a powerful reasoning engine, but reasoning alone is not enough. To solve real problems, the model needs a body -- tools, memory, and a loop.
+
+## From Calls to Agents: The Evolution
+
+The shift from static LLM calls to agents did not happen overnight. It followed a natural progression, with each step adding a new capability:
+
+<MermaidDiagram chart={`graph TD
+    A["Static LLM Call<br/><i>Prompt in, text out</i>"] --> B["Prompt Chaining<br/><i>Sequence of calls</i>"]
+    B --> C["Tool-Augmented LLM<br/><i>Model can call functions</i>"]
+    C --> D["ReAct / Agent Loop<br/><i>Reason + Act in a cycle</i>"]
+    D --> E["Autonomous Agent<br/><i>Plans, executes, self-corrects</i>"]
+    E --> F["Multi-Agent System<br/><i>Agents collaborate</i>"]
+
+    subgraph Phase1["Phase 1: Text Generation"]
+        A
+    end
+
+    subgraph Phase2["Phase 2: Orchestration"]
+        B
+        C
+    end
+
+    subgraph Phase3["Phase 3: Autonomy"]
+        D
+        E
+        F
+    end
+
+    style Phase1 fill:#fff5f5,stroke:#fc8181
+    style Phase2 fill:#ebf8ff,stroke:#63b3ed
+    style Phase3 fill:#f0fff4,stroke:#68d391
+`} />
+
+Let us walk through each stage:
+
+**Static LLM Call** -- The baseline. One prompt, one response. No memory, no tools, no follow-up. Useful but limited.
+
+**Prompt Chaining** -- Developers realized they could break complex tasks into multiple LLM calls, feeding the output of one into the next. This added structure but was rigid -- the chain was predetermined, not adaptive.
+
+**Tool-Augmented LLM** -- The LLM gained the ability to call external functions: search the web, query a database, run code, call an API. This was a critical leap. The model was no longer limited to its training data. You will explore this in depth in Module 3 (Tool Use & Function Calling).
+
+**ReAct / Agent Loop** -- Instead of a fixed chain, the LLM operates in a dynamic loop: **Reason** about what to do next, **Act** by calling a tool, **Observe** the result, and repeat until the goal is met. This is the core pattern you will study in Lesson 4 of this module (The Agent Loop).
+
+**Autonomous Agent** -- The loop gains planning, memory, and self-correction. The agent can break a goal into subtasks, track progress, recover from errors, and persist knowledge across sessions. Module 6 (Memory & Knowledge) and Module 4 (Agent Architectures) cover these capabilities.
+
+**Multi-Agent System** -- Multiple specialized agents collaborate, each handling a different aspect of a complex task. A planner agent delegates to a researcher agent, a coder agent, and a reviewer agent. Module 9 (Multi-Agent Systems) dives deep into this pattern.
+
+## Why Now? The Convergence
+
+Agents are not a new idea. The concept of autonomous goal-driven software has existed in AI research for decades. What changed is that three capabilities converged simultaneously:
+
+1. **Powerful foundation models** -- Modern LLMs are strong enough to follow complex instructions, reason through multi-step problems, and generate structured outputs (like JSON or function calls) reliably. They serve as a capable "brain" for an agent.
+
+2. **Tool-use protocols** -- Standards and APIs for letting LLMs invoke external tools have matured. Function calling, the Model Context Protocol (MCP), and tool-use schemas allow models to interact with the outside world in a structured, predictable way.
+
+3. **Orchestration frameworks** -- Libraries and platforms (LangGraph, CrewAI, OpenAI Agents SDK, Google ADK, and others) provide the scaffolding to build, run, and manage agents without reinventing the wheel. You will survey these in Module 7 (Agent Frameworks & SDKs).
+
+The result is that building an agent went from a research project to a weekend project. But building a *reliable, safe, production-grade* agent -- that still takes deep understanding. Which is why this academy exists.
+
+## The Analogy: From Calculator to Employee
+
+One way to understand the shift is through a workplace analogy:
+
+A **static LLM call** is like handing a brilliant employee a question on a sticky note and getting a written answer back. They are smart, but they have no desk, no computer, no access to your systems, and no memory of prior conversations.
+
+An **LLM agent** is like onboarding that same employee fully. They get a desk (persistent state), a computer (tools), access to company systems (APIs and databases), a task tracker (planning), the ability to ask follow-up questions (perception), and the judgment to know when to escalate (self-correction). Now they can own a project end-to-end.
+
+The underlying intelligence is the same. The difference is the **scaffolding** around it -- the tools, the memory, the loop, the environment. That scaffolding is what turns a language model into an agent.
+
+## Real-World Impact
+
+Why should you care? Because agents unlock categories of applications that were previously impossible or impractical with static LLM calls:
+
+- **Software engineering agents** that can read a codebase, plan changes across multiple files, write code, run tests, fix failures, and submit pull requests
+- **Research agents** that search the web, read papers, cross-reference claims, and synthesize cited reports
+- **Customer support agents** that access account data, diagnose issues, take corrective actions, and follow up
+- **Data analysis agents** that connect to databases, write and run queries, generate visualizations, and iterate based on what they find
+- **DevOps agents** that monitor systems, diagnose incidents, execute runbooks, and escalate when needed
+
+In each case, the agent does not just *suggest* an answer -- it *does the work*. It closes the gap between knowing what to do and actually doing it.
+
+> The shift from "AI that advises" to "AI that acts" is the defining transition of this era. Agents are the mechanism.
+
+## What This Academy Will Cover
+
+This lesson is your entry point into a twelve-module journey through the entire landscape of LLM agents. Here is a preview of the road ahead:
+
+- **This module (Foundations)** builds your mental model: what agents are, how the agent loop works, and when to use them
+- **Module 2 (Prompting & Reasoning)** covers how to craft prompts that unlock reliable reasoning, the cognitive engine of every agent
+- **Module 3 (Tool Use)** teaches how agents interact with the outside world through function calling and tool protocols
+- **Module 4 (Architectures)** surveys the major architectural patterns: ReAct, Plan-and-Execute, LLMCompiler, and more
+- **Module 6 (Memory & Knowledge)** addresses how agents persist and retrieve information across interactions
+- **Module 9 (Multi-Agent Systems)** explores how multiple agents collaborate to tackle complex workflows
+- **Module 11 (Production & Safety)** covers the hard problems of deploying agents reliably: guardrails, observability, cost control, and safety
+
+Each module builds on the ones before it, so take them in order when possible.
+
+## Summary
+
+Static LLM calls are powerful but fundamentally limited -- they cannot take actions, remember context, or pursue multi-step goals. The shift to **agentic systems** addresses these limitations by embedding the LLM in a loop of reasoning and action, augmenting it with tools, and giving it memory.
+
+This is not just a technical evolution -- it is a paradigm shift in how we build software with AI. The LLM stops being a text-generation endpoint and becomes a reasoning engine at the center of an autonomous system.
+
+In the next lesson, we will formalize this intuition. **What Is an Agent?** will give you a precise definition, breaking agents down into their core components: perception, reasoning, action, and the environment.

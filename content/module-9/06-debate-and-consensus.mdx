@@ -1,0 +1,326 @@
+---
+title: "Debate, Voting, and Consensus"
+quiz:
+  - question: "What is the primary advantage of adversarial debate over single-agent self-reflection?"
+    options:
+      - "It is always faster because fewer LLM calls are needed"
+      - "Different agents bring independent perspectives, reducing shared blind spots"
+      - "It eliminates the need for a judge or evaluator entirely"
+      - "It guarantees the correct answer through majority rule"
+    correctIndex: 1
+  - question: "In majority voting (self-consistency), why does sampling multiple chain-of-thought paths improve accuracy?"
+    options:
+      - "Correct reasoning paths are more likely to converge on the same answer than incorrect ones"
+      - "Each sample uses a different model, providing diverse knowledge bases"
+      - "The voting mechanism corrects factual errors in the model's training data"
+      - "Sampling at high temperature always produces better individual answers"
+    correctIndex: 0
+  - question: "What is the role of the 'aggregator' in a Mixture-of-Agents (MoA) architecture?"
+    options:
+      - "It routes the user's query to the single best-suited agent"
+      - "It runs all agents in a round-robin tournament until one wins"
+      - "It synthesizes the outputs of multiple proposer agents into a single refined response"
+      - "It trains the proposer agents on new data after each interaction"
+    correctIndex: 2
+  - question: "When is iterative multi-round debate LEAST likely to improve answer quality?"
+    options:
+      - "Complex reasoning tasks where agents can challenge each other's logic"
+      - "Simple factual lookups where the model either knows the answer or does not"
+      - "Persuasive writing tasks where different framings reveal stronger arguments"
+      - "Code review tasks where a second opinion catches bugs"
+    correctIndex: 1
+---
+
+## Overview
+
+In the previous lessons, you built the machinery of multi-agent systems: orchestration topologies, communication protocols, the A2A standard, and task decomposition. All of those patterns assume that agents *cooperate* -- they divide work, share results, and trust each other's outputs. But what if an agent is wrong? What if the first answer is plausible but subtly flawed? Cooperation alone cannot catch errors that every cooperating agent shares.
+
+This is where **disagreement** becomes a feature, not a bug. By deliberately structuring agents to *argue*, *vote*, and *critique* each other, you can extract higher-quality answers than any single agent would produce alone. The core insight is borrowed from human institutions: courts use adversarial proceedings, democracies use voting, and scientific peer review uses structured critique -- all because **contested ideas are stress-tested ideas**.
+
+In Module 4, Lesson 04, you saw **self-reflection** as a single agent critiquing its own work. Think of debate and consensus as the multi-agent generalization of that idea: instead of one agent wearing both the generator and critic hats, you assign those roles to *separate agents* with independent perspectives, eliminating the blind-spot problem where the same model repeats its own errors.
+
+## The Adversarial Debate Protocol
+
+**Adversarial debate** structures two or more agents into opposing roles -- one proposes, the other attacks -- while a judge evaluates the exchange and renders a verdict. This is sometimes called the **red team / blue team** pattern, borrowed from cybersecurity, where one team defends a position and another tries to break it.
+
+The protocol unfolds in rounds. The **proposer** (blue team) presents an answer with supporting reasoning. The **challenger** (red team) identifies weaknesses, counterarguments, or errors. The proposer responds to the critique, and the cycle continues until the **judge** has enough information to decide. The judge is not simply picking a winner -- it synthesizes the strongest arguments from both sides into a final answer that is better than either agent's initial position.
+
+<MermaidDiagram chart={`sequenceDiagram
+    participant U as User
+    participant P as Proposer<br/>(Blue Team)
+    participant C as Challenger<br/>(Red Team)
+    participant J as Judge
+
+    U->>P: Question or task
+    P->>J: Initial answer + reasoning
+
+    rect rgb(235, 248, 255)
+    Note over P,C: Debate Round 1
+    J->>C: "Critique this answer"
+    C->>J: Counterarguments + weaknesses found
+    J->>P: "Address these critiques"
+    P->>J: Revised answer + rebuttals
+    end
+
+    rect rgb(254, 235, 235)
+    Note over P,C: Debate Round 2
+    J->>C: "Any remaining issues?"
+    C->>J: Additional concerns or concessions
+    J->>P: "Final revision"
+    P->>J: Strengthened answer
+    end
+
+    J->>J: Synthesize best arguments<br/>from both sides
+    J->>U: Final verdict + reasoning
+`} />
+
+Notice that the judge orchestrates the conversation, deciding when to pass the floor to each agent and when the debate has reached sufficient depth. This is a key difference from self-reflection: the judge is a *third* perspective, independent of both the proposer and the challenger, which reduces the risk of systematic bias.
+
+> **Why not just ask a better model?** You might wonder why you would run three agents instead of one stronger one. The answer is that debate extracts *reasoning* that a single call does not. When challenged, the proposer must articulate *why* its answer is correct, exposing assumptions that were implicit. The challenger must find *specific* flaws, not vague doubts. This structured argumentation surfaces information that a single-pass response leaves buried.
+
+## Voting and Consensus Mechanisms
+
+Debate works well for complex reasoning tasks, but sometimes you need a lighter-weight mechanism. **Voting** and **consensus** patterns let multiple agents independently produce answers and then aggregate them, without the overhead of multi-round argumentation.
+
+The following diagram shows the three most common consensus mechanisms, from simplest to most sophisticated:
+
+<MermaidDiagram chart={`flowchart TD
+    Q[User Query] --> A1[Agent 1]
+    Q --> A2[Agent 2]
+    Q --> A3[Agent 3]
+    Q --> AN[Agent N]
+
+    subgraph MV["Majority Vote"]
+        A1 -->|Answer A| V1[Count<br/>Votes]
+        A2 -->|Answer A| V1
+        A3 -->|Answer B| V1
+        AN -->|Answer A| V1
+        V1 -->|Most common| R1[Answer A wins]
+    end
+
+    subgraph WV["Weighted Vote"]
+        A1 -->|Answer A, conf 0.9| V2[Weighted<br/>Sum]
+        A2 -->|Answer B, conf 0.4| V2
+        A3 -->|Answer A, conf 0.7| V2
+        AN -->|Answer A, conf 0.8| V2
+        V2 -->|Highest weight| R2[Answer A wins]
+    end
+
+    subgraph IR["Iterative Refinement"]
+        A1 -->|Draft 1| AGG[Aggregator]
+        A2 -->|Draft 2| AGG
+        A3 -->|Draft 3| AGG
+        AN -->|Draft N| AGG
+        AGG -->|Synthesized| R3[Refined Answer]
+        R3 -.->|Feed back| A1
+        R3 -.->|Feed back| A2
+    end
+
+    style MV fill:#ebf8ff,stroke:#3182ce
+    style WV fill:#fefcbf,stroke:#d69e2e
+    style IR fill:#f0fff4,stroke:#38a169
+    style Q fill:#e9d8fd,stroke:#805ad5,color:#1a202c
+`} />
+
+### Majority Voting (Self-Consistency)
+
+**Majority voting** is the simplest consensus mechanism. You sample multiple independent responses from the same model (typically at a higher temperature to encourage diversity), extract the final answer from each, and pick the answer that appears most frequently. The research paper that formalized this approach calls it **self-consistency** (Wang et al., 2022).
+
+The mathematical intuition is straightforward: if a model has a 60% chance of reaching the correct answer on any single attempt, then sampling 5 times and taking the majority vote pushes accuracy well above 60%. Correct reasoning paths tend to converge on the same answer, while incorrect paths scatter across different wrong answers. Voting amplifies the signal.
+
+Self-consistency works best for tasks with **discrete, verifiable answers** -- math problems, multiple-choice questions, classification tasks. It is less effective for open-ended generation where there is no single "correct" answer to converge on.
+
+### Weighted Voting
+
+**Weighted voting** extends majority voting by assigning different weights to different agents or responses. The weight might reflect the agent's **confidence score**, its **domain expertise**, or its **historical accuracy** on similar tasks.
+
+For example, if you have three specialist agents -- one trained on legal reasoning, one on medical knowledge, and one general-purpose -- you would weight the legal agent's vote higher on a contract analysis question. Weighted voting lets you combine specialists without needing a complex routing layer.
+
+### Iterative Refinement (Mixture-of-Agents)
+
+**Iterative refinement** is the most sophisticated consensus mechanism. Multiple agents independently generate responses, and then an **aggregator** agent synthesizes them into a single refined output. In the **Mixture-of-Agents (MoA)** architecture (Wang et al., 2024), this process can repeat for multiple layers: the aggregator's output becomes the input for another round of independent generation and aggregation.
+
+The MoA insight is that LLMs exhibit a **collaborativeness** property -- they tend to produce better outputs when given reference answers from other models, even if those references are imperfect. Each layer of aggregation improves quality, similar to how ensemble methods work in traditional machine learning.
+
+## Constitutional AI Patterns
+
+A related approach is the **Constitutional AI (CAI)** pattern, where instead of free-form debate, agents evaluate outputs against a fixed set of principles -- a "constitution." One agent generates a response, and a second agent (or the same agent in a separate call) checks whether the response violates any constitutional principle (e.g., "Is this response harmful?", "Does it reveal private information?", "Is it factually grounded?").
+
+This is not open-ended debate but **structured critique against a known standard**. The constitution serves as the judge's rubric, making the process more predictable and auditable than free-form adversarial debate. You can think of it as a middle ground between self-reflection (one agent, one perspective) and full debate (multiple agents, open argumentation).
+
+## Implementing a Debate System
+
+Let's build a debate system where two agents argue over a question and a judge synthesizes the final answer. This implementation uses three distinct agent roles with different system prompts:
+
+<CodeBlock code={`import anthropic
+import json
+
+client = anthropic.Anthropic()
+MODEL = "claude-sonnet-4-20250514"
+MAX_ROUNDS = 2
+
+
+def call_agent(system: str, messages: list[dict]) -> str:
+    """Call an LLM agent with the given system prompt and messages."""
+    response = client.messages.create(
+        model=MODEL,
+        max_tokens=1024,
+        system=system,
+        messages=messages,
+    )
+    return response.content[0].text
+
+
+# --- Agent Prompts ---
+
+PROPOSER_PROMPT = """You are a thoughtful analyst who provides well-reasoned
+answers. When presenting an answer, explain your reasoning step by step.
+When responding to critiques, address each point directly -- concede
+where the critique is valid and defend where you have evidence."""
+
+CHALLENGER_PROMPT = """You are a rigorous critic and devil's advocate. Your job
+is to find weaknesses, unstated assumptions, logical gaps, and potential
+errors in the proposed answer. Be specific -- don't just say "this could
+be wrong," explain exactly what might be wrong and why. If the answer is
+actually strong, acknowledge its strengths before noting minor issues."""
+
+JUDGE_PROMPT = """You are an impartial judge evaluating a structured debate.
+You will see an initial answer, critiques, and rebuttals. Your job is to:
+
+1. Identify which arguments from BOTH sides are strongest
+2. Note where the proposer successfully addressed critiques
+3. Note where critiques revealed genuine weaknesses
+4. Synthesize the best reasoning into a final, authoritative answer
+
+Output your verdict as JSON:
+{
+  "final_answer": "Your synthesized answer incorporating the strongest arguments",
+  "proposer_strengths": ["What the proposer got right"],
+  "challenger_contributions": ["Valid critiques that improved the answer"],
+  "confidence": "high/medium/low"
+}"""
+
+
+def run_debate(question: str) -> dict:
+    """Run a multi-round debate between a proposer and challenger,
+    with a judge synthesizing the final answer."""
+
+    print(f"Question: {question}\\n")
+
+    # Step 1: Proposer gives initial answer
+    proposal = call_agent(
+        PROPOSER_PROMPT,
+        [{"role": "user", "content": f"Please answer this question:\\n{question}"}],
+    )
+    print(f"--- Proposer (Initial) ---\\n{proposal}\\n")
+
+    debate_history = [{"round": 0, "proposer": proposal}]
+
+    for round_num in range(1, MAX_ROUNDS + 1):
+        # Step 2: Challenger critiques the current answer
+        critique_context = f"""Here is the question and the proposed answer.
+Find weaknesses and challenge the reasoning.
+
+Question: {question}
+
+Proposed answer:
+{proposal}"""
+
+        if round_num > 1:
+            critique_context += f"""
+
+The proposer's rebuttal to your previous critique:
+{proposal}"""
+
+        critique = call_agent(
+            CHALLENGER_PROMPT,
+            [{"role": "user", "content": critique_context}],
+        )
+        print(f"--- Challenger (Round {round_num}) ---\\n{critique}\\n")
+
+        # Step 3: Proposer addresses the critique
+        rebuttal_context = f"""Your previous answer to the question "{question}":
+
+{proposal}
+
+A critic has raised these concerns:
+{critique}
+
+Address each critique directly. Concede where valid and strengthen
+your answer. Provide your revised, improved answer."""
+
+        proposal = call_agent(
+            PROPOSER_PROMPT,
+            [{"role": "user", "content": rebuttal_context}],
+        )
+        print(f"--- Proposer (Round {round_num} Rebuttal) ---\\n{proposal}\\n")
+
+        debate_history.append({
+            "round": round_num,
+            "critique": critique,
+            "rebuttal": proposal,
+        })
+
+    # Step 4: Judge synthesizes the final verdict
+    transcript = f"Question: {question}\\n\\n"
+    transcript += f"Initial proposal:\\n{debate_history[0]['proposer']}\\n\\n"
+    for entry in debate_history[1:]:
+        transcript += f"Round {entry['round']} critique:\\n{entry['critique']}\\n\\n"
+        transcript += f"Round {entry['round']} rebuttal:\\n{entry['rebuttal']}\\n\\n"
+
+    verdict_text = call_agent(
+        JUDGE_PROMPT,
+        [{"role": "user", "content": f"Evaluate this debate:\\n\\n{transcript}"}],
+    )
+    print(f"--- Judge Verdict ---\\n{verdict_text}\\n")
+
+    verdict = json.loads(verdict_text)
+    return verdict
+
+
+# --- Run it ---
+result = run_debate(
+    "Should a startup use a microservices architecture from day one, "
+    "or start with a monolith and split later?"
+)
+print(f"\\nFinal answer: {result['final_answer']}")
+print(f"Confidence: {result['confidence']}")
+`} language="python" filename="debate_system.py" />
+
+Several design decisions in this implementation are worth examining. The **proposer** and **challenger** have symmetric but opposing system prompts -- one builds arguments, the other tears them down. The **judge** is deliberately isolated from the debate itself; it only sees the transcript after the rounds are complete, preventing it from steering the debate toward a predetermined conclusion. The debate runs for a fixed number of rounds (`MAX_ROUNDS = 2`), which in practice captures most of the value -- the first critique surfaces the biggest issues, and the first rebuttal addresses the most important ones.
+
+Notice how this mirrors the self-reflection pattern from Module 4 but with a crucial difference: the critic is a *separate agent* with a different system prompt, not the same model re-evaluating its own work. This structural independence is what gives debate its power over single-agent reflection.
+
+## Choosing the Right Consensus Mechanism
+
+Not every task benefits from every consensus approach. The right mechanism depends on the nature of the task, the cost budget, and the quality requirements:
+
+| Mechanism | Best For | Cost | Latency | Quality Gain |
+|-----------|----------|------|---------|--------------|
+| Majority voting | Math, classification, discrete answers | Low (parallel sampling) | Low (parallel) | Moderate |
+| Weighted voting | Multi-domain queries, specialist ensembles | Low-Medium | Low (parallel) | Moderate-High |
+| Adversarial debate | Complex reasoning, ambiguous questions, high-stakes decisions | High (sequential rounds) | High (sequential) | High |
+| Mixture-of-Agents | Open-ended generation, writing, summarization | Medium-High | Medium | High |
+| Constitutional critique | Safety-critical outputs, compliance checking | Medium | Medium | Targeted |
+
+A practical production system often **combines** these mechanisms. For example, you might use majority voting for quick factual queries, constitutional critique as a safety filter on all outputs, and full adversarial debate only for complex, high-stakes reasoning tasks. The routing patterns from Module 4 (Lesson 05) let you direct each query to the appropriate consensus mechanism based on its complexity.
+
+## When Consensus Fails
+
+Consensus mechanisms have failure modes you should watch for.
+
+**Herding** occurs when agents converge on the same wrong answer because they share the same training data and biases. If all agents are instances of the same model, majority voting amplifies systematic biases rather than correcting them. Mitigation: use diverse models or vary system prompts to encourage genuinely independent perspectives.
+
+**Debate theater** happens when the challenger generates superficially impressive but ultimately hollow critiques, and the proposer concedes unnecessarily. This is especially common when both agents are people-pleasing models that prefer agreement over genuine argumentation. Mitigation: strengthen the challenger's prompt to require *specific, falsifiable* objections with evidence.
+
+**Aggregation collapse** is a risk in Mixture-of-Agents: the aggregator may ignore minority viewpoints and simply echo the majority, losing the diversity that made the ensemble valuable in the first place. Mitigation: explicitly instruct the aggregator to note and address dissenting positions.
+
+> **Forward look -- Module 10:** How do you know whether your debate system is actually producing better answers? You need evaluation. Module 10 introduces **LLM-as-judge** scoring, **pairwise comparison**, and **benchmark-driven evaluation** -- the tools you need to measure whether your consensus mechanism is worth the extra compute.
+
+## Summary
+
+**Debate and consensus** mechanisms use structured disagreement to improve answer quality beyond what any single agent achieves alone. **Adversarial debate** assigns proposer, challenger, and judge roles to separate agents, forcing arguments to be explicitly defended and critiqued -- the multi-agent generalization of the self-reflection pattern from Module 4. **Majority voting** (self-consistency) samples multiple independent responses and picks the most common answer, exploiting the fact that correct reasoning paths converge while incorrect ones scatter. **Mixture-of-Agents** uses iterative refinement, where multiple agents generate responses and an aggregator synthesizes the best elements. **Constitutional AI patterns** evaluate outputs against a fixed set of principles rather than open-ended debate.
+
+The choice of mechanism depends on your task: voting for discrete answers, debate for complex reasoning, MoA for open-ended generation, and constitutional critique for safety-critical outputs. Watch for failure modes like herding (shared biases amplified by voting), debate theater (superficial critiques), and aggregation collapse (ignoring minority viewpoints).
+
+In the next lesson, you will put these multi-agent concepts into practice in the **Multi-Agent Lab**, building a research team with a supervisor, researcher, and writer agent that collaborate to produce a complete deliverable.

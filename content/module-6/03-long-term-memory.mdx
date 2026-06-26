@@ -1,0 +1,508 @@
+---
+title: "Long-Term Memory"
+quiz:
+  - question: "An agent recalls that a user prefers JSON output because they said so three sessions ago. Which type of long-term memory is this?"
+    options:
+      - "Procedural memory -- it is a learned skill the agent acquired"
+      - "Semantic memory -- it is a general fact about the world"
+      - "Episodic memory -- it is a recalled experience from a specific past interaction"
+      - "Working memory -- it is held in the current context window"
+    correctIndex: 2
+  - question: "Why do most long-term memory systems store embeddings alongside raw text?"
+    options:
+      - "Embeddings compress text to save disk space"
+      - "Embeddings allow semantic similarity search, so the agent can find relevant memories even when the wording differs from the query"
+      - "Embeddings are required by the LLM to process text inputs"
+      - "Embeddings replace the need for a database entirely"
+    correctIndex: 1
+  - question: "Which storage backend would be most appropriate for a production agent that needs sub-millisecond memory retrieval, handles millions of memories, and already runs a PostgreSQL database?"
+    options:
+      - "SQLite with a JSON column for embeddings"
+      - "PostgreSQL with the pgvector extension"
+      - "A flat JSON file on the local filesystem"
+      - "Redis with in-memory storage only"
+    correctIndex: 1
+  - question: "What problem does the store-retrieve-update cycle solve that simple 'append-only' memory storage does not?"
+    options:
+      - "It allows the agent to delete all memories at once"
+      - "It ensures memories are always stored in chronological order"
+      - "It keeps memories accurate over time by letting the agent correct, merge, or deprecate outdated information"
+      - "It prevents the agent from ever retrieving irrelevant memories"
+    correctIndex: 2
+---
+
+## Overview
+
+In the previous lesson, you learned how **conversation memory** and **short-term memory** strategies -- summarization, sliding windows, token budgets -- keep the agent's current session coherent. But those techniques have a fundamental limitation: when the session ends, the memories disappear. The agent wakes up the next day with no recollection of who it talked to, what it learned, or what it decided.
+
+Humans do not work this way. You remember that a colleague prefers email over Slack. You recall that the last time you deployed on a Friday, something broke. You know how to write a SQL migration because you have done it dozens of times. These are not facts sitting in your "context window" right now -- they are stored in **long-term memory** and retrieved on demand.
+
+This lesson introduces long-term memory for agents: how to persist knowledge across sessions, what types of memory exist, and how to build a system that stores, retrieves, and updates memories using embeddings and structured storage. By the end, you will have a working `LongTermMemory` class and a clear understanding of the architecture that underpins memory-augmented agents.
+
+## Why Long-Term Memory Changes Everything
+
+Without long-term memory, every agent session starts from zero. The agent cannot learn from past mistakes, remember user preferences, or accumulate domain knowledge. It repeats the same questions, makes the same errors, and treats every user as a stranger.
+
+With long-term memory, an agent can:
+
+- **Personalize** -- remember that User A likes concise answers while User B prefers detailed explanations
+- **Learn from experience** -- recall that a particular API endpoint returns errors on weekends and route around it
+- **Accumulate knowledge** -- build up a repository of facts discovered during past sessions
+- **Avoid redundant work** -- remember that it already solved a similar problem last week and reuse the approach
+
+The difference is the gap between a stateless function and a knowledgeable assistant. Long-term memory is what turns a tool into a collaborator.
+
+## Three Types of Long-Term Memory
+
+Cognitive science distinguishes several types of human long-term memory. Agent systems benefit from the same taxonomy, because each type serves a different purpose and requires different storage strategies.
+
+**Episodic memory** stores records of specific past experiences. "The user asked me to refactor the auth module on Tuesday and rejected my first approach because it broke backward compatibility." Episodic memories are timestamped, contextualized, and tied to particular interactions. They let the agent learn from what went well and what did not.
+
+**Semantic memory** stores general facts and knowledge independent of when or how they were learned. "PostgreSQL supports JSONB columns." "The company's production database is hosted on AWS RDS in us-east-1." Semantic memories are timeless truths (or at least truths that change slowly). They form the agent's knowledge base.
+
+**Procedural memory** stores learned skills and patterns -- how to do things. "When deploying to production, always run the migration script before restarting the service." "When the user asks for a chart, use matplotlib with the company's brand colors." Procedural memories are action-oriented recipes that the agent has acquired through experience or instruction.
+
+<MermaidDiagram chart={`graph TD
+    LTM["Long-Term Memory"] --> EP["Episodic Memory"]
+    LTM --> SM["Semantic Memory"]
+    LTM --> PM["Procedural Memory"]
+
+    EP --> EP1["Past conversations"]
+    EP --> EP2["Task outcomes"]
+    EP --> EP3["User feedback"]
+
+    SM --> SM1["Facts and knowledge"]
+    SM --> SM2["User preferences"]
+    SM --> SM3["Domain information"]
+
+    PM --> PM1["Learned workflows"]
+    PM --> PM2["Tool usage patterns"]
+    PM --> PM3["Error recovery steps"]
+
+    subgraph Episodic["Episodic: What happened"]
+        EP1
+        EP2
+        EP3
+    end
+
+    subgraph Semantic["Semantic: What is true"]
+        SM1
+        SM2
+        SM3
+    end
+
+    subgraph Procedural["Procedural: How to do it"]
+        PM1
+        PM2
+        PM3
+    end
+
+    style LTM fill:#ed8936,stroke:#c05621,color:#fff
+    style Episodic fill:#ebf8ff,stroke:#3182ce
+    style Semantic fill:#f0fff4,stroke:#38a169
+    style Procedural fill:#fefcbf,stroke:#d69e2e
+    style EP fill:#bee3f8,stroke:#3182ce
+    style SM fill:#c6f6d5,stroke:#38a169
+    style PM fill:#fefcbf,stroke:#d69e2e
+`} />
+
+In practice, many agent systems start with semantic memory (a knowledge base of facts) and add episodic memory later (a log of past interactions). Procedural memory is often the hardest to implement well because it requires the agent to generalize from specific experiences into reusable patterns.
+
+## The Long-Term Memory Architecture
+
+A production long-term memory system combines three storage layers, each optimized for a different access pattern.
+
+<MermaidDiagram chart={`graph LR
+    AGENT["Agent"] --> MC["Memory Controller"]
+
+    MC --> VS["Vector Store<br/>(Embeddings)"]
+    MC --> DB["Structured Database<br/>(Metadata + Relations)"]
+    MC --> FS["File / Blob Storage<br/>(Large Documents)"]
+
+    VS --> SEARCH["Semantic Search<br/>'Find similar memories'"]
+    DB --> QUERY["Exact Queries<br/>'Get user preferences'"]
+    FS --> RETRIEVE["Document Retrieval<br/>'Load full transcript'"]
+
+    subgraph Storage["Storage Layer"]
+        VS
+        DB
+        FS
+    end
+
+    subgraph Access["Access Patterns"]
+        SEARCH
+        QUERY
+        RETRIEVE
+    end
+
+    style AGENT fill:#e2e8f0,stroke:#718096
+    style MC fill:#ed8936,stroke:#c05621,color:#fff
+    style Storage fill:#ebf8ff,stroke:#3182ce
+    style Access fill:#f0fff4,stroke:#38a169
+`} />
+
+The **vector store** holds embedding vectors alongside text chunks. This is where semantic similarity search happens -- when the agent asks "have I seen anything like this before?", the vector store finds the closest matches by comparing embedding vectors. You will learn exactly how embeddings work in Lesson 05.
+
+The **structured database** holds metadata, relationships, and fields that need exact-match queries. User preferences, memory timestamps, access counts, memory types, and tags all live here. When the agent needs "all memories tagged as `user-preference` for user ID 42," a structured query is far more efficient than a vector similarity search.
+
+The **file or blob storage** holds large objects that would be wasteful to embed in their entirety -- full conversation transcripts, uploaded documents, generated reports. The structured database stores a reference (a file path or URL), and the agent retrieves the full content only when it needs it.
+
+Not every system needs all three layers. A simple agent might use only a vector store with metadata columns. A production system handling millions of memories will typically use all three, with the memory controller deciding which layer to query based on the type of retrieval needed.
+
+## The Store-Retrieve-Update Cycle
+
+Long-term memory is not a write-once archive. Memories need to be created, found, and maintained over time. The **store-retrieve-update cycle** governs how memories flow through the system.
+
+<MermaidDiagram chart={`flowchart TD
+    START["Agent completes an interaction"] --> EXTRACT["Extract memorable information<br/>(facts, preferences, outcomes)"]
+    EXTRACT --> EMBED["Generate embedding vector<br/>for the memory content"]
+    EMBED --> CHECK{"Similar memory<br/>already exists?"}
+
+    CHECK -->|"No"| STORE["Store new memory<br/>(text + embedding + metadata)"]
+    CHECK -->|"Yes"| MERGE["Merge or update<br/>existing memory"]
+    MERGE --> STORE_UPDATED["Store updated memory<br/>with new timestamp"]
+
+    STORE --> INDEXED["Memory indexed<br/>and searchable"]
+    STORE_UPDATED --> INDEXED
+
+    INDEXED --> LATER["Later: agent needs information"]
+    LATER --> QUERY_TYPE{"Query type?"}
+
+    QUERY_TYPE -->|"Semantic"| VEC_SEARCH["Vector similarity search<br/>'anything related to X?'"]
+    QUERY_TYPE -->|"Exact"| DB_SEARCH["Structured query<br/>'get preference for user Y'"]
+    QUERY_TYPE -->|"Hybrid"| BOTH["Both searches,<br/>merge results"]
+
+    VEC_SEARCH --> RANK["Rank by relevance"]
+    DB_SEARCH --> RANK
+    BOTH --> RANK
+
+    RANK --> INJECT["Inject top-K memories<br/>into agent context"]
+    INJECT --> RESPOND["Agent responds with<br/>memory-informed answer"]
+
+    style START fill:#e2e8f0,stroke:#718096
+    style CHECK fill:#fefcbf,stroke:#d69e2e
+    style QUERY_TYPE fill:#fefcbf,stroke:#d69e2e
+    style INDEXED fill:#c6f6d5,stroke:#38a169
+    style RESPOND fill:#c6f6d5,stroke:#38a169
+    style EMBED fill:#bee3f8,stroke:#3182ce
+`} />
+
+Three aspects of this cycle deserve emphasis.
+
+**Extraction is the hardest step.** Not everything the agent encounters is worth remembering. A good memory system extracts key facts, user preferences, task outcomes, and lessons learned while ignoring routine chatter. This is often done by prompting the LLM itself: "Given this conversation, what facts should be stored for future reference?"
+
+**Deduplication prevents memory bloat.** If the user says "I prefer dark mode" in five different sessions, the agent should not store five separate memories. Before storing, the system checks for existing memories that overlap semantically and either merges them or updates the existing record.
+
+**Retrieval must be fast and relevant.** When the agent needs memories mid-conversation, the retrieval step adds latency. If it takes two seconds to search memories, the user will notice. Vector search with pre-computed embeddings keeps this fast -- typically under 50 milliseconds for collections of tens of thousands of memories.
+
+## Building a LongTermMemory Class
+
+Let's implement the core of a long-term memory system. This class handles storing memories with embeddings, retrieving by semantic similarity, and updating existing memories. For the embedding function, we use a placeholder that you will replace with a real embedding model in Lesson 05.
+
+<CodeBlock code={`import json
+import sqlite3
+import time
+from dataclasses import dataclass, field
+from typing import Optional
+
+
+@dataclass
+class Memory:
+    """A single long-term memory entry."""
+    id: Optional[int] = None
+    content: str = ""
+    memory_type: str = "semantic"  # episodic, semantic, procedural
+    metadata: dict = field(default_factory=dict)
+    embedding: list[float] = field(default_factory=list)
+    created_at: float = 0.0
+    updated_at: float = 0.0
+    access_count: int = 0
+
+
+def compute_embedding(text: str) -> list[float]:
+    """
+    Placeholder embedding function.
+    In production, replace with a real model:
+      - OpenAI: openai.embeddings.create(model="text-embedding-3-small", input=text)
+      - Sentence Transformers: model.encode(text).tolist()
+    Returns a normalized vector. Lesson 05 covers this in detail.
+    """
+    # Simple hash-based placeholder (NOT for production use)
+    import hashlib
+    h = hashlib.sha256(text.encode()).hexdigest()
+    vec = [int(h[i:i+2], 16) / 255.0 for i in range(0, 64, 2)]
+    norm = sum(x**2 for x in vec) ** 0.5
+    return [x / norm for x in vec]
+
+
+def cosine_similarity(a: list[float], b: list[float]) -> float:
+    """Compute cosine similarity between two vectors."""
+    dot = sum(x * y for x, y in zip(a, b))
+    norm_a = sum(x**2 for x in a) ** 0.5
+    norm_b = sum(x**2 for x in b) ** 0.5
+    if norm_a == 0 or norm_b == 0:
+        return 0.0
+    return dot / (norm_a * norm_b)
+`} language="python" filename="long_term_memory.py (1/3) -- Data structures" />
+
+The `Memory` dataclass captures everything about a single memory: its text content, its type (episodic, semantic, or procedural), arbitrary metadata for structured queries, the embedding vector for similarity search, timestamps, and an access counter for tracking how often the memory is retrieved.
+
+Now let's build the `LongTermMemory` class itself.
+
+<CodeBlock code={`class LongTermMemory:
+    """
+    Persistent long-term memory with semantic search.
+    Uses SQLite for storage and cosine similarity for retrieval.
+    """
+
+    def __init__(self, db_path: str = "agent_memory.db"):
+        self.db_path = db_path
+        self.conn = sqlite3.connect(db_path)
+        self._create_tables()
+
+    def _create_tables(self) -> None:
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS memories (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                content TEXT NOT NULL,
+                memory_type TEXT NOT NULL DEFAULT 'semantic',
+                metadata TEXT NOT NULL DEFAULT '{}',
+                embedding TEXT NOT NULL DEFAULT '[]',
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL,
+                access_count INTEGER NOT NULL DEFAULT 0
+            )
+        """)
+        self.conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_memory_type
+            ON memories(memory_type)
+        """)
+        self.conn.commit()
+
+    def store(self, content: str, memory_type: str = "semantic",
+              metadata: Optional[dict] = None) -> Memory:
+        """
+        Store a new memory. Checks for duplicates first -- if a
+        semantically similar memory exists (similarity > 0.9),
+        the existing memory is updated instead.
+        """
+        embedding = compute_embedding(content)
+        now = time.time()
+
+        # Check for near-duplicate
+        existing = self._find_duplicate(embedding, threshold=0.9)
+        if existing:
+            return self.update(existing.id, content, metadata)
+
+        meta_json = json.dumps(metadata or {})
+        emb_json = json.dumps(embedding)
+
+        cursor = self.conn.execute(
+            """INSERT INTO memories
+               (content, memory_type, metadata, embedding, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (content, memory_type, meta_json, emb_json, now, now),
+        )
+        self.conn.commit()
+
+        return Memory(
+            id=cursor.lastrowid, content=content,
+            memory_type=memory_type, metadata=metadata or {},
+            embedding=embedding, created_at=now, updated_at=now,
+        )
+
+    def retrieve(self, query: str, top_k: int = 5,
+                 memory_type: Optional[str] = None) -> list[Memory]:
+        """
+        Retrieve the most relevant memories for a query using
+        cosine similarity over embeddings.
+        """
+        query_embedding = compute_embedding(query)
+
+        # Load candidate memories
+        if memory_type:
+            rows = self.conn.execute(
+                "SELECT * FROM memories WHERE memory_type = ?",
+                (memory_type,),
+            ).fetchall()
+        else:
+            rows = self.conn.execute("SELECT * FROM memories").fetchall()
+
+        # Score each memory by similarity
+        scored = []
+        for row in rows:
+            mem = self._row_to_memory(row)
+            score = cosine_similarity(query_embedding, mem.embedding)
+            scored.append((score, mem))
+
+        # Sort by similarity (descending) and return top-K
+        scored.sort(key=lambda x: x[0], reverse=True)
+        results = []
+        for score, mem in scored[:top_k]:
+            # Update access count
+            self.conn.execute(
+                "UPDATE memories SET access_count = access_count + 1 WHERE id = ?",
+                (mem.id,),
+            )
+            mem.access_count += 1
+            results.append(mem)
+
+        self.conn.commit()
+        return results
+
+    def search_by_type(self, memory_type: str) -> list[Memory]:
+        """Retrieve all memories of a specific type (exact match)."""
+        rows = self.conn.execute(
+            "SELECT * FROM memories WHERE memory_type = ? ORDER BY updated_at DESC",
+            (memory_type,),
+        ).fetchall()
+        return [self._row_to_memory(row) for row in rows]
+
+    def update(self, memory_id: int, new_content: str,
+               new_metadata: Optional[dict] = None) -> Memory:
+        """Update an existing memory with new content."""
+        now = time.time()
+        embedding = compute_embedding(new_content)
+        meta_json = json.dumps(new_metadata or {})
+
+        self.conn.execute(
+            """UPDATE memories
+               SET content = ?, metadata = ?, embedding = ?, updated_at = ?
+               WHERE id = ?""",
+            (new_content, meta_json, json.dumps(embedding), now, memory_id),
+        )
+        self.conn.commit()
+
+        return Memory(
+            id=memory_id, content=new_content,
+            memory_type="semantic", metadata=new_metadata or {},
+            embedding=embedding, updated_at=now,
+        )
+
+    def _find_duplicate(self, embedding: list[float],
+                        threshold: float) -> Optional[Memory]:
+        """Find an existing memory with similarity above the threshold."""
+        rows = self.conn.execute("SELECT * FROM memories").fetchall()
+        for row in rows:
+            mem = self._row_to_memory(row)
+            if cosine_similarity(embedding, mem.embedding) > threshold:
+                return mem
+        return None
+
+    def _row_to_memory(self, row: tuple) -> Memory:
+        return Memory(
+            id=row[0], content=row[1], memory_type=row[2],
+            metadata=json.loads(row[3]), embedding=json.loads(row[4]),
+            created_at=row[5], updated_at=row[6], access_count=row[7],
+        )
+`} language="python" filename="long_term_memory.py (2/3) -- LongTermMemory class" />
+
+The class follows the store-retrieve-update cycle directly. The `store` method computes an embedding, checks for near-duplicates, and either creates a new record or updates an existing one. The `retrieve` method computes a query embedding, scores every candidate memory by cosine similarity, and returns the top-K results. The `update` method replaces a memory's content and recomputes its embedding.
+
+One important limitation: this implementation scans all memories for similarity search. That works fine for thousands of memories but does not scale to millions. In Lesson 05, you will learn about vector databases (Pinecone, Weaviate, Chroma, pgvector) that use approximate nearest-neighbor algorithms to search millions of vectors in milliseconds.
+
+## Using the Memory System
+
+Here is how an agent would use the `LongTermMemory` class across sessions.
+
+<CodeBlock code={`# --- Session 1: Agent learns about the user ---
+memory = LongTermMemory(db_path="agent_memory.db")
+
+# Store user preferences (semantic memory)
+memory.store(
+    "User prefers Python over JavaScript for backend work",
+    memory_type="semantic",
+    metadata={"category": "user_preference", "user_id": "u_42"},
+)
+
+memory.store(
+    "User's production database is PostgreSQL 15 on AWS RDS us-east-1",
+    memory_type="semantic",
+    metadata={"category": "infrastructure", "user_id": "u_42"},
+)
+
+# Store a task outcome (episodic memory)
+memory.store(
+    "Attempted to refactor auth module on 2025-01-15. First approach "
+    "broke backward compatibility. Second approach using the adapter "
+    "pattern was accepted by the user.",
+    memory_type="episodic",
+    metadata={"task": "auth_refactor", "outcome": "success"},
+)
+
+# Store a learned procedure (procedural memory)
+memory.store(
+    "When deploying to production: 1) Run database migrations, "
+    "2) Deploy the new container image, 3) Run smoke tests, "
+    "4) Enable traffic routing. Never skip the migration step.",
+    memory_type="procedural",
+    metadata={"category": "deployment", "importance": "critical"},
+)
+
+print(f"Stored {len(memory.search_by_type('semantic'))} semantic memories")
+print(f"Stored {len(memory.search_by_type('episodic'))} episodic memories")
+print(f"Stored {len(memory.search_by_type('procedural'))} procedural memories")
+
+
+# --- Session 2: Agent retrieves relevant context ---
+memory = LongTermMemory(db_path="agent_memory.db")  # reconnect
+
+# User asks: "Set up a new API endpoint"
+relevant = memory.retrieve("building a backend API endpoint", top_k=3)
+for mem in relevant:
+    print(f"[{mem.memory_type}] {mem.content[:80]}...")
+
+# Output might include:
+#   [semantic] User prefers Python over JavaScript for backend work...
+#   [semantic] User's production database is PostgreSQL 15 on AWS RDS...
+#   [procedural] When deploying to production: 1) Run database migrations...
+
+# The agent now knows to write Python, connect to PostgreSQL,
+# and follow the deployment procedure -- without asking again.
+`} language="python" filename="long_term_memory.py (3/3) -- Usage across sessions" />
+
+Notice that session 2 connects to the same database file and immediately has access to everything learned in session 1. The agent does not need to ask the user their language preference or database setup again. The `retrieve` call finds the most relevant memories for the current task, and the agent can inject them into its context alongside the current conversation.
+
+## Comparing Storage Backends
+
+The SQLite implementation above is a good starting point, but production systems have different requirements. Here is how the most common storage backends compare for long-term memory.
+
+| Backend | Best For | Vector Search | Scalability | Setup Complexity |
+|---------|----------|---------------|-------------|-----------------|
+| **SQLite** | Prototyping, single-user agents | Manual (scan all rows) | Thousands of memories | Minimal -- no server needed |
+| **PostgreSQL + pgvector** | Production apps with existing Postgres | Native (HNSW / IVFFlat indexes) | Millions of memories | Moderate -- requires extension |
+| **Redis + RedisVSS** | Low-latency, session-heavy workloads | Native (HNSW indexes) | Millions, in-memory | Moderate -- requires Redis Stack |
+| **Chroma / Pinecone / Weaviate** | Dedicated vector-first workloads | Native (optimized ANN) | Billions of vectors | Low to moderate (managed services) |
+
+**SQLite** is the right choice when you are prototyping or building a single-user desktop agent. It requires no server, stores everything in one file, and is fast enough for small memory collections. The downside is that similarity search requires scanning every row, which degrades beyond tens of thousands of memories.
+
+**PostgreSQL with pgvector** is often the best production choice when your application already uses PostgreSQL. The `pgvector` extension adds native vector columns and indexing (HNSW or IVFFlat), so you get similarity search without adding a separate database. You keep metadata, relations, and vectors in the same transactional database. This is what many production agent systems use.
+
+**Redis with vector search** excels when you need sub-millisecond retrieval latency and your memories fit in memory. Redis Stack includes vector similarity search with HNSW indexing. It is particularly good for session-scoped memory where you need extremely fast reads, but it requires careful memory management for large collections.
+
+**Dedicated vector databases** like Chroma, Pinecone, and Weaviate are purpose-built for embedding storage and search. They offer the best vector search performance and scale to billions of vectors. The trade-off is operational complexity -- you now have another database to manage, and you need a separate system for structured metadata queries. These are covered in depth in Lesson 05.
+
+> **Practical advice:** Start with SQLite. When you need production scale, move to PostgreSQL + pgvector if you already run Postgres, or to a managed vector database if you want to offload infrastructure. Do not optimize for scale before you have validated that the memory system is useful.
+
+## Memory Lifecycle and Maintenance
+
+Long-term memory is not "store and forget." Over time, memories become outdated, redundant, or irrelevant. A healthy memory system needs lifecycle management.
+
+**Decay and importance scoring.** Not all memories are equally valuable. A memory that has been retrieved frequently is likely more important than one that has never been accessed. Some systems implement a **decay function** that reduces a memory's relevance score over time unless it is reinforced by access. The `access_count` field in our `Memory` class is the foundation for this -- memories that are never retrieved can be archived or deleted.
+
+**Conflict resolution.** When new information contradicts an existing memory, the system needs a strategy. "The production database is on PostgreSQL 14" might need updating to "PostgreSQL 15" after an upgrade. The simplest approach is last-write-wins with a merge step. More sophisticated systems keep a version history so the agent can reason about how facts changed over time.
+
+**Memory compaction.** Over many sessions, the agent accumulates hundreds of small, overlapping memories. Periodically, the system should compact related memories into consolidated summaries. Five memories about a user's code style preferences can be merged into one comprehensive preference profile. This reduces storage and makes retrieval faster.
+
+## Summary
+
+**Long-term memory** gives agents the ability to persist knowledge across sessions, transforming them from stateless tools into learning systems that improve over time. The architecture combines a vector store for semantic similarity search, a structured database for exact queries and metadata, and optionally file storage for large documents.
+
+- **Episodic memory** records specific past experiences -- what happened, what worked, what failed
+- **Semantic memory** stores general facts and knowledge -- user preferences, domain information, configuration details
+- **Procedural memory** captures learned workflows and action patterns -- how to deploy, how to handle errors, how to format output
+- The **store-retrieve-update cycle** governs memory creation, deduplication, retrieval by similarity or exact query, and ongoing maintenance
+- Storage backends range from **SQLite** for prototyping to **PostgreSQL + pgvector** for production to **dedicated vector databases** for extreme scale
+- Memory lifecycle management -- decay scoring, conflict resolution, and compaction -- keeps the memory system healthy as it grows
+
+The `LongTermMemory` class you built here uses a placeholder embedding function. In the next lesson, **Retrieval-Augmented Generation (RAG)**, you will learn how to give agents access to external knowledge bases -- documents, databases, and APIs -- so they can answer questions grounded in real data, not just their training knowledge.
