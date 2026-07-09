@@ -20,6 +20,7 @@
 - Average lesson target: 350–500 lines. Lab lessons: 700–900 lines.
 - Python code examples use type hints and are self-contained (no framework imports).
 - Design spec: `docs/superpowers/specs/2026-07-09-agent-harnesses-runtime-design.md`
+- **Commit policy:** Commit after each task if using incremental commits; otherwise keep changes staged and commit once after all quality gates pass in Task 14.
 
 ---
 
@@ -69,12 +70,25 @@ content/**/*.mdx                      # Update all "Module N" cross-references
 **Files:**
 - Modify: `content/module-5/` through `content/module-12/` (rename directories)
 - Modify: `content/module-{6..13}/meta.json` (update `id` fields)
-- Modify: `content/**/*.mdx` (update all cross-references)
+- Modify: `content/**/*.mdx` and `content/**/*.md`, `content/**/*.json`, `docs/**/*.md` (update all cross-references)
 - Modify: `academy.config.ts` (add 13th color entry)
 
 **Interfaces:**
 - Consumes: nothing
 - Produces: Renumbered module directories with consecutive IDs 1–4, 6–13 (gap at 5 for the new module). All cross-references updated. Navigation and routing continue to work.
+
+- [ ] **Step 0: Preflight safety checks**
+
+Verify all source directories exist, the target directory does not, and the working tree is clean:
+
+```bash
+cd /Users/szaher/go/src/github.com/szaher/saad/learn/agents
+ls content/module-{5,6,7,8,9,10,11,12}/meta.json
+test ! -d content/module-13 && echo "OK: module-13 does not exist" || echo "ABORT: module-13 already exists"
+git status --short
+```
+
+Expected: all 8 meta.json files listed, module-13 does not exist, working tree is clean (or only has expected staged changes). If module-13 exists or the tree has unrelated changes, stop and resolve before proceeding.
 
 - [ ] **Step 1: Rename directories from highest to lowest**
 
@@ -128,15 +142,24 @@ find content/ -name "*.mdx" -exec perl -i -pe '
 find content/ -name "*.mdx" -exec perl -i -pe 's/§//g' {} \;
 ```
 
-- [ ] **Step 4: Update title references that include old module numbers**
+- [ ] **Step 4: Update cross-references beyond MDX**
 
-Some cross-references include old module titles in parentheses. Verify and fix any that now have wrong numbers. Check for patterns like "Module 6 (Design Patterns)" which should now read "Module 6 (Agent Design Patterns)" — the titles stay the same, only the numbers change.
+References may also exist in meta.json descriptions, docs, scripts, README, or tutorial specs. Search broadly:
 
 ```bash
 cd /Users/szaher/go/src/github.com/szaher/saad/learn/agents
-# Verify: search for any remaining old-number references
+grep -RIn "Module [5-9]\b\|Module 1[0-2]\b" content/ docs/ --include="*.mdx" --include="*.md" --include="*.json" | grep -v "node_modules" | head -100
+```
+
+Inspect results. Apply the same `§`-marker replacement to any non-MDX files that contain stale module numbers. Meta.json `description` fields and doc files are the most likely locations.
+
+- [ ] **Step 5: Verify no stale references remain**
+
+```bash
+cd /Users/szaher/go/src/github.com/szaher/saad/learn/agents
+# Check that no old "Module 5" references exist outside the future module-5
 grep -rn "Module 5" content/module-{1,2,3,4,6,7,8,9,10,11,12,13}/ --include="*.mdx" | head -20
-# Should return 0 results (all "Module 5" in modules other than the future module-5 should be gone)
+# Should return 0 results
 ```
 
 - [ ] **Step 5: Add 13th entry to academy.config.ts moduleColors**
@@ -1038,7 +1061,7 @@ This is the first build lab. Students incrementally construct a working harness.
 - Connect to Lesson 10: extend with state, checkpoints, tracing, and an approval gate.
 ```
 
-All `<CodeBlock>` components must contain complete, syntactically valid Python with type hints. Each stage builds on the previous. The final harness.py must be self-contained (copy-paste-runnable with an API key).
+Each stage is a progressive snippet showing only the new/changed code. The final `harness.py` `<CodeBlock>` is the complete, self-contained, copy-paste-runnable version (with an API key). Avoid duplicating full code across stages — use progressive diffs with clear annotations of what changed. The key requirement: **each stage is understandable; the final code block is complete and runnable.**
 
 - [ ] **Step 2: Verify all code examples are syntactically valid**
 
@@ -1327,7 +1350,28 @@ pnpm build
 
 Expected: Build completes successfully. All 13 modules render. All lesson routes work.
 
-- [ ] **Step 5: Verify cross-reference correctness**
+- [ ] **Step 5: Verify MDX component props and heading constraints**
+
+Check that all `<CodeBlock>` components have required props, all `<MermaidDiagram>` components have `chart`, and no raw H1 headings appear in lesson bodies:
+
+```bash
+cd /Users/szaher/go/src/github.com/szaher/saad/learn/agents
+
+# Check for CodeBlock components missing required props
+grep -RIn "<CodeBlock" content/module-5/ | grep -v "code=" | head -10
+grep -RIn "<CodeBlock" content/module-5/ | grep -v "language=" | head -10
+
+# Check for MermaidDiagram components missing chart prop
+grep -RIn "<MermaidDiagram" content/module-5/ | grep -v "chart=" | head -10
+
+# Check for raw H1 headings in lesson bodies (should be 0 matches)
+# Exclude frontmatter title field — only match lines starting with "# " in body
+grep -RIn '^# ' content/module-5/*.mdx | grep -v '^[^:]*:1:' | head -10
+```
+
+Expected: No matches from any of these checks. Fix any violations before proceeding.
+
+- [ ] **Step 6: Verify cross-reference correctness**
 
 Spot-check that renumbered references are correct:
 
@@ -1352,7 +1396,7 @@ done
 
 Expected: 13 modules, all IDs match directory numbers, consecutive from 1 to 13.
 
-- [ ] **Step 6: Commit any fixes**
+- [ ] **Step 7: Commit any fixes**
 
 If any quality gate fails, fix the issue and commit:
 
@@ -1361,7 +1405,7 @@ git add -A
 git commit -m "Fix quality gate issues in Module 5 content"
 ```
 
-- [ ] **Step 7: Final commit if all gates pass**
+- [ ] **Step 8: Final commit if all gates pass**
 
 ```bash
 git add -A
