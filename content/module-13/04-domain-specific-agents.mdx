@@ -1,0 +1,619 @@
+---
+title: "Domain-Specific Agents"
+quiz:
+  - question: "What is the primary purpose of a compliance layer in a domain-specific agent architecture?"
+    options:
+      - "To improve the agent's response latency by caching frequent queries"
+      - "To ensure the agent's actions and outputs conform to industry regulations, policies, and safety constraints"
+      - "To translate domain terminology into natural language for end users"
+      - "To route requests to the correct specialized tool"
+    correctIndex: 1
+  - question: "When building a customer support agent, why is confidence-based escalation preferred over keyword-based escalation?"
+    options:
+      - "Keyword-based escalation is faster but less accurate"
+      - "Confidence-based escalation uses fewer tokens per request"
+      - "Keyword matching misses nuanced situations where the agent is uncertain, while confidence scoring captures the agent's actual ability to resolve the issue"
+      - "Confidence-based escalation does not require a knowledge base"
+    correctIndex: 2
+  - question: "In a DevOps incident response agent, what is the correct order of operations when an alert fires?"
+    options:
+      - "Execute runbook, classify severity, gather context, notify team"
+      - "Classify severity, gather context from logs and metrics, execute the matching runbook, escalate if unresolved"
+      - "Notify the on-call team, wait for instructions, then gather logs"
+      - "Gather all logs from every service, then classify severity"
+    correctIndex: 1
+  - question: "Which domain-specific evaluation strategy pairs a generated SQL query with its expected output to verify correctness?"
+    options:
+      - "Human-in-the-loop review"
+      - "Static analysis of query syntax"
+      - "Execution-based evaluation, where the query runs against a test database and results are compared to known-good answers"
+      - "Prompt-based self-critique where the LLM reviews its own query"
+    correctIndex: 2
+---
+
+## Overview
+
+In the previous three lessons, we examined agents built for specific technical tasks -- computer use, coding, and research. Each of those agents operates in a domain with well-defined inputs and outputs: screens to interact with, code to write, or sources to synthesize. But the vast majority of real-world agent deployments target **vertical domains** where the rules, data, and success criteria are shaped by business context rather than technical format.
+
+A customer support agent does not just answer questions -- it must follow escalation policies, access ticket history, and respect SLA commitments. A data analysis agent does not just run SQL -- it must understand business metrics, handle messy schemas, and present insights that drive decisions. These are **domain-specific agents**, and building them well requires a systematic architecture that layers domain knowledge, specialized tools, compliance constraints, and evaluation criteria on top of the general agent patterns you have learned throughout this course.
+
+This lesson introduces a reusable architectural template for domain-specific agents and applies it across four verticals: customer support, data analysis, DevOps, and enterprise workflows. You will see how the foundational patterns from Modules 3-7 -- tool use, memory, planning, multi-agent coordination, and guardrails -- combine differently depending on the domain.
+
+## The Domain-Specific Agent Template
+
+Every effective domain-specific agent shares four structural layers. The specifics change by domain, but the architecture is consistent.
+
+<MermaidDiagram chart={`graph TD
+    subgraph Input["Input Layer"]
+        U["User Request /<br/>Trigger Event"]
+    end
+
+    subgraph Core["Agent Core"]
+        R["Reasoning Engine<br/>(LLM + Planning)"]
+    end
+
+    subgraph DK["Domain Knowledge Layer"]
+        KB["Knowledge Base<br/>(docs, FAQs, runbooks)"]
+        SC["Schema & Ontology<br/>(domain data model)"]
+        HP["Historical Patterns<br/>(past decisions, outcomes)"]
+    end
+
+    subgraph Tools["Specialized Tool Layer"]
+        T1["Domain APIs<br/>(ticketing, databases, CI/CD)"]
+        T2["Analysis Tools<br/>(SQL, visualization, parsing)"]
+        T3["Action Tools<br/>(escalate, deploy, approve)"]
+    end
+
+    subgraph Compliance["Compliance & Guardrails Layer"]
+        POL["Policy Engine<br/>(rules, SLAs, regulations)"]
+        AUD["Audit Trail<br/>(logging, explainability)"]
+        ESC["Escalation Logic<br/>(human-in-the-loop gates)"]
+    end
+
+    subgraph Eval["Domain-Specific Evaluation"]
+        M1["Accuracy Metrics<br/>(domain-specific correctness)"]
+        M2["Process Metrics<br/>(SLA adherence, resolution time)"]
+        M3["Safety Metrics<br/>(policy violations, false actions)"]
+    end
+
+    U --> R
+    R --> KB
+    R --> SC
+    R --> HP
+    R --> T1
+    R --> T2
+    R --> T3
+    R --> POL
+    POL --> AUD
+    POL --> ESC
+    R --> M1
+    R --> M2
+    R --> M3
+
+    style Input fill:#ebf8ff,stroke:#3182ce,stroke-width:2px
+    style Core fill:#fefcbf,stroke:#d69e2e,stroke-width:2px
+    style DK fill:#f0fff4,stroke:#276749,stroke-width:2px
+    style Tools fill:#faf5ff,stroke:#6b46c1,stroke-width:2px
+    style Compliance fill:#fff5f5,stroke:#c53030,stroke-width:2px
+    style Eval fill:#fefcbf,stroke:#b7791f,stroke-width:2px
+`} />
+
+The four layers work together in every request:
+
+- **Domain Knowledge Layer** gives the agent context about the specific business domain -- terminology, data schemas, and historical patterns. This is what separates a generic chatbot from a domain expert. You built the foundations for this in Module 7 (Memory) and Module 8 (RAG).
+- **Specialized Tool Layer** exposes the domain's systems as callable tools. These are not generic web searches or code interpreters -- they are APIs specific to the vertical (ticketing systems, databases, deployment pipelines). Module 3 (Tool Use) covered the mechanics; here we apply them to domain-specific integrations.
+- **Compliance & Guardrails Layer** enforces the rules of the domain. Every vertical has constraints that the agent must respect -- regulatory requirements, internal policies, escalation thresholds. Module 11 (Guardrails) introduced these patterns; domain-specific agents make them non-negotiable.
+- **Domain-Specific Evaluation** measures success in the domain's own terms. A customer support agent is measured by resolution rate and customer satisfaction, not by generic LLM benchmarks. Module 12 (Evaluation) gave you the evaluation framework; here you fill it with domain-relevant metrics.
+
+## Four Domains Compared
+
+Before diving into each domain, here is a side-by-side comparison of how the template instantiates differently across verticals.
+
+<MermaidDiagram chart={`graph LR
+    subgraph CS["Customer Support"]
+        CS1["Knowledge: FAQs,<br/>product docs, ticket history"]
+        CS2["Tools: Ticketing API,<br/>CRM lookup, KB search"]
+        CS3["Compliance: SLA timers,<br/>escalation policies,<br/>tone guidelines"]
+        CS4["Eval: Resolution rate,<br/>CSAT, escalation %"]
+    end
+
+    subgraph DA["Data Analysis"]
+        DA1["Knowledge: Schema docs,<br/>metric definitions,<br/>past queries"]
+        DA2["Tools: SQL engine,<br/>charting library,<br/>data catalog"]
+        DA3["Compliance: Data access<br/>controls, PII masking,<br/>query cost limits"]
+        DA4["Eval: Query correctness,<br/>insight relevance,<br/>execution time"]
+    end
+
+    subgraph DO["DevOps"]
+        DO1["Knowledge: Runbooks,<br/>architecture docs,<br/>incident history"]
+        DO2["Tools: Log aggregator,<br/>metrics API, CI/CD,<br/>alerting system"]
+        DO3["Compliance: Change mgmt<br/>approval, blast radius<br/>limits, rollback rules"]
+        DO4["Eval: MTTR, false positive<br/>rate, runbook accuracy"]
+    end
+
+    subgraph EW["Enterprise Workflow"]
+        EW1["Knowledge: Process maps,<br/>org chart, regulatory<br/>requirements"]
+        EW2["Tools: Document parser,<br/>approval engine,<br/>ERP/CRM APIs"]
+        EW3["Compliance: Approval chains,<br/>audit requirements,<br/>data retention"]
+        EW4["Eval: Processing time,<br/>accuracy rate,<br/>compliance score"]
+    end
+
+    style CS fill:#ebf8ff,stroke:#3182ce,stroke-width:2px
+    style DA fill:#f0fff4,stroke:#276749,stroke-width:2px
+    style DO fill:#faf5ff,stroke:#6b46c1,stroke-width:2px
+    style EW fill:#fefcbf,stroke:#d69e2e,stroke-width:2px
+`} />
+
+Notice how each domain fills the same four slots with entirely different content. The architecture is reusable; the domain knowledge is not. This is the central insight: **you do not need to invent a new agent architecture for every vertical -- you need to deeply understand each domain's knowledge, tools, constraints, and success metrics**.
+
+## Customer Support Agents
+
+**Customer support agents** are among the most widely deployed domain-specific agents. They handle ticket classification, knowledge base lookup, response generation, and escalation to human agents when needed.
+
+The key challenge is not generating fluent text -- any LLM can do that. The challenge is **knowing when the agent can handle a case and when it should escalate**. A customer support agent that confidently gives wrong answers destroys trust faster than one that says "Let me connect you with a specialist."
+
+### Ticket Routing and Classification
+
+The first task in any support workflow is **ticket classification** -- determining the category, priority, and required skill set for an incoming request. This is a structured output problem (Module 2, Lesson 3) combined with domain knowledge.
+
+Effective classification requires:
+
+- **Category taxonomy** -- a well-defined set of issue types (billing, technical, account access, feature request, complaint)
+- **Priority signals** -- keywords and patterns that indicate urgency (production down, data loss, security breach)
+- **Skill routing** -- mapping categories to the teams or agents best equipped to handle them
+
+### Knowledge Base Integration
+
+Once classified, the agent searches a **domain knowledge base** for relevant articles, past resolutions, and product documentation. This is the RAG pattern from Module 8 applied to a specific corpus. The retrieval quality directly determines whether the agent can self-resolve or must escalate.
+
+The knowledge base is not static. Production support agents continuously learn from resolved tickets -- when a human agent resolves a novel issue, that resolution becomes a new knowledge base entry. This creates a **flywheel effect**: the more tickets the system handles, the better its knowledge base becomes, and the higher its self-resolution rate grows over time.
+
+### Escalation Logic
+
+**Escalation** is where most naive support agents fail. Simple keyword-based escalation ("if the customer says 'cancel', escalate") misses nuanced situations. Confidence-based escalation is far more effective:
+
+- The agent classifies the ticket and retrieves knowledge base articles
+- It generates a candidate response and assesses its own **confidence score**
+- If confidence is below a threshold, or if the issue matches an escalation policy (legal threat, safety concern, VIP customer), it routes to a human agent
+- The escalation includes the agent's analysis so the human does not start from scratch
+
+This mirrors the human-in-the-loop gating pattern from Module 11 -- the agent does the work, but a confidence gate controls whether it acts autonomously or hands off.
+
+## Data Analysis Agents
+
+**Data analysis agents** translate natural language questions into SQL queries, execute them against databases, and present the results as insights with visualizations. The pattern is sometimes called **text-to-SQL**, but production systems go well beyond query generation.
+
+### SQL Generation
+
+The core capability is translating business questions like "What was our revenue by region last quarter?" into correct SQL. This requires:
+
+- **Schema understanding** -- the agent must know the table structures, column types, and join relationships. This is typically provided as context in the system prompt or retrieved from a data catalog.
+- **Business metric definitions** -- "revenue" might mean gross revenue, net revenue, or ARR depending on the organization. The agent needs access to a **metric glossary** that defines these terms precisely.
+- **Query safety** -- generated queries must be read-only (no mutations), bounded (no full table scans on billion-row tables), and efficient (reasonable use of indexes and joins).
+
+### Visualization and Insight Extraction
+
+Raw query results are rarely useful on their own. A data analysis agent adds value by:
+
+- Selecting the appropriate **chart type** based on the data shape (time series gets a line chart, category comparison gets a bar chart, proportions get a pie chart)
+- Highlighting **anomalies** and trends in the results
+- Generating a **natural language summary** that explains what the data shows and why it matters
+
+### Guardrails for Data Agents
+
+Data analysis agents need strict guardrails because they operate on production data:
+
+- **Query cost limits** -- prevent queries that would scan terabytes of data and cost thousands of dollars
+- **PII masking** -- ensure that query results do not expose personally identifiable information to unauthorized users
+- **Access control** -- the agent should only query tables and columns that the requesting user has permission to see
+- **Execution sandboxing** -- run generated SQL in a read-only replica, never against the production database
+
+## DevOps Agents
+
+**DevOps agents** respond to incidents, analyze logs and metrics, and execute runbooks to resolve infrastructure issues. They are the domain where agent autonomy is most consequential -- a wrong action can take down production systems.
+
+### Incident Response Flow
+
+When an alert fires, a DevOps agent follows a structured flow:
+
+1. **Classify severity** -- based on the alert type, affected services, and impact scope (P1 through P4)
+2. **Gather context** -- pull recent logs, metrics, and deployment history for affected services
+3. **Match to runbook** -- find the documented response procedure for this type of incident
+4. **Execute remediation** -- follow the runbook steps, which might include restarting services, rolling back deployments, or scaling infrastructure
+5. **Escalate if unresolved** -- if automated remediation fails, page the on-call engineer with all gathered context
+
+### Log Analysis and Pattern Matching
+
+Log analysis is where LLM-based agents dramatically outperform rule-based systems. Traditional log monitoring relies on predefined patterns -- you write regex rules for known error signatures. An LLM-based agent can:
+
+- Identify **novel error patterns** that do not match any existing rule
+- **Correlate across services** -- connect an error in Service A to a latency spike in Service B that happened 30 seconds earlier
+- **Summarize** thousands of log lines into a concise incident narrative
+
+### Runbook Execution with Safety Gates
+
+**Runbooks** are documented procedures for handling specific incident types. A DevOps agent can execute runbook steps automatically, but safety is paramount. The pattern is:
+
+- **Read-only actions** (querying logs, checking metrics, listing pods) execute automatically
+- **Reversible actions** (scaling up replicas, adding a feature flag) execute with logging but no approval gate
+- **Irreversible actions** (deleting resources, modifying database schemas, rolling back to a previous version) require **explicit human approval** before execution
+
+This tiered approach, which you studied in Module 11 as the blast radius pattern, is essential for DevOps agents. The agent can handle 80% of incident response autonomously while ensuring that high-risk actions always have human oversight.
+
+## Enterprise Workflow Agents
+
+**Enterprise workflow agents** automate document-heavy business processes: invoice processing, contract review, employee onboarding, compliance reporting, and approval chains. These are high-volume, repetitive tasks where manual processing is slow and error-prone.
+
+### Document Processing
+
+The first step in most enterprise workflows is **document ingestion and extraction**. The agent receives a document (PDF invoice, scanned contract, email attachment) and extracts structured data:
+
+- **Named entity extraction** -- vendor name, invoice number, line items, amounts, dates
+- **Classification** -- what type of document is this? (purchase order, invoice, receipt, contract amendment)
+- **Validation** -- do the extracted values make sense? (does the total match the sum of line items? is the date in a valid range?)
+
+This combines the structured output patterns from Module 2 with domain-specific validation rules.
+
+### Approval Chains
+
+Enterprise processes almost always involve **approval chains** -- a series of human approvals required before an action can proceed. The agent's role is to:
+
+- Determine the **correct approval path** based on the request type, amount, and organizational rules (purchases over $10,000 need VP approval; international contracts need legal review)
+- **Route** the request to the right approver with a summary and recommendation
+- **Track** approval status and send reminders for stalled requests
+- **Enforce** segregation of duties (the person who submits a request cannot approve it)
+
+This is a multi-agent coordination problem (Module 9) where some of the "agents" are humans with specific organizational roles.
+
+### Compliance and Audit
+
+Enterprise workflow agents operate in heavily regulated environments. Every action must be:
+
+- **Logged** with a full audit trail (who requested, who approved, what changed, when)
+- **Compliant** with regulations like SOX, GDPR, HIPAA, or industry-specific requirements
+- **Explainable** -- if an auditor asks why a decision was made, the system must be able to reconstruct the reasoning
+
+The compliance layer is not optional for enterprise agents. It is a hard requirement that must be designed into the architecture from the start, not bolted on afterward.
+
+## Building a Customer Support Agent
+
+Let us bring these patterns together by building a customer support agent that classifies tickets, searches a knowledge base, generates responses, and escalates when confidence is low. This example combines tool use (Module 3), structured outputs (Module 2), RAG retrieval (Module 8), and human-in-the-loop gating (Module 11).
+
+<CodeBlock code={`import anthropic
+import json
+from dataclasses import dataclass
+from enum import Enum
+
+
+# --- Domain Models ---
+
+class TicketCategory(str, Enum):
+    BILLING = "billing"
+    TECHNICAL = "technical"
+    ACCOUNT_ACCESS = "account_access"
+    FEATURE_REQUEST = "feature_request"
+    COMPLAINT = "complaint"
+
+class TicketPriority(str, Enum):
+    URGENT = "urgent"      # P1: Production down, data loss
+    HIGH = "high"          # P2: Major feature broken
+    MEDIUM = "medium"      # P3: Minor issue, workaround exists
+    LOW = "low"            # P4: Question, enhancement
+
+@dataclass
+class TicketClassification:
+    category: TicketCategory
+    priority: TicketPriority
+    confidence: float           # 0.0 to 1.0
+    requires_escalation: bool
+    escalation_reason: str | None
+
+@dataclass
+class KBArticle:
+    id: str
+    title: str
+    content: str
+    relevance_score: float
+
+
+# --- Knowledge Base (simulated) ---
+
+KNOWLEDGE_BASE = [
+    KBArticle(
+        id="kb-001",
+        title="How to Reset Your Password",
+        content="Go to Settings > Security > Reset Password. Click the reset "
+                "link sent to your registered email. The link expires in 24 hours.",
+        relevance_score=0.0,
+    ),
+    KBArticle(
+        id="kb-002",
+        title="Understanding Your Invoice",
+        content="Invoices are generated on the 1st of each month. Line items "
+                "include base subscription, add-ons, and usage-based charges. "
+                "Discounts appear as negative line items.",
+        relevance_score=0.0,
+    ),
+    KBArticle(
+        id="kb-003",
+        title="API Rate Limits",
+        content="Free tier: 100 requests/minute. Pro tier: 1000 requests/minute. "
+                "Enterprise: custom limits. Rate limit errors return HTTP 429. "
+                "Implement exponential backoff for retries.",
+        relevance_score=0.0,
+    ),
+]
+
+
+# --- Tool Definitions ---
+
+TOOLS = [
+    {
+        "name": "classify_ticket",
+        "description": (
+            "Classify a support ticket into a category and priority. "
+            "Returns structured classification with confidence score."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "category": {
+                    "type": "string",
+                    "enum": [c.value for c in TicketCategory],
+                    "description": "The ticket category",
+                },
+                "priority": {
+                    "type": "string",
+                    "enum": [p.value for p in TicketPriority],
+                    "description": "The ticket priority level",
+                },
+                "confidence": {
+                    "type": "number",
+                    "minimum": 0.0,
+                    "maximum": 1.0,
+                    "description": "Confidence in the classification (0-1)",
+                },
+                "reasoning": {
+                    "type": "string",
+                    "description": "Brief explanation of the classification",
+                },
+            },
+            "required": ["category", "priority", "confidence", "reasoning"],
+        },
+    },
+    {
+        "name": "search_knowledge_base",
+        "description": (
+            "Search the knowledge base for articles relevant to the customer's "
+            "issue. Returns the top matching articles."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Search query derived from the ticket",
+                },
+                "max_results": {
+                    "type": "integer",
+                    "default": 3,
+                    "description": "Maximum number of articles to return",
+                },
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "escalate_to_human",
+        "description": (
+            "Escalate the ticket to a human agent. Use when confidence is low, "
+            "the issue is complex, or policy requires human review."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "reason": {
+                    "type": "string",
+                    "description": "Why this ticket needs human attention",
+                },
+                "summary": {
+                    "type": "string",
+                    "description": "Summary of analysis done so far",
+                },
+                "suggested_team": {
+                    "type": "string",
+                    "enum": ["billing_team", "engineering", "account_management",
+                             "legal", "senior_support"],
+                    "description": "Recommended team for escalation",
+                },
+            },
+            "required": ["reason", "summary", "suggested_team"],
+        },
+    },
+]
+
+
+# --- Tool Execution ---
+
+def execute_tool(tool_name: str, tool_input: dict) -> str:
+    """Execute a tool call and return the result as a string."""
+    if tool_name == "classify_ticket":
+        # In production, this might call an ML classifier or apply rules
+        return json.dumps({
+            "status": "classified",
+            "category": tool_input["category"],
+            "priority": tool_input["priority"],
+            "confidence": tool_input["confidence"],
+            "reasoning": tool_input["reasoning"],
+        })
+
+    elif tool_name == "search_knowledge_base":
+        # Simulate knowledge base search (production: vector DB + reranker)
+        query = tool_input["query"].lower()
+        results = []
+        for article in KNOWLEDGE_BASE:
+            # Simple keyword matching; production uses embeddings
+            score = sum(
+                1 for word in query.split()
+                if word in article.title.lower() or word in article.content.lower()
+            )
+            if score > 0:
+                results.append({
+                    "id": article.id,
+                    "title": article.title,
+                    "content": article.content,
+                    "relevance_score": min(score / len(query.split()), 1.0),
+                })
+        results.sort(key=lambda x: x["relevance_score"], reverse=True)
+        max_results = tool_input.get("max_results", 3)
+        return json.dumps({"articles": results[:max_results]})
+
+    elif tool_name == "escalate_to_human":
+        return json.dumps({
+            "status": "escalated",
+            "ticket_id": "ESC-2024-1234",
+            "assigned_team": tool_input["suggested_team"],
+            "message": f"Escalated to {tool_input['suggested_team']}: "
+                       f"{tool_input['reason']}",
+        })
+
+    return json.dumps({"error": f"Unknown tool: {tool_name}"})
+
+
+# --- Agent System Prompt ---
+
+SYSTEM_PROMPT = """You are a customer support agent for a SaaS platform. Follow
+this process for every incoming ticket:
+
+1. CLASSIFY: Use classify_ticket to determine category and priority. Assess your
+   confidence honestly -- if the issue is ambiguous, set confidence below 0.7.
+
+2. SEARCH: Use search_knowledge_base to find relevant articles for the issue.
+
+3. DECIDE:
+   - If confidence >= 0.8 AND you found relevant KB articles: draft a response
+     using the KB content. Be helpful, concise, and empathetic.
+   - If confidence < 0.7 OR the issue involves: billing disputes over $500,
+     legal threats, account security breaches, or VIP customers (enterprise
+     tier): use escalate_to_human with a summary of your analysis.
+   - If confidence is 0.7-0.8: draft a response but flag it for human review.
+
+4. RESPOND: Write your response to the customer. Always acknowledge their
+   frustration, provide clear next steps, and set expectations for resolution
+   time.
+
+Never make up information. If the knowledge base does not cover the issue, say
+so and escalate. Never promise refunds, credits, or policy exceptions without
+human approval."""
+
+
+# --- Agent Loop ---
+
+def handle_support_ticket(ticket_text: str) -> dict:
+    """Process a support ticket through the agent loop."""
+    client = anthropic.Anthropic()
+    messages = [{"role": "user", "content": ticket_text}]
+    escalated = False
+    classification = None
+    iterations = 0
+    max_iterations = 10
+
+    while iterations < max_iterations:
+        iterations += 1
+        response = client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=2048,
+            system=SYSTEM_PROMPT,
+            tools=TOOLS,
+            messages=messages,
+        )
+
+        # Check if the model wants to use tools
+        if response.stop_reason == "tool_use":
+            # Process each tool call in the response
+            tool_results = []
+            for block in response.content:
+                if block.type == "tool_use":
+                    result = execute_tool(block.name, block.input)
+
+                    # Track classification and escalation
+                    if block.name == "classify_ticket":
+                        classification = block.input
+                    elif block.name == "escalate_to_human":
+                        escalated = True
+
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": result,
+                    })
+
+            # Add assistant response and tool results to conversation
+            messages.append({"role": "assistant", "content": response.content})
+            messages.append({"role": "user", "content": tool_results})
+
+        elif response.stop_reason == "end_turn":
+            # Agent has finished -- extract the final response
+            final_response = ""
+            for block in response.content:
+                if hasattr(block, "text"):
+                    final_response = block.text
+                    break
+
+            return {
+                "response": final_response,
+                "classification": classification,
+                "escalated": escalated,
+                "iterations": iterations,
+            }
+
+    return {"error": "Max iterations reached", "iterations": iterations}
+
+
+# --- Example Usage ---
+
+if __name__ == "__main__":
+    # Test ticket: should resolve from knowledge base
+    result = handle_support_ticket(
+        "Hi, I keep getting HTTP 429 errors when calling your API. "
+        "I'm on the Pro plan. What's going on?"
+    )
+    print("=== Ticket Resolution ===")
+    print(f"Escalated: {result['escalated']}")
+    print(f"Category: {result.get('classification', {}).get('category')}")
+    print(f"Iterations: {result['iterations']}")
+    print(f"Response:\\n{result['response']}")
+`} language="python" filename="customer_support_agent.py" />
+
+This implementation demonstrates several patterns working together:
+
+- **Structured tool definitions** (Module 3) give the agent a clear interface for classification, knowledge base search, and escalation
+- **Confidence-based gating** (Module 11) controls when the agent resolves autonomously versus escalating -- the system prompt specifies explicit confidence thresholds
+- **Knowledge base retrieval** (Module 8) provides domain-specific context that grounds the agent's responses in verified information
+- **Agentic loop with stop conditions** (Module 4) keeps the agent iterating until it either resolves the ticket or escalates, with a max iteration guard to prevent runaway loops
+
+In production, you would replace the simulated knowledge base with a vector database and reranker, add logging and metrics collection to the tool execution layer, and connect the escalation tool to your actual ticketing system's API.
+
+## Cross-Domain Patterns
+
+Looking across all four domains, several patterns emerge that apply universally to domain-specific agents.
+
+**Domain knowledge is the moat.** The LLM provides reasoning and language capabilities, but the domain knowledge -- schemas, runbooks, policy documents, metric definitions -- is what makes the agent genuinely useful. Investing in high-quality, well-maintained domain knowledge produces larger returns than any prompt engineering technique.
+
+**Confidence-based escalation beats rule-based escalation.** Every domain has cases that the agent should not handle autonomously. Keyword matching and rigid rules miss edge cases. Having the agent assess its own confidence and route low-confidence cases to humans is more robust and captures ambiguous situations that rules would miss.
+
+**Tiered autonomy matches blast radius.** In customer support, sending a wrong FAQ link is low risk; issuing a refund is high risk. In DevOps, reading logs is safe; deleting pods is dangerous. Every domain has a natural tier structure where the agent's autonomy should decrease as the potential damage increases. This maps directly to the guardrail tiers you studied in Module 11.
+
+**Evaluation must use domain metrics.** Generic LLM benchmarks tell you nothing about whether a customer support agent resolves tickets correctly or whether a DevOps agent reduces mean time to recovery. Build evaluation suites using the metrics your domain actually cares about -- resolution rates, CSAT scores, MTTR, query correctness, compliance scores. The evaluation framework from Module 12 gives you the structure; the domain provides the metrics.
+
+**The flywheel effect compounds over time.** Every resolved ticket, every correctly generated query, every successfully executed runbook can feed back into the agent's knowledge base. Agents that learn from their own operational history improve continuously. Design your data pipeline to capture successful resolutions and make them available for future retrieval.
+
+## Summary
+
+**Domain-specific agents** apply a consistent four-layer architecture -- domain knowledge, specialized tools, compliance guardrails, and domain-specific evaluation -- across different verticals. The architecture template is reusable, but the content of each layer is deeply specific to the domain.
+
+**Customer support agents** combine ticket classification, knowledge base retrieval, and confidence-based escalation to resolve issues autonomously while routing complex cases to human agents. **Data analysis agents** translate natural language to SQL, generate visualizations, and enforce data access controls. **DevOps agents** follow structured incident response flows with tiered autonomy that gates high-risk actions behind human approval. **Enterprise workflow agents** automate document processing and approval chains while maintaining the audit trails and compliance records that regulated industries require.
+
+The foundational patterns from earlier modules -- tool use, memory, planning, multi-agent coordination, guardrails, and evaluation -- are not separate techniques. They are building blocks that combine differently in each domain. Mastering domain-specific agents means understanding both the general patterns and the specific constraints of the vertical you are building for.
+
+In the next lesson, we shift from building agents to governing them, exploring the alignment and ethical challenges that arise when agents operate with increasing autonomy in consequential domains.

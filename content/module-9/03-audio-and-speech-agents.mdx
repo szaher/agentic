@@ -1,0 +1,476 @@
+---
+title: "Audio and Speech Agents"
+quiz:
+  - question: "In a voice agent pipeline, what is the primary purpose of Voice Activity Detection (VAD)?"
+    options:
+      - "Converting raw audio waveforms into mel spectrograms for the STT model"
+      - "Detecting when the user starts and stops speaking so the agent knows when to process input"
+      - "Reducing background noise before audio reaches the transcription engine"
+      - "Measuring the latency between user speech and agent response"
+    correctIndex: 1
+  - question: "Which approach minimizes perceived latency in a real-time voice agent?"
+    options:
+      - "Buffering the entire TTS response before sending any audio to the user"
+      - "Using a larger STT model for higher accuracy at the cost of speed"
+      - "Streaming partial TTS audio chunks over WebSocket while the LLM is still generating tokens"
+      - "Waiting for the complete LLM response before starting text-to-speech synthesis"
+    correctIndex: 2
+  - question: "What is the key difference between Whisper and Deepgram Nova for speech-to-text in agent pipelines?"
+    options:
+      - "Whisper only supports English while Deepgram supports all languages"
+      - "Whisper is an open-source model you can self-host, while Deepgram Nova is a cloud-native streaming API optimized for low latency"
+      - "Deepgram is open-source and Whisper is proprietary"
+      - "Whisper uses a streaming architecture while Deepgram requires batch processing"
+    correctIndex: 1
+  - question: "Why do voice agents typically separate the STT, LLM, and TTS components rather than using a single end-to-end speech model?"
+    options:
+      - "End-to-end models do not exist yet for conversational AI"
+      - "Separating components is always cheaper than using a single model"
+      - "Modularity lets you independently optimize, swap, and debug each stage, and leverage the best specialized model for each task"
+      - "Single models cannot handle multiple languages"
+    correctIndex: 2
+---
+
+## Overview
+
+In the previous lesson, we explored how agents process visual information -- reading documents, understanding screenshots, and answering questions about images. Vision gives agents eyes, but many real-world interactions happen through sound. A customer support agent that can only read text misses the urgency in a caller's voice. A field assistant that requires typing is useless when your hands are full. Audio is the most natural human interface, and agents that can hear and speak unlock entirely new categories of applications.
+
+This lesson covers the complete audio pipeline for LLM agents: converting speech to text (**STT**), routing the transcript through agent reasoning, and converting the response back to speech (**TTS**). We will examine the key technologies -- Whisper, Deepgram, ElevenLabs, OpenAI TTS -- and build a working voice agent pipeline. Along the way, we will tackle the central engineering challenge of voice agents: **latency**. A 3-second pause after every sentence makes a voice agent feel broken, so we will explore streaming architectures, chunked processing, and pipeline parallelism that bring response times under 500 milliseconds.
+
+This connects directly to Module 3's tool-use patterns. Speech-to-text and text-to-speech are specialized tools in the agent's toolkit -- the same function-calling and tool-interface-design principles apply, but the data flowing through the pipeline is audio rather than JSON.
+
+## The Voice Conversation Flow
+
+A voice agent conversation follows a precise sequence. The user speaks, the audio is captured and transcribed, the transcript enters the LLM reasoning loop, and the response is synthesized back into speech. Understanding this flow is essential before diving into implementation.
+
+<MermaidDiagram chart={`sequenceDiagram
+    participant User as User (Microphone)
+    participant VAD as Voice Activity Detection
+    participant STT as Speech-to-Text
+    participant Agent as LLM Agent
+    participant Tools as Agent Tools
+    participant TTS as Text-to-Speech
+    participant Speaker as User (Speaker)
+
+    User->>VAD: Raw audio stream
+    Note over VAD: Detect speech start
+    VAD->>STT: Audio segments
+    STT->>Agent: Transcript text
+    Note over Agent: Reasoning + planning
+
+    alt Tool use required
+        Agent->>Tools: Function call
+        Tools-->>Agent: Tool result
+        Note over Agent: Incorporate result
+    end
+
+    Agent->>TTS: Response text (streamed)
+    TTS->>Speaker: Audio chunks (streamed)
+    Note over Speaker: User hears response<br/>while TTS continues
+
+    Note over VAD: Detect speech end/<br/>interruption
+    User->>VAD: New utterance
+    Note over VAD: Barge-in detection
+    VAD-->>TTS: Cancel current playback
+    VAD->>STT: New audio segments
+`} />
+
+Several things happen in this flow that distinguish voice agents from text-based chat. **Voice Activity Detection (VAD)** sits at the front of the pipeline, determining when the user starts and stops speaking. Without VAD, the agent would either clip words or wait indefinitely. **Barge-in detection** allows the user to interrupt the agent mid-response -- a behavior humans expect in natural conversation but that requires canceling the current TTS output and restarting the pipeline. And the entire response path from LLM to TTS to speaker is **streamed**, meaning the user starts hearing the response before the LLM has finished generating it.
+
+## Speech-to-Text: Giving Agents Ears
+
+**Speech-to-text (STT)** is the entry point of any voice agent. The quality and speed of transcription directly determine the agent's effectiveness. Two approaches dominate the landscape.
+
+### Whisper: The Open-Source Foundation
+
+OpenAI's **Whisper** is an open-source transformer model trained on 680,000 hours of multilingual audio. It supports 99 languages, handles accents and background noise robustly, and can be self-hosted for complete data privacy. Whisper operates in **batch mode** -- you send a complete audio segment, and it returns the full transcript. This makes it straightforward to integrate but introduces latency proportional to the audio length.
+
+Whisper comes in several sizes. The `tiny` model (39M parameters) transcribes in near real-time but with lower accuracy. The `large-v3` model (1.5B parameters) achieves near-human accuracy but requires a GPU and takes longer. For agent pipelines, the `medium` model often hits the sweet spot between speed and accuracy.
+
+### Deepgram Nova: Streaming-First
+
+**Deepgram Nova** is a cloud-native STT API built for real-time applications. Unlike Whisper's batch processing, Deepgram accepts a continuous audio stream over WebSocket and returns **interim results** as the user speaks, with **final results** when it detects a pause. This streaming architecture dramatically reduces perceived latency because the agent can begin processing a partial transcript before the user finishes speaking.
+
+Deepgram also provides **endpointing** -- automatic detection of when the user has finished a thought -- which simplifies VAD logic. Its API includes features like smart formatting, punctuation, and speaker diarization out of the box.
+
+### Choosing Between Them
+
+| Feature | Whisper (self-hosted) | Deepgram Nova |
+|---|---|---|
+| Latency | Batch (higher) | Streaming (lower) |
+| Privacy | Full control (on-premise) | Cloud-dependent |
+| Cost | Compute cost only | Per-minute API pricing |
+| Languages | 99 languages | 30+ languages |
+| Streaming | Requires wrapper (e.g., faster-whisper) | Native WebSocket |
+| Accuracy | Excellent (large-v3) | Excellent (Nova-2) |
+
+For prototyping and applications where latency is secondary, Whisper is the practical choice. For production voice agents where sub-second response time matters, Deepgram or a similar streaming API is typically necessary.
+
+## Text-to-Speech: Giving Agents a Voice
+
+The other end of the pipeline is **text-to-speech (TTS)** -- converting the agent's text response into natural-sounding audio. Modern TTS has moved far beyond robotic monotone; today's models produce speech that is difficult to distinguish from human recordings.
+
+### OpenAI TTS
+
+OpenAI offers two TTS models. The standard `tts-1` model is optimized for speed and real-time use, while `tts-1-hd` produces higher-quality audio at the cost of added latency. Both support six built-in voices and accept a streaming response, meaning you can pipe LLM output tokens directly into TTS and start playback immediately.
+
+### ElevenLabs
+
+**ElevenLabs** specializes in expressive, high-fidelity voice synthesis. Its key differentiator is **voice cloning** -- you can upload a sample of any voice and generate speech that sounds like that person. For agent applications, ElevenLabs offers a streaming API with WebSocket support, enabling the same chunked-output pattern as Deepgram. It also provides fine-grained control over **stability** (how consistent the voice sounds) and **similarity boost** (how closely it matches the target voice).
+
+### Streaming TTS for Low Latency
+
+The critical insight for voice agents is that TTS should never wait for the complete LLM response. Instead, as the LLM streams tokens, you accumulate text until you hit a sentence boundary (a period, question mark, or exclamation point), then send that sentence to TTS while the LLM continues generating. The user hears the first sentence while the second is being synthesized and the third is still being generated by the LLM. This **sentence-level pipelining** is what makes voice agents feel responsive.
+
+## Real-Time Voice Agent Architecture
+
+Putting these components together requires a streaming architecture that moves data through the pipeline with minimal buffering. The following diagram shows the production-grade design used in real-time voice agents.
+
+<MermaidDiagram chart={`graph LR
+    subgraph Client["Client (Browser / Mobile)"]
+        MIC["Microphone<br/>16kHz PCM"] --> WS_OUT["WebSocket<br/>Send Audio"]
+        WS_IN["WebSocket<br/>Receive Audio"] --> SPK["Speaker<br/>Playback"]
+    end
+
+    subgraph Server["Voice Agent Server"]
+        WS_OUT --> VAD_S["VAD<br/>Silero / WebRTC"]
+        VAD_S --> BUF["Audio Buffer<br/>Accumulate segments"]
+        BUF --> STT_S["STT Engine<br/>Whisper / Deepgram"]
+        STT_S --> QUEUE["Transcript Queue"]
+        QUEUE --> LLM["LLM Agent<br/>Claude / GPT-4o"]
+        LLM --> SPLIT["Sentence Splitter<br/>Buffer until boundary"]
+        SPLIT --> TTS_S["TTS Engine<br/>ElevenLabs / OpenAI"]
+        TTS_S --> WS_IN
+    end
+
+    subgraph State["Agent State"]
+        HIST["Conversation<br/>History"] --> LLM
+        LLM --> HIST
+        TOOL["Tool Registry<br/>From Module 3"] --> LLM
+    end
+
+    style Client fill:#ebf8ff,stroke:#3182ce,stroke-width:2px
+    style Server fill:#f0fff4,stroke:#276749,stroke-width:2px
+    style State fill:#fefcbf,stroke:#d69e2e,stroke-width:2px
+    style MIC fill:#bee3f8,stroke:#3182ce
+    style SPK fill:#bee3f8,stroke:#3182ce
+    style VAD_S fill:#c6f6d5,stroke:#276749
+    style STT_S fill:#c6f6d5,stroke:#276749
+    style LLM fill:#c6f6d5,stroke:#276749
+    style TTS_S fill:#c6f6d5,stroke:#276749
+    style SPLIT fill:#c6f6d5,stroke:#276749
+    style HIST fill:#fefcbf,stroke:#d69e2e
+    style TOOL fill:#fefcbf,stroke:#d69e2e
+`} />
+
+The architecture uses **WebSocket** connections for bidirectional audio streaming. The client sends raw PCM audio at 16kHz, and the server sends synthesized audio chunks back. This avoids the overhead of HTTP request-response cycles for every utterance. The **Agent State** box on the right connects this to everything we learned in Module 6 -- conversation history persists across turns, and tools from Module 3 are available for the LLM to call when voice requests require actions like database lookups, API calls, or calculations.
+
+## Voice Agent Latency Optimization
+
+Latency is the defining engineering challenge for voice agents. Users expect conversational response times under one second. Every millisecond spent in the pipeline is felt directly. Here are the primary optimization strategies.
+
+**Pipeline parallelism** is the most impactful technique. Instead of waiting for each stage to complete before starting the next, stages overlap. The STT begins processing the next audio chunk while the LLM reasons about the previous transcript. The TTS synthesizes the first sentence while the LLM generates the second. This turns a serial 3-second pipeline into a parallel one that delivers first audio in under 500ms.
+
+**Model selection** matters enormously. Using Whisper `tiny` instead of `large-v3` for initial transcription, then re-transcribing with the larger model if confidence is low, gives you speed for common cases and accuracy when needed. Similarly, using `tts-1` (faster) instead of `tts-1-hd` (higher quality) reduces TTS latency at a barely perceptible quality cost.
+
+**Prefetching and caching** help with common responses. If your agent frequently says "Let me look that up for you," pre-synthesize that audio and play it instantly while the actual lookup happens. This **filler phrase** pattern mimics human conversation behavior and masks processing time.
+
+**Connection pooling** eliminates the overhead of establishing new connections to STT and TTS services on every turn. Keep WebSocket connections to Deepgram and ElevenLabs alive across the entire conversation session.
+
+> **Key takeaway:** Perceived latency matters more than actual latency. Streaming the first sentence of audio to the user while generating the rest creates the impression of instant response, even if the full response takes several seconds to complete.
+
+## Building a Voice Agent Pipeline
+
+Let us build a complete voice agent that accepts audio input, transcribes it, runs it through an LLM agent with tool access, and synthesizes the response back to speech. This example uses OpenAI's Whisper API for STT, Anthropic's Claude for reasoning, and OpenAI's TTS API for speech synthesis.
+
+<CodeBlock code={`import asyncio
+import io
+import struct
+from pathlib import Path
+from anthropic import Anthropic
+from openai import OpenAI
+
+# ── Clients ──────────────────────────────────────────────
+anthropic_client = Anthropic()
+openai_client = OpenAI()
+
+# ── Tool definitions (Module 3 pattern) ──────────────────
+TOOLS = [
+    {
+        "name": "check_weather",
+        "description": "Get current weather for a city.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "city": {"type": "string", "description": "City name"}
+            },
+            "required": ["city"],
+        },
+    },
+    {
+        "name": "set_reminder",
+        "description": "Set a reminder for the user.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "message": {"type": "string"},
+                "minutes": {"type": "integer"},
+            },
+            "required": ["message", "minutes"],
+        },
+    },
+]
+
+
+def execute_tool(name: str, args: dict) -> str:
+    """Execute a tool and return the result as a string."""
+    if name == "check_weather":
+        return f"It is 22°C and sunny in {args['city']}."
+    elif name == "set_reminder":
+        return f"Reminder set: '{args['message']}' in {args['minutes']} minutes."
+    return f"Unknown tool: {name}"
+
+
+# ── Speech-to-Text ───────────────────────────────────────
+def transcribe_audio(audio_path: str) -> str:
+    """Transcribe an audio file using OpenAI Whisper API."""
+    with open(audio_path, "rb") as audio_file:
+        transcript = openai_client.audio.transcriptions.create(
+            model="whisper-1",
+            file=audio_file,
+            language="en",
+        )
+    return transcript.text
+
+
+# ── Text-to-Speech ───────────────────────────────────────
+def synthesize_speech(text: str, output_path: str) -> str:
+    """Convert text to speech using OpenAI TTS API."""
+    response = openai_client.audio.speech.create(
+        model="tts-1",
+        voice="nova",
+        input=text,
+        response_format="mp3",
+    )
+    response.stream_to_file(output_path)
+    return output_path
+
+
+# ── LLM Agent with Tool Loop ────────────────────────────
+def run_agent(user_text: str, history: list[dict]) -> str:
+    """Run the Claude agent loop until a final text response."""
+    history.append({"role": "user", "content": user_text})
+
+    while True:
+        response = anthropic_client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=1024,
+            system="You are a helpful voice assistant. Keep responses "
+                   "concise and conversational -- the user will hear "
+                   "this spoken aloud, so avoid markdown, bullet lists, "
+                   "and long paragraphs. Use natural spoken language.",
+            tools=TOOLS,
+            messages=history,
+        )
+
+        # Append assistant response to history
+        history.append({"role": "assistant", "content": response.content})
+
+        # If the model wants to use a tool, execute it and loop
+        if response.stop_reason == "tool_use":
+            tool_results = []
+            for block in response.content:
+                if block.type == "tool_use":
+                    result = execute_tool(block.name, block.input)
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": result,
+                    })
+            history.append({"role": "user", "content": tool_results})
+            continue
+
+        # Extract final text response
+        text_parts = [
+            block.text for block in response.content
+            if block.type == "text"
+        ]
+        return " ".join(text_parts)
+
+
+# ── Full Voice Pipeline ─────────────────────────────────
+def voice_conversation_turn(
+    audio_input_path: str,
+    audio_output_path: str,
+    history: list[dict],
+) -> str:
+    """Process one turn of a voice conversation.
+
+    1. Transcribe user audio (STT)
+    2. Run agent reasoning loop (LLM + tools)
+    3. Synthesize response audio (TTS)
+    """
+    # Step 1: Speech-to-Text
+    print("🎤 Transcribing audio...")
+    user_text = transcribe_audio(audio_input_path)
+    print(f"   User said: {user_text}")
+
+    # Step 2: Agent reasoning
+    print("🧠 Agent thinking...")
+    agent_response = run_agent(user_text, history)
+    print(f"   Agent response: {agent_response}")
+
+    # Step 3: Text-to-Speech
+    print("🔊 Synthesizing speech...")
+    synthesize_speech(agent_response, audio_output_path)
+    print(f"   Audio saved to: {audio_output_path}")
+
+    return agent_response
+
+
+# ── Example usage ────────────────────────────────────────
+if __name__ == "__main__":
+    history = []
+
+    # Simulate a multi-turn voice conversation
+    turns = [
+        ("input_1.wav", "output_1.mp3"),
+        ("input_2.wav", "output_2.mp3"),
+    ]
+
+    for input_path, output_path in turns:
+        if Path(input_path).exists():
+            response = voice_conversation_turn(
+                input_path, output_path, history
+            )
+            print(f"Turn complete. Response: {response}\\n")
+`} language="python" filename="voice_agent.py" />
+
+This code follows the same **agentic loop** pattern from Module 8's Claude agent lesson. The `run_agent` function cycles between the LLM and tool execution until the model produces a final text response -- the only difference is that the input comes from audio transcription and the output goes to speech synthesis. The conversation `history` list persists across turns, giving the voice agent multi-turn memory exactly as we implemented in text-based agents.
+
+## Streaming Voice Pipeline
+
+The pipeline above works correctly but processes each stage sequentially -- the user waits for the full STT, then the full LLM response, then the full TTS before hearing anything. For production voice agents, we need streaming. The following example shows how to stream the LLM response through sentence-level TTS.
+
+<CodeBlock code={`import asyncio
+import re
+from anthropic import Anthropic
+
+anthropic_client = Anthropic()
+
+# Sentence boundary pattern: split on . ? ! followed by space
+SENTENCE_BOUNDARY = re.compile(r'(?<=[.!?])\s+')
+
+
+async def stream_agent_to_tts(
+    user_text: str,
+    history: list[dict],
+    tts_callback,
+):
+    """Stream LLM output through TTS with sentence-level chunking.
+
+    Instead of waiting for the full response, we accumulate tokens
+    until we hit a sentence boundary, then send that sentence to
+    TTS immediately while continuing to collect the next sentence.
+    """
+    history.append({"role": "user", "content": user_text})
+
+    buffer = ""
+    sentence_index = 0
+
+    # Stream the LLM response token by token
+    with anthropic_client.messages.stream(
+        model="claude-sonnet-4-20250514",
+        max_tokens=1024,
+        system="You are a helpful voice assistant. Respond in short, "
+               "natural sentences suitable for spoken delivery.",
+        messages=history,
+    ) as stream:
+        for text_chunk in stream.text_stream:
+            buffer += text_chunk
+
+            # Check if buffer contains a complete sentence
+            sentences = SENTENCE_BOUNDARY.split(buffer)
+            if len(sentences) > 1:
+                # Send all complete sentences to TTS
+                for sentence in sentences[:-1]:
+                    sentence = sentence.strip()
+                    if sentence:
+                        sentence_index += 1
+                        # Fire-and-forget: TTS runs in parallel
+                        # with continued LLM generation
+                        asyncio.create_task(
+                            tts_callback(sentence, sentence_index)
+                        )
+                # Keep the incomplete last segment in the buffer
+                buffer = sentences[-1]
+
+    # Flush remaining buffer
+    if buffer.strip():
+        sentence_index += 1
+        await tts_callback(buffer.strip(), sentence_index)
+
+    # Collect the full response for history
+    full_response = stream.get_final_message()
+    history.append({
+        "role": "assistant",
+        "content": full_response.content,
+    })
+
+
+async def tts_synthesize(sentence: str, index: int):
+    """Placeholder TTS callback -- replace with real API call."""
+    print(f"  TTS [{index}]: Synthesizing '{sentence}'")
+    # In production: call OpenAI TTS or ElevenLabs streaming API
+    # and send audio chunks to the client WebSocket
+    await asyncio.sleep(0.3)  # Simulate TTS latency
+    print(f"  TTS [{index}]: Audio ready")
+
+
+async def main():
+    history = []
+    await stream_agent_to_tts(
+        user_text="What is the weather like in Paris today?",
+        history=history,
+        tts_callback=tts_synthesize,
+    )
+
+if __name__ == "__main__":
+    asyncio.run(main())
+`} language="python" filename="streaming_voice_agent.py" />
+
+The key pattern here is **sentence-level chunking**. The `buffer` accumulates streamed tokens until a sentence boundary regex matches, then dispatches that sentence to TTS as an async task. The LLM continues streaming the next sentence while TTS synthesizes the previous one. This overlap is what brings perceived latency down from seconds to hundreds of milliseconds.
+
+## Audio Analysis Beyond Speech
+
+Voice agents are not limited to transcription and synthesis. Audio contains rich information beyond words. **Tone and sentiment analysis** can detect frustration, urgency, or confusion in a caller's voice, allowing the agent to adapt its behavior. **Speaker diarization** identifies who is speaking in a multi-person conversation, enabling agents to track participants in a meeting. **Sound classification** lets agents respond to non-speech audio events -- a doorbell, a baby crying, or an alarm.
+
+These capabilities are typically implemented as specialized tools that the agent can invoke. Following the tool-use patterns from Module 3, you would define a `analyze_audio_sentiment` tool or a `identify_speakers` tool, expose them to the LLM through the standard tool-calling interface, and let the agent decide when to use them based on context.
+
+> **Connection to Module 3:** Audio processing functions are tools in the same way that web search or database queries are tools. The agent does not need to understand the audio processing internals -- it calls the tool with audio data and receives structured results. The tool interface design principles from Module 3 (clear descriptions, well-typed schemas, informative error messages) apply directly.
+
+## Latency Budget Breakdown
+
+Understanding where time is spent helps you target optimizations. Here is a typical latency budget for a voice agent turn.
+
+| Stage | Sequential | With Streaming |
+|---|---|---|
+| VAD + capture | 200-500ms | 200-500ms |
+| STT (Whisper medium) | 800-1500ms | 300-600ms (streaming STT) |
+| LLM first token | 300-800ms | 300-800ms |
+| LLM full response | 1000-3000ms | Overlapped with TTS |
+| TTS first audio | 200-500ms | 200-500ms |
+| TTS full audio | 500-2000ms | Overlapped with playback |
+| **Total (user perceives)** | **3-8 seconds** | **0.7-1.5 seconds** |
+
+The streaming column shows why pipeline parallelism is so important. The user's perceived wait is only from the end of their speech to the first audio playback -- about one second in optimal conditions. Everything after that is streamed concurrently.
+
+## Summary
+
+Voice agents extend the LLM agent paradigm from text to the most natural human interface -- spoken conversation. The core pipeline follows a clear pattern: **VAD** detects speech boundaries, **STT** converts audio to text (using Whisper for flexibility or Deepgram for streaming speed), the **LLM agent** reasons and calls tools exactly as it would in a text-based system, and **TTS** converts the response back to speech (using OpenAI TTS for simplicity or ElevenLabs for expressiveness and voice cloning).
+
+The defining engineering challenge is **latency**. Sequential processing creates multi-second delays that break the illusion of conversation. The solution is pipeline parallelism: streaming STT results to the LLM as the user speaks, chunking LLM output at sentence boundaries for immediate TTS synthesis, and overlapping audio playback with continued generation. These techniques bring perceived latency under one second.
+
+Audio processing functions -- sentiment analysis, speaker diarization, sound classification -- integrate as tools through the same patterns covered in Module 3. The agent does not need to understand audio internals; it calls tools and acts on structured results.
+
+In the next lesson, we will explore agents that **generate** visual content -- images and video -- adding creative output capabilities to the multi-modal toolkit.

@@ -31,8 +31,8 @@ graph TD
 
   moduleColors: [
     "#68d391", "#4fd1c5", "#63b3ed", "#b794f4",
-    "#ed8936", "#fc8181", "#ecc94b", "#68d391",
-    "#4fd1c5", "#63b3ed", "#b794f4", "#ed8936",
+    "#9f7aea", "#ed8936", "#fc8181", "#ecc94b",
+    "#68d391", "#4fd1c5", "#63b3ed", "#b794f4", "#ed8936",
   ],
 
   presentation: {
@@ -46,4 +46,5 @@ export const storageKeys = {
   notes: `${academy.slug}-notes`,
   chat: `${academy.slug}-chat`,
   theme: `${academy.slug}-theme`,
+  ttsVoice: `${academy.slug}-tts-voice`,
 } as const;

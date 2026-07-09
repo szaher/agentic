@@ -1,0 +1,686 @@
+---
+title: "Multi-Modal Tool Use"
+quiz:
+  - question: "What is the primary advantage of using a screenshot tool over parsing raw HTML when an agent needs to understand a web page's layout?"
+    options:
+      - "Screenshots are smaller in file size than HTML documents"
+      - "Screenshots capture the rendered visual layout, including CSS styling and dynamic content, which raw HTML does not convey"
+      - "HTML parsing is deprecated in modern browsers"
+      - "Screenshots can be taken without network access"
+    correctIndex: 1
+  - question: "In Claude's computer use capability, what does the agent control through tool calls?"
+    options:
+      - "The operating system kernel directly"
+      - "A virtual machine's BIOS settings"
+      - "Mouse movements, keyboard input, and screenshots of the desktop environment"
+      - "The GPU rendering pipeline for real-time display"
+    correctIndex: 2
+  - question: "Why does a multi-modal tool agent typically encode images as base64 before sending them to the LLM?"
+    options:
+      - "Base64 compression reduces the image size by 90%"
+      - "The Messages API accepts image data as base64-encoded strings within content blocks, since raw binary cannot be embedded in JSON"
+      - "Base64 encoding adds metadata that helps the LLM identify the image format"
+      - "It is required by the operating system's screenshot API"
+    correctIndex: 1
+  - question: "Which approach best handles file-type-aware processing when an agent receives an unknown file?"
+    options:
+      - "Always convert every file to plain text before processing"
+      - "Refuse to process any file that is not a known text format"
+      - "Detect the MIME type and route to a specialized handler -- PDF extractor, image analyzer, spreadsheet parser -- based on the file type"
+      - "Send the raw binary data directly to the LLM and let it determine the format"
+    correctIndex: 2
+---
+
+## Overview
+
+In previous lessons, you explored how agents perceive images, process audio, generate visual content, and reason across modalities. But those capabilities are only as useful as the **tools** that connect them to the real world. An agent that can analyze images is powerful -- an agent that can *capture its own screenshots*, *drive a browser*, *read a camera feed*, and *process arbitrary file types* is transformative.
+
+**Multi-modal tool use** is the practice of equipping agents with tools that capture, transform, and interact with non-text data. Instead of waiting for a user to upload an image, the agent takes a screenshot itself. Instead of asking for a URL's content, the agent launches a browser and navigates to the page. Instead of requiring pre-processed data, the agent detects a file's type and routes it to the right handler.
+
+This lesson covers the architecture of multi-modal tool ecosystems, walks through screen capture, browser automation, camera input, and file-type-aware processing, and introduces Claude's computer use capabilities. By the end, you will have a working pattern for building agents that can see and interact with their digital environment autonomously.
+
+## The Multi-Modal Tool Ecosystem
+
+A multi-modal agent does not rely on a single tool. It draws from an ecosystem of specialized tools, each handling a different modality or interaction pattern. The agent's reasoning layer decides which tool to invoke based on the task at hand.
+
+<MermaidDiagram chart={`graph TD
+    subgraph Agent["Multi-Modal Agent"]
+        LLM["LLM Reasoning Engine<br/>Decides which tool to use"]
+    end
+
+    subgraph ScreenTools["Screen & Display"]
+        SC["Screenshot Capture<br/>Grab screen or window"]
+        CU["Computer Use<br/>Mouse, keyboard, observe"]
+    end
+
+    subgraph BrowserTools["Browser Automation"]
+        PW["Playwright / Puppeteer<br/>Navigate, click, extract"]
+        WS["Web Scraper<br/>Structured data extraction"]
+    end
+
+    subgraph CameraTools["Camera & Vision"]
+        WC["Webcam Capture<br/>Live camera frames"]
+        VF["Video Frames<br/>Extract frames from video"]
+    end
+
+    subgraph FileTools["File Processing"]
+        PDF["PDF Extractor<br/>Text, tables, images"]
+        IMG["Image Analyzer<br/>OCR, classification"]
+        XLS["Spreadsheet Parser<br/>Rows, charts, formulas"]
+        DOC["Document Converter<br/>Format transformation"]
+    end
+
+    LLM --> SC
+    LLM --> CU
+    LLM --> PW
+    LLM --> WS
+    LLM --> WC
+    LLM --> VF
+    LLM --> PDF
+    LLM --> IMG
+    LLM --> XLS
+    LLM --> DOC
+
+    style Agent fill:#ebf8ff,stroke:#3182ce,stroke-width:2px
+    style ScreenTools fill:#c6f6d5,stroke:#38a169,stroke-width:1px
+    style BrowserTools fill:#fefcbf,stroke:#d69e2e,stroke-width:1px
+    style CameraTools fill:#fed7e2,stroke:#d53f8c,stroke-width:1px
+    style FileTools fill:#e9d8fd,stroke:#805ad5,stroke-width:1px
+    style LLM fill:#e0f0ff,stroke:#3182ce,stroke-width:2px
+`} />
+
+The key insight is that each tool category serves a different purpose:
+
+- **Screen and display tools** let the agent see what is on a computer screen, enabling it to interact with any GUI application
+- **Browser automation tools** give the agent programmatic control over web pages, going beyond what a screenshot reveals
+- **Camera and vision tools** connect the agent to the physical world through live or recorded video
+- **File processing tools** let the agent handle arbitrary file types intelligently, extracting structured data from PDFs, images, spreadsheets, and more
+
+## Screen Capture Tools
+
+The simplest and most immediately useful multi-modal tool is **screen capture**. By taking a screenshot and sending it to a vision-capable LLM, an agent can understand what is displayed on a screen without needing API access to the underlying application.
+
+Screen capture tools typically work in three steps:
+
+1. **Capture** -- take a screenshot of the full screen, a specific window, or a defined region
+2. **Encode** -- convert the image to a format the LLM can consume (base64-encoded PNG or JPEG)
+3. **Analyze** -- send the encoded image to the LLM as an image content block alongside a text prompt
+
+<CodeBlock code={`import anthropic
+import base64
+import subprocess
+import platform
+
+
+def capture_screenshot(region: str = "full") -> dict:
+    """Capture a screenshot and return it as base64-encoded PNG.
+    
+    Args:
+        region: 'full' for entire screen, or 'x,y,width,height' for a region
+    """
+    filepath = "/tmp/screenshot.png"
+    
+    system = platform.system()
+    if system == "Darwin":  # macOS
+        if region == "full":
+            subprocess.run(["screencapture", "-x", filepath], check=True)
+        else:
+            # screencapture -R x,y,w,h for region capture
+            subprocess.run(["screencapture", "-x", "-R", region, filepath], check=True)
+    elif system == "Linux":
+        if region == "full":
+            subprocess.run(["scrot", filepath], check=True)
+        else:
+            subprocess.run(["scrot", "-a", region, filepath], check=True)
+    
+    with open(filepath, "rb") as f:
+        image_data = base64.standard_b64encode(f.read()).decode("utf-8")
+    
+    return {"image_base64": image_data, "media_type": "image/png"}
+
+
+def analyze_screenshot(question: str, region: str = "full") -> str:
+    """Take a screenshot and ask the LLM a question about it."""
+    client = anthropic.Anthropic()
+    
+    # Step 1: Capture the screen
+    screenshot = capture_screenshot(region)
+    
+    # Step 2: Send to Claude with the question
+    response = client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=1024,
+        messages=[{
+            "role": "user",
+            "content": [
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": screenshot["media_type"],
+                        "data": screenshot["image_base64"],
+                    },
+                },
+                {
+                    "type": "text",
+                    "text": question,
+                },
+            ],
+        }],
+    )
+    
+    return response.content[0].text
+
+
+# Example: analyze what's on screen
+result = analyze_screenshot("What application is currently in the foreground? Describe what you see.")
+print(result)
+`} language="python" filename="screenshot_tool.py" />
+
+This pattern is deceptively powerful. With just a screenshot tool and a vision-capable LLM, an agent can:
+
+- **Monitor dashboards** -- periodically screenshot a Grafana or Datadog dashboard and summarize the current state
+- **Verify deployments** -- capture the deployed web page and confirm it matches expectations
+- **Read error dialogs** -- identify and describe error messages from any GUI application
+- **Extract data from legacy systems** -- read information from applications that have no API
+
+## Browser Automation with Playwright
+
+Screenshots show you what a page looks like, but **browser automation** lets the agent *interact* with it. **Playwright** is the most widely used library for programmatic browser control, and it pairs naturally with LLM agents.
+
+The following sequence shows how an agent uses Playwright to navigate to a page, take a screenshot for analysis, and then decide what to click next.
+
+<MermaidDiagram chart={`sequenceDiagram
+    participant User
+    participant Agent as LLM Agent
+    participant PW as Playwright Browser
+    participant LLM as Claude Vision
+
+    User->>Agent: "Find the pricing for Product X on example.com"
+    Agent->>PW: Navigate to example.com
+    PW-->>Agent: Page loaded
+    Agent->>PW: Take screenshot
+    PW-->>Agent: Screenshot (PNG bytes)
+    Agent->>LLM: Screenshot + "Where is the pricing link?"
+    LLM-->>Agent: "There is a 'Pricing' link in the top navigation bar at approximately (450, 35)"
+    Agent->>PW: Click at (450, 35)
+    PW-->>Agent: Pricing page loaded
+    Agent->>PW: Take screenshot of pricing page
+    PW-->>Agent: Screenshot (PNG bytes)
+    Agent->>LLM: Screenshot + "Extract all pricing tiers and features"
+    LLM-->>Agent: Structured pricing data
+    Agent->>User: "Here are the pricing tiers for Product X: ..."
+`} />
+
+The Playwright tool integrates into the agent's tool ecosystem as a set of actions the LLM can invoke:
+
+<CodeBlock code={`import asyncio
+from playwright.async_api import async_playwright
+import anthropic
+import base64
+
+
+class BrowserTool:
+    """A browser automation tool that an LLM agent can drive."""
+    
+    def __init__(self):
+        self.browser = None
+        self.page = None
+    
+    async def start(self, headless: bool = True):
+        """Launch the browser."""
+        self.playwright = await async_playwright().start()
+        self.browser = await self.playwright.chromium.launch(headless=headless)
+        self.page = await self.browser.new_page(viewport={"width": 1280, "height": 720})
+    
+    async def navigate(self, url: str) -> dict:
+        """Navigate to a URL and return page info."""
+        response = await self.page.goto(url, wait_until="networkidle")
+        return {
+            "status": response.status if response else None,
+            "url": self.page.url,
+            "title": await self.page.title(),
+        }
+    
+    async def screenshot(self) -> dict:
+        """Take a screenshot of the current page."""
+        png_bytes = await self.page.screenshot(full_page=False)
+        return {
+            "image_base64": base64.standard_b64encode(png_bytes).decode("utf-8"),
+            "media_type": "image/png",
+            "url": self.page.url,
+        }
+    
+    async def click(self, x: int, y: int) -> dict:
+        """Click at specific coordinates on the page."""
+        await self.page.mouse.click(x, y)
+        await self.page.wait_for_load_state("networkidle")
+        return {"clicked": True, "x": x, "y": y, "url_after": self.page.url}
+    
+    async def type_text(self, selector: str, text: str) -> dict:
+        """Type text into a form field identified by CSS selector."""
+        await self.page.fill(selector, text)
+        return {"typed": True, "selector": selector, "text": text}
+    
+    async def get_text(self) -> dict:
+        """Extract all visible text from the current page."""
+        text = await self.page.inner_text("body")
+        return {"text": text[:5000], "truncated": len(text) > 5000}
+    
+    async def close(self):
+        """Shut down the browser."""
+        if self.browser:
+            await self.browser.close()
+        if self.playwright:
+            await self.playwright.stop()
+`} language="python" filename="browser_tool.py" />
+
+The agent uses the browser tool in its loop just like any other tool: the LLM reasons about what action to take, emits a `tool_use` block (e.g., `navigate`, `click`, `screenshot`), and your code dispatches it to the `BrowserTool` instance. The screenshot capability is especially important because it lets the LLM *see* what the page looks like after each interaction and decide what to do next.
+
+## Camera and Webcam Input
+
+For agents that operate in the physical world -- monitoring a physical space, reading handwritten notes, or inspecting physical objects -- **camera input** bridges the gap between digital reasoning and physical perception.
+
+The pattern mirrors screen capture: capture a frame, encode it, send it to the LLM. The difference is the source.
+
+<CodeBlock code={`import cv2
+import base64
+import anthropic
+
+
+def capture_webcam_frame(camera_index: int = 0) -> dict:
+    """Capture a single frame from the webcam."""
+    cap = cv2.VideoCapture(camera_index)
+    
+    if not cap.isOpened():
+        return {"error": "Could not open camera"}
+    
+    ret, frame = cap.read()
+    cap.release()
+    
+    if not ret:
+        return {"error": "Could not capture frame"}
+    
+    # Encode frame as JPEG for efficient transmission
+    _, buffer = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+    image_base64 = base64.standard_b64encode(buffer).decode("utf-8")
+    
+    return {
+        "image_base64": image_base64,
+        "media_type": "image/jpeg",
+        "width": frame.shape[1],
+        "height": frame.shape[0],
+    }
+
+
+def analyze_camera_view(question: str) -> str:
+    """Capture a webcam frame and ask the LLM about it."""
+    client = anthropic.Anthropic()
+    frame = capture_webcam_frame()
+    
+    if "error" in frame:
+        return f"Camera error: {frame['error']}"
+    
+    response = client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=1024,
+        messages=[{
+            "role": "user",
+            "content": [
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": frame["media_type"],
+                        "data": frame["image_base64"],
+                    },
+                },
+                {"type": "text", "text": question},
+            ],
+        }],
+    )
+    
+    return response.content[0].text
+`} language="python" filename="camera_tool.py" />
+
+Camera tools are particularly valuable for **inventory monitoring** (point a camera at shelves and ask "which items are running low?"), **security** (analyze camera feeds for anomalies), and **accessibility** (describe the physical environment for a visually impaired user).
+
+## File-Type-Aware Processing
+
+Real-world agents receive files in many formats: PDFs, images, spreadsheets, CSVs, Word documents, and more. A naive agent would try to send every file directly to the LLM. A well-designed agent uses **file-type-aware processing** -- detecting the file type and routing it to a specialized handler that extracts structured data before sending it to the LLM.
+
+<CodeBlock code={`import mimetypes
+import base64
+import fitz  # PyMuPDF for PDF processing
+import openpyxl  # For Excel files
+from pathlib import Path
+
+
+class FileProcessor:
+    """Route files to specialized handlers based on MIME type."""
+    
+    def process(self, file_path: str) -> dict:
+        """Detect file type and extract content appropriately."""
+        mime_type, _ = mimetypes.guess_type(file_path)
+        path = Path(file_path)
+        
+        handlers = {
+            "application/pdf": self._process_pdf,
+            "image/png": self._process_image,
+            "image/jpeg": self._process_image,
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": self._process_excel,
+            "text/csv": self._process_text,
+            "text/plain": self._process_text,
+        }
+        
+        handler = handlers.get(mime_type)
+        if handler is None:
+            return {"error": f"Unsupported file type: {mime_type}", "filename": path.name}
+        
+        return handler(file_path, mime_type)
+    
+    def _process_pdf(self, file_path: str, mime_type: str) -> dict:
+        """Extract text and images from a PDF."""
+        doc = fitz.open(file_path)
+        pages = []
+        images = []
+        
+        for page_num, page in enumerate(doc):
+            pages.append({
+                "page": page_num + 1,
+                "text": page.get_text(),
+            })
+            # Extract embedded images
+            for img_index, img in enumerate(page.get_images(full=True)):
+                xref = img[0]
+                pix = fitz.Pixmap(doc, xref)
+                if pix.n >= 5:  # CMYK -- convert to RGB
+                    pix = fitz.Pixmap(fitz.csRGB, pix)
+                img_bytes = pix.tobytes("png")
+                images.append({
+                    "page": page_num + 1,
+                    "image_base64": base64.standard_b64encode(img_bytes).decode("utf-8"),
+                    "media_type": "image/png",
+                })
+        
+        return {"type": "pdf", "pages": pages, "images": images[:5]}  # Limit images
+    
+    def _process_image(self, file_path: str, mime_type: str) -> dict:
+        """Encode an image for LLM analysis."""
+        with open(file_path, "rb") as f:
+            image_data = base64.standard_b64encode(f.read()).decode("utf-8")
+        return {"type": "image", "image_base64": image_data, "media_type": mime_type}
+    
+    def _process_excel(self, file_path: str, mime_type: str) -> dict:
+        """Extract data from an Excel spreadsheet."""
+        wb = openpyxl.load_workbook(file_path, data_only=True)
+        sheets = {}
+        for sheet_name in wb.sheetnames:
+            ws = wb[sheet_name]
+            rows = []
+            for row in ws.iter_rows(values_only=True):
+                rows.append([str(cell) if cell is not None else "" for cell in row])
+            sheets[sheet_name] = rows[:100]  # Limit rows
+        return {"type": "spreadsheet", "sheets": sheets}
+    
+    def _process_text(self, file_path: str, mime_type: str) -> dict:
+        """Read plain text or CSV files."""
+        with open(file_path, "r", encoding="utf-8") as f:
+            content = f.read(50000)  # Limit to 50KB
+        return {"type": "text", "content": content}
+`} language="python" filename="file_processor.py" />
+
+The `FileProcessor` class acts as a **router**: it inspects the MIME type and delegates to the right handler. This keeps each handler simple and focused while giving the agent the ability to work with diverse file types. When the agent encounters a PDF, it gets structured text and extracted images. When it encounters a spreadsheet, it gets rows of data. The LLM never sees raw binary -- it always receives clean, structured input.
+
+## Claude's Computer Use Capabilities
+
+Everything we have discussed so far -- screen capture, browser automation, file processing -- can be unified under a single, powerful abstraction: **computer use**. Claude's computer use feature lets the agent control a full desktop environment by taking screenshots, moving the mouse, clicking, typing, and observing the results.
+
+Computer use works through three built-in tool types:
+
+- **computer** -- take screenshots, move the mouse, click, type, and scroll
+- **text_editor** -- view, create, and edit text files
+- **bash** -- execute shell commands
+
+The agent operates in a loop: it takes a screenshot to see the current state of the screen, reasons about what action to take, executes that action (click, type, run a command), and then takes another screenshot to see the result. This is the same perception-reasoning-action loop from Module 1, but operating at the level of a full graphical desktop.
+
+<CodeBlock code={`import anthropic
+
+client = anthropic.Anthropic()
+
+# Define computer use tools -- Claude knows how to use these natively
+tools = [
+    {
+        "type": "computer_20250124",
+        "name": "computer",
+        "display_width_px": 1024,
+        "display_height_px": 768,
+        "display_number": 1,
+    },
+    {
+        "type": "bash_20250124",
+        "name": "bash",
+    },
+    {
+        "type": "text_editor_20250124",
+        "name": "str_replace_editor",
+    },
+]
+
+# Start the agent loop
+messages = [
+    {
+        "role": "user",
+        "content": "Open Firefox, go to example.com, and tell me the main heading on the page.",
+    }
+]
+
+while True:
+    response = client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=4096,
+        tools=tools,
+        messages=messages,
+        betas=["computer-use-2025-01-24"],
+    )
+    
+    if response.stop_reason == "end_turn":
+        # Agent is done -- extract final text
+        for block in response.content:
+            if hasattr(block, "text"):
+                print(block.text)
+        break
+    
+    # Process tool calls (screenshot, click, type, bash, etc.)
+    messages.append({"role": "assistant", "content": response.content})
+    
+    tool_results = []
+    for block in response.content:
+        if block.type == "tool_use":
+            # In production, dispatch to actual computer control
+            # (Docker container, VM, or local desktop)
+            result = execute_computer_action(block.name, block.input)
+            tool_results.append({
+                "type": "tool_result",
+                "tool_use_id": block.id,
+                "content": result,
+            })
+    
+    messages.append({"role": "user", "content": tool_results})
+`} language="python" filename="computer_use_agent.py" />
+
+Computer use is the most general form of multi-modal tool use. Rather than building specialized tools for every application, the agent interacts with applications the same way a human does -- by looking at the screen, moving the mouse, and typing. This makes it possible to automate tasks in applications that have no API at all.
+
+> Computer use is a deep topic with its own patterns for safety, sandboxing, and reliability. Module 13, Lesson 01 (*Computer Use Agents*) covers it in detail, including how to set up sandboxed environments, handle multi-step GUI workflows, and build production-grade computer use systems.
+
+## Putting It All Together: A Multi-Modal Tool Agent
+
+The real power emerges when you combine multiple tool types into a single agent. Here is a practical example: an agent that can take screenshots, process files, and browse the web, choosing the right tool based on the user's request.
+
+<CodeBlock code={`import anthropic
+import json
+
+client = anthropic.Anthropic()
+
+# --- Tool definitions for the multi-modal agent ---
+
+multi_modal_tools = [
+    {
+        "name": "take_screenshot",
+        "description": (
+            "Capture a screenshot of the current screen. Use this when you need "
+            "to see what is displayed on the user's desktop, check a running "
+            "application, or verify a visual state."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "region": {
+                    "type": "string",
+                    "description": "'full' for entire screen, or 'x,y,width,height' for a region",
+                },
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "browse_url",
+        "description": (
+            "Navigate to a URL in a headless browser and return a screenshot "
+            "of the rendered page along with its text content. Use this for "
+            "inspecting websites, reading articles, or checking web applications."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "url": {"type": "string", "description": "The URL to navigate to"},
+            },
+            "required": ["url"],
+        },
+    },
+    {
+        "name": "process_file",
+        "description": (
+            "Process a file and extract its contents. Supports PDF, images "
+            "(PNG/JPEG), Excel spreadsheets, CSV, and plain text files. "
+            "Automatically detects the file type and uses the appropriate handler."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "file_path": {"type": "string", "description": "Path to the file"},
+            },
+            "required": ["file_path"],
+        },
+    },
+    {
+        "name": "capture_webcam",
+        "description": (
+            "Capture a single frame from the webcam. Use this when you need "
+            "to see the physical environment, read handwritten text, or "
+            "identify objects in front of the camera."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "camera_index": {
+                    "type": "integer",
+                    "description": "Camera device index (default: 0)",
+                },
+            },
+            "required": [],
+        },
+    },
+]
+
+
+def run_multi_modal_agent(user_message: str) -> str:
+    """Run an agent that can see screens, browse the web, and process files."""
+    messages = [{"role": "user", "content": user_message}]
+    
+    system_prompt = (
+        "You are a multi-modal assistant with access to screen capture, browser, "
+        "file processing, and camera tools. Choose the right tool for each task. "
+        "When analyzing visual content, describe what you see in detail. "
+        "When processing files, summarize the key information extracted."
+    )
+    
+    while True:
+        response = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=2048,
+            system=system_prompt,
+            tools=multi_modal_tools,
+            messages=messages,
+        )
+        
+        if response.stop_reason == "end_turn":
+            return "".join(
+                block.text for block in response.content if block.type == "text"
+            )
+        
+        messages.append({"role": "assistant", "content": response.content})
+        
+        tool_results = []
+        for block in response.content:
+            if block.type == "tool_use":
+                # Dispatch to the appropriate tool implementation
+                result = dispatch_tool(block.name, block.input)
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": block.id,
+                    "content": json.dumps(result) if isinstance(result, dict) else result,
+                })
+        
+        messages.append({"role": "user", "content": tool_results})
+
+
+def dispatch_tool(name: str, inputs: dict) -> dict:
+    """Route tool calls to their implementations."""
+    if name == "take_screenshot":
+        return capture_screenshot(inputs.get("region", "full"))
+    elif name == "browse_url":
+        # Would use BrowserTool.navigate() + BrowserTool.screenshot()
+        return browse_and_capture(inputs["url"])
+    elif name == "process_file":
+        processor = FileProcessor()
+        return processor.process(inputs["file_path"])
+    elif name == "capture_webcam":
+        return capture_webcam_frame(inputs.get("camera_index", 0))
+    else:
+        return {"error": f"Unknown tool: {name}"}
+
+
+# Usage
+result = run_multi_modal_agent(
+    "Take a screenshot of my screen and tell me what applications are open. "
+    "Then browse to https://status.example.com and check if all services are healthy."
+)
+print(result)
+`} language="python" filename="multi_modal_agent.py" />
+
+This agent seamlessly combines screen capture and browser automation in a single conversation. The LLM decides the order of operations: first it takes a screenshot to answer the question about open applications, then it browses to the status page to check service health. Each tool returns data in the format the LLM needs -- images as base64, text as strings, structured data as JSON.
+
+## Design Considerations
+
+Building reliable multi-modal tool agents requires attention to several practical concerns:
+
+- **Image size management** -- high-resolution screenshots can be several megabytes. Resize or compress images before sending them to the LLM to stay within token limits and reduce latency. A 1280x720 screenshot is typically sufficient for analysis.
+
+- **Sandboxing** -- browser automation and computer use should run in isolated environments (Docker containers or VMs) to prevent the agent from accidentally modifying your actual system. Never give an agent unsandboxed access to a production desktop.
+
+- **Error handling** -- cameras disconnect, browsers time out, files are corrupted. Every tool should return structured error information that the LLM can reason about, rather than crashing the agent loop.
+
+- **Privacy and security** -- screenshots may capture sensitive information (passwords, private messages, financial data). Log tool inputs and outputs carefully, and consider masking or filtering sensitive regions before sending screenshots to the LLM.
+
+- **Cost awareness** -- image inputs consume significantly more tokens than text. A single screenshot can cost 1,000+ tokens. Agents that take frequent screenshots should be designed with token budgets in mind.
+
+## Summary
+
+Multi-modal tool use transforms agents from passive text processors into active participants in their digital environment. By equipping an agent with **screen capture tools**, it can observe any application's interface. With **browser automation** through Playwright, it can navigate, interact with, and extract data from web pages. **Camera input** extends perception into the physical world. **File-type-aware processing** lets the agent handle PDFs, images, spreadsheets, and documents intelligently by routing each file type to a specialized handler.
+
+Claude's **computer use** capability unifies these patterns under a single abstraction -- the agent controls a full desktop through screenshots, mouse, and keyboard, just as a human would. This is the most general form of multi-modal tool use, and we will explore it in depth in Module 13, Lesson 01.
+
+The common thread across all of these tools is the same agent loop you learned in Module 3: the LLM reasons about what to do, emits a `tool_use` block, your code executes the action and returns a `tool_result`, and the cycle continues. The only difference is that the tools now operate on images, browsers, cameras, and files instead of text and APIs.
+
+In the next lesson, you will put these concepts into practice in the **Multi-Modal Lab**, building an end-to-end agent that analyzes images, generates reports, and narrates its findings with speech.

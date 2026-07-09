@@ -74,13 +74,13 @@ Let us walk through each level:
 
 **Prompt Chain** -- You break a complex task into a fixed sequence of LLM calls, where the output of one becomes the input to the next. Example: extract key points from a document, then rewrite them as a blog post, then generate social media snippets. The path is **predetermined** -- there is no branching or adaptation. This is orchestration, not agency.
 
-**RAG Pipeline** -- You retrieve relevant documents from a knowledge base and include them in the prompt before generating a response. This is the **Retrieval-Augmented Generation** pattern. It extends the model's knowledge beyond its training data, but the flow is still linear: retrieve, augment, generate. No loops, no tool calls, no adaptation. You will study RAG in depth in Module 6.
+**RAG Pipeline** -- You retrieve relevant documents from a knowledge base and include them in the prompt before generating a response. This is the **Retrieval-Augmented Generation** pattern. It extends the model's knowledge beyond its training data, but the flow is still linear: retrieve, augment, generate. No loops, no tool calls, no adaptation. You will study RAG in depth in Module 7.
 
 **Tool-Using Agent** -- The model decides *which* tools to call, *when* to call them, and *what arguments* to pass -- and it does so dynamically based on the task. This is the threshold of agency. The path is no longer predetermined; the model is making decisions at runtime.
 
 **Reasoning Agent** -- The agent operates in a multi-step loop: reason, act, observe, repeat. It can plan, backtrack, self-correct, and adapt its strategy based on intermediate results. This is the full agent loop you studied in Lesson 4.
 
-**Multi-Agent System** -- Multiple specialized agents collaborate, each owning a piece of a larger workflow. A planner delegates to a researcher, a coder, and a reviewer. This adds coordination complexity on top of individual agent complexity. Module 9 covers this in detail.
+**Multi-Agent System** -- Multiple specialized agents collaborate, each owning a piece of a larger workflow. A planner delegates to a researcher, a coder, and a reviewer. This adds coordination complexity on top of individual agent complexity. Module 10 covers this in detail.
 
 The key insight: **each level adds both capability and cost**. Your job as an engineer is to use the *minimum* level of complexity that solves the problem reliably.
 
@@ -167,7 +167,7 @@ Every layer of agentic behavior adds real costs. You should weigh these explicit
 
 **Unpredictability** -- A single prompt produces relatively consistent output. An agent loop introduces **nondeterminism at every step**. The model might choose different tools, take different paths, or produce different final results on repeated runs. This makes testing, debugging, and compliance harder.
 
-**Debugging difficulty** -- When a single prompt gives a wrong answer, you adjust the prompt. When an agent gives a wrong answer, you need to trace through multiple steps, tool calls, and observations to find where the reasoning went wrong. **Observability** becomes a first-class concern -- a topic you will study in Module 10 (Evaluation & Testing) and Module 11 (Production & Safety).
+**Debugging difficulty** -- When a single prompt gives a wrong answer, you adjust the prompt. When an agent gives a wrong answer, you need to trace through multiple steps, tool calls, and observations to find where the reasoning went wrong. **Observability** becomes a first-class concern -- a topic you will study in Module 11 (Evaluation & Testing) and Module 12 (Production & Safety).
 
 **Failure modes** -- Agents can get stuck in loops, hallucinate tool arguments, misinterpret tool outputs, or pursue irrelevant tangents. These failure modes are qualitatively different from the mistakes a single LLM call makes, and they require different mitigation strategies (timeouts, guardrails, maximum iteration limits).
 

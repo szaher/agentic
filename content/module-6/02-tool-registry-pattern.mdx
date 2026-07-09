@@ -1,0 +1,506 @@
+---
+title: "The Tool Registry Pattern"
+quiz:
+  - question: "What problem does the Tool Registry pattern solve compared to hardcoded tool definitions?"
+    options:
+      - "It makes tool calls execute faster by caching responses"
+      - "It decouples tool definitions from agent logic, so tools can be added, removed, or swapped without changing the agent code"
+      - "It replaces the need for tool schemas entirely"
+      - "It allows tools to call other tools directly without going through the LLM"
+    correctIndex: 1
+  - question: "In the registry implementation, what is the purpose of tagging tools with capabilities like 'search' or 'math'?"
+    options:
+      - "Tags are required by the LLM to parse tool schemas"
+      - "Tags replace tool descriptions in the function schema"
+      - "Tags enable runtime filtering so the agent receives only the tools relevant to the current task, reducing context usage and improving selection accuracy"
+      - "Tags are only used for logging and have no effect on tool selection"
+    correctIndex: 2
+  - question: "Why does the ToolRegistry use a decorator (@registry.tool) for registration instead of requiring manual register() calls?"
+    options:
+      - "Decorators make tool functions run faster"
+      - "Decorators co-locate registration metadata with the function definition, so adding a tool is a single-step operation that cannot drift out of sync"
+      - "Python requires decorators for all callable objects"
+      - "Decorators are the only way to extract function signatures in Python"
+    correctIndex: 1
+  - question: "What happens when an agent receives ALL available tools instead of a filtered subset?"
+    options:
+      - "The LLM processes tools faster because it has more options"
+      - "Nothing changes -- LLMs handle any number of tools equally well"
+      - "The agent's context window fills with irrelevant tool schemas, increasing cost, latency, and the likelihood of the LLM selecting the wrong tool"
+      - "The agent automatically filters out tools it does not need"
+    correctIndex: 2
+---
+
+## Overview
+
+In the previous lesson, you saw how ad-hoc tool definitions -- dictionaries scattered through your agent code -- create a maintenance burden that grows with every new tool. This lesson introduces the **Tool Registry pattern**, the first and most foundational pattern in our toolkit. It replaces hardcoded tool lists with a centralized registry where tools are registered once and discovered dynamically at runtime.
+
+If you worked through Module 3 (Tool Use), you designed tool schemas, implemented tool functions, and connected them to an LLM. You probably defined tools as inline dictionaries or lists that you passed directly to the model. That works for two or three tools. But what happens when you have fifteen tools across three domains, and different tasks need different subsets? The Tool Registry pattern is the answer.
+
+## The Core Idea
+
+A **Tool Registry** is a centralized data structure that holds all available tools and their metadata. Instead of the agent knowing about specific tools, it queries the registry: "Give me all tools tagged with 'search'" or "What tools are available for file operations?" The registry returns the relevant tools, and the agent passes them to the LLM.
+
+This creates a clean separation. The agent code never mentions specific tools. Tool authors never touch agent code. Adding a tool means registering it with the registry -- one operation, one location, zero changes to the agent.
+
+<MermaidDiagram chart={`graph TD
+    subgraph Agents["Agent Layer"]
+        A1["ReAct Agent"]
+        A2["Plan-and-Execute Agent"]
+        A3["Routing Agent"]
+    end
+    subgraph Registry["Tool Registry (Central Hub)"]
+        R["ToolRegistry<br/>register / get / list / filter"]
+    end
+    subgraph Tools["Tool Plugins"]
+        T1["Web Search"]
+        T2["Calculator"]
+        T3["File Reader"]
+        T4["Database Query"]
+        T5["API Client"]
+        T6["Code Executor"]
+    end
+    A1 -->|"get_tools(tags=['search'])"| R
+    A2 -->|"get_tools(tags=['data'])"| R
+    A3 -->|"list_all()"| R
+    R --- T1
+    R --- T2
+    R --- T3
+    R --- T4
+    R --- T5
+    R --- T6
+    style Registry fill:#ebf8ff,stroke:#3182ce
+    style Agents fill:#f5f0ff,stroke:#b794f4
+    style Tools fill:#f0fff4,stroke:#68d391
+    style R fill:#bee3f8,stroke:#3182ce
+    style A1 fill:#e9d8fd,stroke:#9f7aea
+    style A2 fill:#e9d8fd,stroke:#9f7aea
+    style A3 fill:#e9d8fd,stroke:#9f7aea
+    style T1 fill:#c6f6d5,stroke:#48bb78
+    style T2 fill:#c6f6d5,stroke:#48bb78
+    style T3 fill:#c6f6d5,stroke:#48bb78
+    style T4 fill:#c6f6d5,stroke:#48bb78
+    style T5 fill:#c6f6d5,stroke:#48bb78
+    style T6 fill:#c6f6d5,stroke:#48bb78
+`} />
+
+Notice the direction of the arrows. Agents depend on the registry, not on specific tools. Tools register themselves with the registry, not with specific agents. This is the **Dependency Inversion Principle** applied to agent systems -- both the agent and the tools depend on the registry abstraction, not on each other.
+
+## Class Structure
+
+Before writing code, let's design the class structure. The registry pattern has three key components: a **Tool** dataclass that wraps each tool's function and metadata, the **ToolRegistry** class that stores and queries tools, and a **decorator** that makes registration effortless.
+
+<MermaidDiagram chart={`classDiagram
+    class Tool {
+        +str name
+        +str description
+        +Callable function
+        +dict parameters
+        +list~str~ tags
+        +to_schema() dict
+        +execute(**kwargs) Any
+    }
+    class ToolRegistry {
+        -dict~str, Tool~ _tools
+        +tool(name, description, tags) Decorator
+        +register(tool: Tool) void
+        +get(name: str) Tool
+        +list_all() list~Tool~
+        +filter_by_tags(tags: list) list~Tool~
+        +get_schemas(tags: list) list~dict~
+        +execute(name, **kwargs) Any
+    }
+    class Agent {
+        -ToolRegistry registry
+        +run(query: str) str
+    }
+    ToolRegistry "1" --> "*" Tool : stores
+    Agent "1" --> "1" ToolRegistry : queries
+    Tool ..> Agent : never directly referenced
+`} />
+
+The key design decisions in this diagram:
+
+- **Tool** wraps both the callable function and its metadata (name, description, parameter schema, tags). The `to_schema()` method generates the JSON schema that the LLM expects.
+- **ToolRegistry** uses a dictionary internally, keyed by tool name. The `filter_by_tags()` method is what enables dynamic tool selection -- the agent asks for tools by capability, not by name.
+- **Agent** holds a reference to the registry, never to individual tools. The dashed line from Tool to Agent means "no direct dependency" -- tools and agents are fully decoupled.
+
+## Implementation
+
+Let's build this step by step. We start with the `Tool` dataclass, then the `ToolRegistry`, and finally the decorator that ties them together.
+
+### The Tool Wrapper
+
+<CodeBlock code={`from dataclasses import dataclass, field
+from typing import Any, Callable
+import inspect
+
+
+@dataclass
+class Tool:
+    """Wraps a tool function with its metadata and schema."""
+    name: str
+    description: str
+    function: Callable
+    tags: list[str] = field(default_factory=list)
+    parameters: dict = field(default_factory=dict)
+
+    def to_schema(self) -> dict:
+        """Generate the JSON schema the LLM expects for tool calling."""
+        return {
+            "type": "function",
+            "function": {
+                "name": self.name,
+                "description": self.description,
+                "parameters": {
+                    "type": "object",
+                    "properties": self.parameters,
+                    "required": [
+                        k for k, v in self.parameters.items()
+                        if "default" not in str(v)
+                    ],
+                },
+            },
+        }
+
+    def execute(self, **kwargs) -> Any:
+        """Run the tool function with the given arguments."""
+        return self.function(**kwargs)
+`} language="python" filename="tool.py" />
+
+The `Tool` dataclass serves as the **single source of truth** for everything the system needs to know about a tool: what it is called, what it does, how to call it, and what categories it belongs to. The `to_schema()` method produces the exact format that LLM APIs expect, so tool authors never have to write raw JSON schemas by hand.
+
+### The Registry
+
+<CodeBlock code={`from typing import Optional
+
+
+class ToolRegistry:
+    """Central registry for dynamic tool management."""
+
+    def __init__(self):
+        self._tools: dict[str, Tool] = {}
+
+    def register(self, tool: Tool) -> None:
+        """Register a tool. Raises if name is already taken."""
+        if tool.name in self._tools:
+            raise ValueError(
+                f"Tool '{tool.name}' is already registered. "
+                f"Use a unique name or unregister it first."
+            )
+        self._tools[tool.name] = tool
+
+    def tool(
+        self,
+        name: str,
+        description: str,
+        tags: Optional[list[str]] = None,
+        parameters: Optional[dict] = None,
+    ):
+        """Decorator that registers a function as a tool.
+
+        Usage:
+            @registry.tool(
+                name="web_search",
+                description="Search the web for information",
+                tags=["search", "web"],
+                parameters={"query": {"type": "string", "description": "Search query"}},
+            )
+            def web_search(query: str) -> str:
+                ...
+        """
+        def decorator(func: Callable) -> Callable:
+            tool_obj = Tool(
+                name=name,
+                description=description,
+                function=func,
+                tags=tags or [],
+                parameters=parameters or self._infer_parameters(func),
+            )
+            self.register(tool_obj)
+            return func
+        return decorator
+
+    def get(self, name: str) -> Tool:
+        """Retrieve a tool by name. Raises KeyError if not found."""
+        if name not in self._tools:
+            raise KeyError(
+                f"Tool '{name}' not found. "
+                f"Available: {list(self._tools.keys())}"
+            )
+        return self._tools[name]
+
+    def list_all(self) -> list[Tool]:
+        """Return all registered tools."""
+        return list(self._tools.values())
+
+    def filter_by_tags(self, tags: list[str]) -> list[Tool]:
+        """Return tools that have at least one of the given tags."""
+        return [
+            tool for tool in self._tools.values()
+            if any(tag in tool.tags for tag in tags)
+        ]
+
+    def get_schemas(self, tags: Optional[list[str]] = None) -> list[dict]:
+        """Get LLM-ready schemas, optionally filtered by tags."""
+        tools = self.filter_by_tags(tags) if tags else self.list_all()
+        return [tool.to_schema() for tool in tools]
+
+    def execute(self, name: str, **kwargs) -> Any:
+        """Look up a tool by name and execute it."""
+        tool = self.get(name)
+        return tool.execute(**kwargs)
+
+    def _infer_parameters(self, func: Callable) -> dict:
+        """Auto-generate parameter schema from type hints."""
+        sig = inspect.signature(func)
+        type_map = {str: "string", int: "integer", float: "number", bool: "boolean"}
+        params = {}
+        for param_name, param in sig.parameters.items():
+            hint = param.annotation
+            params[param_name] = {
+                "type": type_map.get(hint, "string"),
+                "description": f"Parameter: {param_name}",
+            }
+        return params
+`} language="python" filename="registry.py" />
+
+Several design choices are worth calling out:
+
+- **Name uniqueness is enforced.** Registering two tools with the same name raises an error immediately, preventing silent overwrites that would be painful to debug at runtime.
+- **Schema inference from type hints.** If you do not provide an explicit `parameters` dict, the decorator inspects the function's type hints and builds a schema automatically. This reduces boilerplate for simple tools.
+- **Tag-based filtering uses OR semantics.** A tool matches if it has *any* of the requested tags. This is intentional -- when an agent asks for tools tagged `["search", "web"]`, it wants all search tools and all web tools, not only tools that are both.
+
+### Registering Tools
+
+<CodeBlock code={`# Create a shared registry
+registry = ToolRegistry()
+
+
+@registry.tool(
+    name="web_search",
+    description="Search the web and return relevant results",
+    tags=["search", "web", "information"],
+    parameters={
+        "query": {"type": "string", "description": "The search query"},
+        "max_results": {"type": "integer", "description": "Max results to return"},
+    },
+)
+def web_search(query: str, max_results: int = 5) -> str:
+    # In production, this calls an actual search API
+    return f"Search results for: {query} (top {max_results})"
+
+
+@registry.tool(
+    name="calculator",
+    description="Evaluate a mathematical expression",
+    tags=["math", "calculation"],
+    parameters={
+        "expression": {"type": "string", "description": "Math expression to evaluate"},
+    },
+)
+def calculator(expression: str) -> str:
+    try:
+        result = eval(expression)  # Use a safe parser in production
+        return f"Result: {result}"
+    except Exception as e:
+        return f"Error: {e}"
+
+
+@registry.tool(
+    name="read_file",
+    description="Read the contents of a file",
+    tags=["filesystem", "data"],
+    parameters={
+        "path": {"type": "string", "description": "File path to read"},
+    },
+)
+def read_file(path: str) -> str:
+    with open(path, "r") as f:
+        return f.read()
+
+
+# Dynamic tool selection in action
+search_tools = registry.filter_by_tags(["search"])
+math_tools = registry.filter_by_tags(["math"])
+all_schemas = registry.get_schemas()
+search_schemas = registry.get_schemas(tags=["search"])
+
+print(f"Total tools: {len(registry.list_all())}")       # 3
+print(f"Search tools: {len(search_tools)}")              # 1
+print(f"Math tools: {len(math_tools)}")                  # 1
+print(f"Schemas for LLM: {len(all_schemas)}")            # 3
+print(f"Search schemas for LLM: {len(search_schemas)}")  # 1
+`} language="python" filename="register_tools.py" />
+
+This is the payoff. Adding a new tool is a **single decorator** on the function definition. No dispatch tables to update. No agent code to modify. No import lists to maintain. The decorator co-locates the tool's metadata with its implementation, so they cannot drift out of sync.
+
+## Connecting the Registry to an Agent
+
+The registry only becomes useful when an agent queries it. Here is how a ReAct-style agent loop uses the registry to dynamically select and execute tools:
+
+<CodeBlock code={`import json
+from anthropic import Anthropic
+
+
+def run_agent(query: str, registry: ToolRegistry, tags: list[str] = None):
+    """A minimal agent loop that uses the registry for tool management."""
+    client = Anthropic()
+    messages = [{"role": "user", "content": query}]
+
+    # Ask the registry for the right tools -- not hardcoded
+    tool_schemas = registry.get_schemas(tags=tags)
+
+    while True:
+        response = client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=1024,
+            tools=tool_schemas,
+            messages=messages,
+        )
+
+        # Check if the model wants to use a tool
+        if response.stop_reason == "tool_use":
+            tool_block = next(
+                b for b in response.content if b.type == "tool_use"
+            )
+
+            # Execute via registry -- no if/elif dispatch
+            result = registry.execute(
+                tool_block.name, **tool_block.input
+            )
+
+            # Feed result back to the model
+            messages.append({"role": "assistant", "content": response.content})
+            messages.append({
+                "role": "user",
+                "content": [{
+                    "type": "tool_result",
+                    "tool_use_id": tool_block.id,
+                    "content": str(result),
+                }],
+            })
+        else:
+            # Model produced a final text response
+            return response.content[0].text
+
+
+# Use it: give the agent only search tools for a search task
+answer = run_agent(
+    "What is the weather in Tokyo?",
+    registry,
+    tags=["search", "web"],
+)
+`} language="python" filename="agent_with_registry.py" />
+
+Compare this to the ad-hoc approach from Module 3, where you would have an `if/elif` chain dispatching tool calls by name. With the registry, the dispatch is a single `registry.execute()` call. The agent does not know or care which tools exist -- it delegates that entirely to the registry.
+
+## Why Filtering Matters
+
+You might wonder: why not just give the LLM all the tools every time? The answer comes down to three factors:
+
+**Context window cost.** Every tool schema consumes tokens. With 20 tools, the schemas alone can eat 2,000-3,000 tokens before the conversation even starts. Filtering to 5 relevant tools saves significant context space -- context you need for the actual conversation and reasoning.
+
+**Selection accuracy.** LLMs make better tool choices when presented with fewer, relevant options. Research consistently shows that tool selection accuracy *decreases* as the number of available tools increases. A focused set of 3-5 tools leads to more accurate selections than a sprawling set of 20.
+
+**Security and safety.** Not every tool should be available for every task. A customer support agent should not have access to database deletion tools. Filtering by tags gives you a simple, declarative way to enforce **least privilege** -- the agent only sees the tools it needs for the current task.
+
+> **Connection to Module 3:** In Module 3, you learned to design tool schemas with clear names and descriptions so the LLM can select the right tool. The Tool Registry builds on that foundation by controlling *which* schemas the LLM sees in the first place. Good schema design and good tool filtering work together -- the registry narrows the candidate set, and well-designed schemas help the LLM pick correctly from that set.
+
+## Dynamic Loading: Plugins at Runtime
+
+So far, all tools were registered at import time using decorators. But the registry pattern truly shines when tools are loaded **dynamically** -- discovered and registered at runtime from a plugin directory, a configuration file, or even a remote service.
+
+<CodeBlock code={`import importlib
+import os
+from pathlib import Path
+
+
+def load_plugins(registry: ToolRegistry, plugin_dir: str) -> int:
+    """Discover and load tool plugins from a directory.
+
+    Each plugin is a .py file that defines a 'register' function
+    accepting a ToolRegistry instance.
+
+    Returns the number of tools loaded.
+    """
+    plugin_path = Path(plugin_dir)
+    loaded = 0
+
+    for file in sorted(plugin_path.glob("*.py")):
+        if file.name.startswith("_"):
+            continue
+
+        # Import the module dynamically
+        spec = importlib.util.spec_from_file_location(
+            f"plugins.{file.stem}", file
+        )
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        # Each plugin exposes a register(registry) function
+        if hasattr(module, "register"):
+            before = len(registry.list_all())
+            module.register(registry)
+            loaded += len(registry.list_all()) - before
+            print(f"Loaded plugin: {file.name} ({len(registry.list_all()) - before} tools)")
+        else:
+            print(f"Skipping {file.name}: no register() function")
+
+    return loaded
+
+
+# Example plugin file: plugins/weather_tools.py
+# ------------------------------------------------
+# def register(registry):
+#     @registry.tool(
+#         name="get_weather",
+#         description="Get current weather for a city",
+#         tags=["weather", "search"],
+#         parameters={"city": {"type": "string", "description": "City name"}},
+#     )
+#     def get_weather(city: str) -> str:
+#         return f"Weather for {city}: 72F, sunny"
+#
+#     @registry.tool(
+#         name="get_forecast",
+#         description="Get 5-day weather forecast",
+#         tags=["weather", "search"],
+#         parameters={"city": {"type": "string", "description": "City name"}},
+#     )
+#     def get_forecast(city: str) -> str:
+#         return f"5-day forecast for {city}: ..."
+`} language="python" filename="dynamic_loading.py" />
+
+This **plugin architecture** means you can extend an agent's capabilities without modifying a single line of the agent's code. Drop a new `.py` file into the plugins directory, restart the agent, and the new tools appear automatically. This is the same pattern that frameworks like pytest (plugins), Flask (extensions), and VS Code (extensions) use to achieve extensibility.
+
+## When to Use This Pattern
+
+The Tool Registry pattern is valuable when:
+
+- You have **more than three tools** and expect the number to grow
+- Different tasks require **different subsets** of tools
+- Multiple agents share the **same pool** of tools
+- You want to **add tools without modifying** agent code
+- You need **runtime control** over which tools are available (e.g., based on user permissions, task type, or environment)
+
+For a simple agent with two or three fixed tools, the overhead of a registry is not justified. Pass the tool list directly. But as soon as your tool count grows or your agents multiply, the registry pays for itself immediately.
+
+## Looking Ahead
+
+The Tool Registry handles the "what tools exist" question. But it does not address what happens *around* tool execution -- logging, validation, rate limiting, and error handling. That is the domain of the next lesson: **Middleware and Hooks**. You will learn how to wrap every tool call in a pipeline of interceptors, without modifying the tools themselves or the agent logic.
+
+Further ahead, in Module 8 (Frameworks), you will see that frameworks like LangGraph and CrewAI include built-in tool registries. Understanding the pattern from first principles -- as we have done here -- will let you use those frameworks' registries effectively, extend them when they fall short, and debug them when they behave unexpectedly.
+
+## Summary
+
+The **Tool Registry pattern** decouples tool definitions from agent logic by introducing a centralized registry where tools are registered once and discovered dynamically at runtime.
+
+- A **Tool** dataclass wraps each tool's function, metadata, and schema in a single object
+- The **ToolRegistry** stores tools by name and supports filtering by **tags** -- enabling agents to request only the tools relevant to the current task
+- A **decorator** (`@registry.tool(...)`) co-locates registration metadata with the function definition, making tool registration a single-step operation
+- **Tag-based filtering** reduces context window usage, improves LLM tool selection accuracy, and enforces least-privilege access
+- **Dynamic loading** from plugin directories enables extensibility without modifying agent code
+- The registry replaces ad-hoc `if/elif` dispatch chains with a single `registry.execute()` call, eliminating a common source of bugs when tools are added or removed
+
+In the next lesson, you will learn the **Middleware and Hooks** pattern -- how to intercept every tool call for logging, validation, and transformation without touching the registry or the agent.

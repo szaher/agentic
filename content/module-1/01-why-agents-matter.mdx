@@ -111,9 +111,9 @@ Let us walk through each stage:
 
 **ReAct / Agent Loop** -- Instead of a fixed chain, the LLM operates in a dynamic loop: **Reason** about what to do next, **Act** by calling a tool, **Observe** the result, and repeat until the goal is met. This is the core pattern you will study in Lesson 4 of this module (The Agent Loop).
 
-**Autonomous Agent** -- The loop gains planning, memory, and self-correction. The agent can break a goal into subtasks, track progress, recover from errors, and persist knowledge across sessions. Module 6 (Memory & Knowledge) and Module 4 (Agent Architectures) cover these capabilities.
+**Autonomous Agent** -- The loop gains planning, memory, and self-correction. The agent can break a goal into subtasks, track progress, recover from errors, and persist knowledge across sessions. Module 7 (Memory & Knowledge) and Module 4 (Agent Architectures) cover these capabilities.
 
-**Multi-Agent System** -- Multiple specialized agents collaborate, each handling a different aspect of a complex task. A planner agent delegates to a researcher agent, a coder agent, and a reviewer agent. Module 9 (Multi-Agent Systems) dives deep into this pattern.
+**Multi-Agent System** -- Multiple specialized agents collaborate, each handling a different aspect of a complex task. A planner agent delegates to a researcher agent, a coder agent, and a reviewer agent. Module 10 (Multi-Agent Systems) dives deep into this pattern.
 
 ## Why Now? The Convergence
 
@@ -123,7 +123,7 @@ Agents are not a new idea. The concept of autonomous goal-driven software has ex
 
 2. **Tool-use protocols** -- Standards and APIs for letting LLMs invoke external tools have matured. Function calling, the Model Context Protocol (MCP), and tool-use schemas allow models to interact with the outside world in a structured, predictable way.
 
-3. **Orchestration frameworks** -- Libraries and platforms (LangGraph, CrewAI, OpenAI Agents SDK, Google ADK, and others) provide the scaffolding to build, run, and manage agents without reinventing the wheel. You will survey these in Module 7 (Agent Frameworks & SDKs).
+3. **Orchestration frameworks** -- Libraries and platforms (LangGraph, CrewAI, OpenAI Agents SDK, Google ADK, and others) provide the scaffolding to build, run, and manage agents without reinventing the wheel. You will survey these in Module 8 (Agent Frameworks & SDKs).
 
 The result is that building an agent went from a research project to a weekend project. But building a *reliable, safe, production-grade* agent -- that still takes deep understanding. Which is why this academy exists.
 
@@ -159,9 +159,9 @@ This lesson is your entry point into a twelve-module journey through the entire 
 - **Module 2 (Prompting & Reasoning)** covers how to craft prompts that unlock reliable reasoning, the cognitive engine of every agent
 - **Module 3 (Tool Use)** teaches how agents interact with the outside world through function calling and tool protocols
 - **Module 4 (Architectures)** surveys the major architectural patterns: ReAct, Plan-and-Execute, LLMCompiler, and more
-- **Module 6 (Memory & Knowledge)** addresses how agents persist and retrieve information across interactions
-- **Module 9 (Multi-Agent Systems)** explores how multiple agents collaborate to tackle complex workflows
-- **Module 11 (Production & Safety)** covers the hard problems of deploying agents reliably: guardrails, observability, cost control, and safety
+- **Module 7 (Memory & Knowledge)** addresses how agents persist and retrieve information across interactions
+- **Module 10 (Multi-Agent Systems)** explores how multiple agents collaborate to tackle complex workflows
+- **Module 12 (Production & Safety)** covers the hard problems of deploying agents reliably: guardrails, observability, cost control, and safety
 
 Each module builds on the ones before it, so take them in order when possible.
 

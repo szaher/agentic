@@ -1,0 +1,453 @@
+---
+title: "Orchestration Patterns"
+quiz:
+  - question: "In the supervisor topology, what is the central coordinator's primary responsibility?"
+    options:
+      - "Executing every subtask itself and returning the combined result"
+      - "Receiving the user request, delegating subtasks to specialized worker agents, and synthesizing their results"
+      - "Passing messages between worker agents without any decision-making authority"
+      - "Training the worker agents on new tasks at runtime"
+    correctIndex: 1
+  - question: "Which orchestration topology is BEST suited for a content production system where research must finish before writing, and writing must finish before editing?"
+    options:
+      - "Swarm topology, because agents can freely hand off to each other"
+      - "Supervisor topology, because a central agent can run all stages in parallel"
+      - "Pipeline topology, because each stage's output feeds directly into the next stage in a fixed sequence"
+      - "Hierarchical topology, because it uses multiple levels of management"
+    correctIndex: 2
+  - question: "What distinguishes the swarm topology from the supervisor topology?"
+    options:
+      - "Swarm agents cannot use tools, while supervisor workers can"
+      - "In a swarm, agents hand off control directly to peers without a central coordinator, while a supervisor dispatches and collects results through a single orchestrator"
+      - "Swarm topologies always use more agents than supervisor topologies"
+      - "Supervisor topologies only support sequential execution"
+    correctIndex: 1
+  - question: "A company needs to build a system where a VP-level agent manages regional managers, each of whom coordinates local specialist teams. Which topology fits?"
+    options:
+      - "Pipeline topology"
+      - "Swarm topology"
+      - "Hierarchical topology, because it nests supervisors within supervisors to handle multi-level delegation"
+      - "A single supervisor with many workers"
+    correctIndex: 2
+---
+
+## Overview
+
+In the previous lesson, we established *why* multi-agent systems exist: specialization, parallelism, and separation of concerns let teams of agents solve problems that overwhelm any single agent. But agreeing that you need multiple agents is only the first decision. The harder question is: **how do those agents relate to each other?** Who decides what work gets done, in what order, and by whom?
+
+The answer lies in **orchestration patterns** -- the structural topologies that define how agents are organized, how control flows between them, and how results are collected. Choosing the right topology is as consequential as choosing the right algorithm: the same set of agents can succeed brilliantly or fail completely depending on how they are wired together.
+
+This lesson introduces the four major orchestration topologies -- **Supervisor**, **Swarm**, **Pipeline**, and **Hierarchical** -- with architecture diagrams for each, a decision flowchart for selecting among them, and a working Python implementation of the supervisor pattern. If you completed Module 4, you will recognize the routing architecture from Lesson 05 as the single-agent precursor to the supervisor pattern we build here. And if you worked through Module 8 Lesson 05, you will see how CrewAI's sequential and hierarchical process types map directly onto two of these topologies.
+
+## Topology 1: Supervisor
+
+The **supervisor topology** places a single coordinator agent at the center. The supervisor receives the user's request, breaks it into subtasks, dispatches each subtask to a specialized **worker agent**, collects the results, and synthesizes a final response. Workers never talk to each other -- all communication flows through the supervisor.
+
+<MermaidDiagram chart={`graph TD
+    USER[User Request] --> SUP
+
+    subgraph SUPERVISOR_BOX["Supervisor Agent"]
+        SUP["Decompose task<br/>Dispatch to workers<br/>Synthesize results"]
+    end
+
+    SUP -->|Research subtask| W1["Research Worker<br/>Tools: search, summarize"]
+    SUP -->|Analysis subtask| W2["Analysis Worker<br/>Tools: calculate, chart"]
+    SUP -->|Writing subtask| W3["Writing Worker<br/>Tools: draft, format"]
+
+    W1 -->|Results| SUP
+    W2 -->|Results| SUP
+    W3 -->|Results| SUP
+
+    SUP --> OUTPUT[Final Response]
+
+    style SUPERVISOR_BOX fill:#e9d8fd,stroke:#805ad5,color:#1a202c
+    style SUP fill:#e9d8fd,stroke:#805ad5,color:#1a202c
+    style W1 fill:#ebf8ff,stroke:#3182ce,color:#1a202c
+    style W2 fill:#c6f6d5,stroke:#38a169,color:#1a202c
+    style W3 fill:#fefcbf,stroke:#d69e2e,color:#1a202c
+    style USER fill:#f7fafc,stroke:#718096,color:#1a202c
+    style OUTPUT fill:#f7fafc,stroke:#718096,color:#1a202c
+`} />
+
+The supervisor is the natural evolution of the routing pattern you built in Module 4 Lesson 05. A router classifies a request and delegates to *one* specialist. A supervisor goes further: it can delegate to *multiple* workers, run them in parallel, inspect their results, request revisions, and combine outputs into a coherent whole. The router asks "Who should handle this?" while the supervisor asks "How should this work be divided, coordinated, and assembled?"
+
+**Strengths:** Central control makes the system easy to reason about, debug, and monitor. The supervisor can enforce quality by reviewing worker outputs before returning them. Adding a new capability means adding a new worker without changing existing ones.
+
+**Weaknesses:** The supervisor is a single point of failure and a potential bottleneck. Every message passes through it, which limits throughput. If the supervisor's task decomposition is poor, every downstream worker suffers.
+
+## Topology 2: Swarm
+
+The **swarm topology** eliminates the central coordinator entirely. Agents operate as peers, handing off control directly to whichever agent is best suited for the next step. There is no boss -- just a network of specialists who know when to pass the baton.
+
+<MermaidDiagram chart={`graph LR
+    USER[User] --> A1
+
+    subgraph SWARM["Swarm: Peer-to-Peer Handoffs"]
+        A1["Triage Agent"] -->|billing issue| A2["Billing Agent"]
+        A1 -->|technical question| A3["Technical Agent"]
+        A2 -->|needs refund approval| A4["Escalation Agent"]
+        A3 -->|needs code review| A5["Code Review Agent"]
+        A5 -->|resolved| A3
+        A4 -->|approved| A2
+    end
+
+    A2 --> RESP[Response]
+    A3 --> RESP
+
+    style SWARM fill:#f0fff4,stroke:#276749,stroke-width:2px,color:#1a202c
+    style A1 fill:#bee3f8,stroke:#3182ce,color:#1a202c
+    style A2 fill:#fefcbf,stroke:#d69e2e,color:#1a202c
+    style A3 fill:#c6f6d5,stroke:#38a169,color:#1a202c
+    style A4 fill:#fed7d7,stroke:#e53e3e,color:#1a202c
+    style A5 fill:#e9d8fd,stroke:#805ad5,color:#1a202c
+    style USER fill:#f7fafc,stroke:#718096,color:#1a202c
+    style RESP fill:#f7fafc,stroke:#718096,color:#1a202c
+`} />
+
+In a swarm, each agent's tool list includes **handoff functions** -- tools that transfer control (and conversation context) to another agent. The triage agent does not solve the problem; it hands off to billing or technical support. If the billing agent encounters a refund that exceeds its authority, it hands off to an escalation agent. Control flows organically through the network based on the needs of the conversation.
+
+This is the pattern that the OpenAI Agents SDK uses natively (Module 8 Lesson 02). Each agent declares which other agents it can hand off to, and the runtime manages the transitions. The result feels conversational and adaptive -- the system routes itself without a centralized dispatcher.
+
+**Strengths:** No single point of failure. Scales naturally as you add agents. Conversational flow feels organic because handoffs happen in context, not through a dispatcher. Well-suited for customer support, help desks, and advisory systems.
+
+**Weaknesses:** Difficult to debug when handoff chains get long (A handed to B, who handed to C, who handed back to A). No global view of progress. Circular handoffs can create infinite loops without careful guard clauses. Hard to enforce global constraints like "the user should get a response within 3 handoffs."
+
+## Topology 3: Pipeline
+
+The **pipeline topology** arranges agents in a fixed, sequential chain. Each agent performs one stage of processing, transforms the data, and passes its output to the next agent. Think of it like an assembly line: raw material enters at one end, and a finished product exits at the other.
+
+<MermaidDiagram chart={`graph LR
+    INPUT[User Query] --> S1
+
+    subgraph PIPELINE["Pipeline: Sequential Stages"]
+        S1["Stage 1: Researcher<br/>━━━━━━━━━━━<br/>Gathers raw data<br/>and source material"] --> S2["Stage 2: Analyst<br/>━━━━━━━━━━━<br/>Extracts insights<br/>and identifies patterns"]
+        S2 --> S3["Stage 3: Writer<br/>━━━━━━━━━━━<br/>Drafts structured<br/>report from analysis"]
+        S3 --> S4["Stage 4: Editor<br/>━━━━━━━━━━━<br/>Polishes language<br/>and checks facts"]
+    end
+
+    S4 --> OUTPUT[Final Report]
+
+    style PIPELINE fill:#ebf8ff,stroke:#3182ce,stroke-width:2px,color:#1a202c
+    style S1 fill:#bee3f8,stroke:#3182ce,color:#1a202c
+    style S2 fill:#9ae6b4,stroke:#38a169,color:#1a202c
+    style S3 fill:#fefcbf,stroke:#d69e2e,color:#1a202c
+    style S4 fill:#e9d8fd,stroke:#805ad5,color:#1a202c
+    style INPUT fill:#f7fafc,stroke:#718096,color:#1a202c
+    style OUTPUT fill:#f7fafc,stroke:#718096,color:#1a202c
+`} />
+
+If you used CrewAI's **sequential process** in Module 8 Lesson 05, you have already built a pipeline. Each CrewAI `Task` is assigned to an `Agent`, and when the process type is `sequential`, tasks execute in order with each task's output feeding into the next. The pipeline topology formalizes this pattern: the structure is the sequence itself.
+
+**Strengths:** Simple to understand, implement, and debug. Each stage has a clear contract -- what it receives and what it produces. Easy to test stages in isolation. Predictable execution time (sum of all stages).
+
+**Weaknesses:** No parallelism -- every stage must wait for the previous one to finish. A failure in any stage halts the entire pipeline. Not suitable for tasks that require back-and-forth collaboration between stages (the analyst cannot ask the researcher for more data mid-pipeline without adding a feedback loop).
+
+## Topology 4: Hierarchical
+
+The **hierarchical topology** nests supervisors within supervisors. A top-level manager delegates to mid-level managers, who in turn coordinate their own teams of worker agents. This mirrors how large organizations operate: a VP sets strategy, directors manage divisions, and individual contributors do the specialized work.
+
+<MermaidDiagram chart={`graph TD
+    USER[User Request] --> CEO
+
+    subgraph TOP["Executive Layer"]
+        CEO["Executive Supervisor<br/>━━━━━━━━━━━<br/>Strategic decomposition<br/>Cross-team coordination"]
+    end
+
+    CEO -->|Research division| MGR1
+    CEO -->|Engineering division| MGR2
+
+    subgraph RESEARCH["Research Team"]
+        MGR1["Research Manager"] --> R1["Web Researcher"]
+        MGR1 --> R2["Data Analyst"]
+        MGR1 --> R3["Fact Checker"]
+    end
+
+    subgraph ENGINEERING["Engineering Team"]
+        MGR2["Engineering Manager"] --> E1["Backend Developer"]
+        MGR2 --> E2["Frontend Developer"]
+        MGR2 --> E3["QA Tester"]
+    end
+
+    R1 --> MGR1
+    R2 --> MGR1
+    R3 --> MGR1
+    E1 --> MGR2
+    E2 --> MGR2
+    E3 --> MGR2
+
+    MGR1 -->|Research findings| CEO
+    MGR2 -->|Implementation plan| CEO
+
+    CEO --> OUTPUT[Final Deliverable]
+
+    style TOP fill:#fed7d7,stroke:#e53e3e,stroke-width:2px,color:#1a202c
+    style RESEARCH fill:#ebf8ff,stroke:#3182ce,stroke-width:2px,color:#1a202c
+    style ENGINEERING fill:#f0fff4,stroke:#276749,stroke-width:2px,color:#1a202c
+    style CEO fill:#feb2b2,stroke:#e53e3e,color:#1a202c
+    style MGR1 fill:#bee3f8,stroke:#3182ce,color:#1a202c
+    style MGR2 fill:#9ae6b4,stroke:#276749,color:#1a202c
+    style R1 fill:#ebf8ff,stroke:#3182ce,color:#1a202c
+    style R2 fill:#ebf8ff,stroke:#3182ce,color:#1a202c
+    style R3 fill:#ebf8ff,stroke:#3182ce,color:#1a202c
+    style E1 fill:#c6f6d5,stroke:#276749,color:#1a202c
+    style E2 fill:#c6f6d5,stroke:#276749,color:#1a202c
+    style E3 fill:#c6f6d5,stroke:#276749,color:#1a202c
+    style USER fill:#f7fafc,stroke:#718096,color:#1a202c
+    style OUTPUT fill:#f7fafc,stroke:#718096,color:#1a202c
+`} />
+
+CrewAI's **hierarchical process** (Module 8 Lesson 05) is a two-level hierarchy: a manager agent automatically created by the framework coordinates the crew's agents. The topology described here generalizes that to arbitrary depth -- managers managing managers -- for systems complex enough to warrant it.
+
+**Strengths:** Scales to very complex tasks with many agents. Each manager only needs to understand its own team, reducing cognitive load per agent. Natural separation of strategy (top level) from execution (bottom level). Teams can be developed and tested independently.
+
+**Weaknesses:** Communication overhead grows with depth -- a message from a leaf worker to the executive passes through multiple managers. Latency increases with each layer. Over-engineering risk: most problems do not need three levels of management.
+
+## Choosing the Right Topology
+
+With four topologies to choose from, how do you decide? The following flowchart guides the decision based on your task's characteristics:
+
+<MermaidDiagram chart={`flowchart TD
+    START["What does your task<br/>look like?"] --> Q1{Can the task be split<br/>into independent<br/>subtasks?}
+
+    Q1 -->|No, it is a<br/>fixed sequence| PIPELINE["Use Pipeline<br/>━━━━━━━━━━━<br/>Each stage transforms<br/>and passes forward"]
+
+    Q1 -->|Yes| Q2{Do subtasks need<br/>a central coordinator<br/>to manage them?}
+
+    Q2 -->|No, agents can<br/>self-organize| Q3{Are there more than<br/>2-3 agents that need<br/>to hand off to each other?}
+
+    Q3 -->|Yes, complex<br/>handoff network| SWARM["Use Swarm<br/>━━━━━━━━━━━<br/>Peer-to-peer handoffs<br/>Decentralized control"]
+    Q3 -->|No, simple<br/>handoff pairs| SWARM
+
+    Q2 -->|Yes| Q4{Are there multiple<br/>teams or domains<br/>that each need their<br/>own coordinator?}
+
+    Q4 -->|No, one coordinator<br/>is enough| SUPERVISOR["Use Supervisor<br/>━━━━━━━━━━━<br/>Central orchestrator<br/>dispatches to workers"]
+
+    Q4 -->|Yes, multiple<br/>sub-teams| HIERARCHICAL["Use Hierarchical<br/>━━━━━━━━━━━<br/>Managers manage<br/>their own teams"]
+
+    style START fill:#f7fafc,stroke:#718096,color:#1a202c
+    style Q1 fill:#e9d8fd,stroke:#805ad5,color:#1a202c
+    style Q2 fill:#e9d8fd,stroke:#805ad5,color:#1a202c
+    style Q3 fill:#e9d8fd,stroke:#805ad5,color:#1a202c
+    style Q4 fill:#e9d8fd,stroke:#805ad5,color:#1a202c
+    style PIPELINE fill:#bee3f8,stroke:#3182ce,color:#1a202c
+    style SWARM fill:#c6f6d5,stroke:#38a169,color:#1a202c
+    style SUPERVISOR fill:#fefcbf,stroke:#d69e2e,color:#1a202c
+    style HIERARCHICAL fill:#fed7d7,stroke:#e53e3e,color:#1a202c
+`} />
+
+A few rules of thumb to supplement the flowchart:
+
+- **Start with the simplest topology that works.** A pipeline with two stages is easier to debug than a three-level hierarchy. You can always add complexity later.
+- **Supervisor is the default.** If you are unsure, start with a supervisor and a few workers. It is the most common topology in production systems because it balances control with flexibility.
+- **Use swarm for conversational systems.** When the user is interacting in real-time and the conversation naturally moves between domains (support, billing, technical), swarm handoffs feel more natural than routing through a central dispatcher.
+- **Reserve hierarchical for genuine complexity.** If you have fewer than 6-8 agents, a flat supervisor is almost always sufficient. Hierarchy pays off when you have dozens of specialists organized into distinct functional teams.
+
+## Implementing a Supervisor Pattern
+
+Let's build a working supervisor that coordinates a research agent and an analysis agent to answer complex questions. The supervisor decomposes the user's query, dispatches subtasks, and synthesizes the results:
+
+<CodeBlock code={`import anthropic
+import json
+
+client = anthropic.Anthropic()
+
+# --- Worker definitions ---
+
+WORKERS = {
+    "researcher": {
+        "system_prompt": (
+            "You are a research specialist. When given a research question, "
+            "provide comprehensive, factual information with specific details, "
+            "statistics, and examples. Structure your response with clear sections. "
+            "Focus on accuracy over brevity."
+        ),
+        "model": "claude-sonnet-4-20250514",
+    },
+    "analyst": {
+        "system_prompt": (
+            "You are a data analyst. When given information and an analysis task, "
+            "identify patterns, draw comparisons, evaluate trade-offs, and produce "
+            "structured insights. Use bullet points for key findings. "
+            "Be specific and quantitative whenever possible."
+        ),
+        "model": "claude-sonnet-4-20250514",
+    },
+}
+
+
+def call_worker(worker_name: str, task: str) -> str:
+    """Send a subtask to a worker agent and return its response."""
+    config = WORKERS[worker_name]
+    response = client.messages.create(
+        model=config["model"],
+        max_tokens=2048,
+        system=config["system_prompt"],
+        messages=[{"role": "user", "content": task}],
+    )
+    return response.content[0].text
+
+
+def supervisor(user_query: str) -> str:
+    """
+    The supervisor agent: decomposes, delegates, and synthesizes.
+
+    This agent uses tool_use to call workers. The tools represent
+    the available worker agents, not external APIs.
+    """
+    # Define workers as tools the supervisor can call
+    worker_tools = [
+        {
+            "name": "dispatch_researcher",
+            "description": (
+                "Send a research task to the research specialist. "
+                "Use this to gather factual information, data, and examples."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "task": {
+                        "type": "string",
+                        "description": "The specific research question or topic",
+                    }
+                },
+                "required": ["task"],
+            },
+        },
+        {
+            "name": "dispatch_analyst",
+            "description": (
+                "Send an analysis task to the analyst. Use this to evaluate "
+                "data, compare options, identify patterns, or draw conclusions."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "task": {
+                        "type": "string",
+                        "description": "The analysis task, including any data to analyze",
+                    }
+                },
+                "required": ["task"],
+            },
+        },
+    ]
+
+    supervisor_system = (
+        "You are a supervisor agent that coordinates a team of specialists. "
+        "Your job is to:\\n"
+        "1. Analyze the user's request\\n"
+        "2. Break it into subtasks for your workers\\n"
+        "3. Dispatch tasks using your tools\\n"
+        "4. Synthesize worker results into a final, coherent response\\n\\n"
+        "Available workers:\\n"
+        "- dispatch_researcher: for gathering information and facts\\n"
+        "- dispatch_analyst: for analyzing data and drawing conclusions\\n\\n"
+        "You may call workers multiple times or in any order. "
+        "After collecting all results, provide a final synthesis."
+    )
+
+    messages = [{"role": "user", "content": user_query}]
+    worker_results = {}
+
+    # Agentic loop: let the supervisor call workers until it is done
+    while True:
+        response = client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=4096,
+            system=supervisor_system,
+            tools=worker_tools,
+            messages=messages,
+        )
+
+        # If the model is done (no more tool calls), return the final text
+        if response.stop_reason == "end_turn":
+            final_text = ""
+            for block in response.content:
+                if hasattr(block, "text"):
+                    final_text += block.text
+            return final_text
+
+        # Process tool calls (worker dispatches)
+        assistant_content = response.content
+        tool_results = []
+
+        for block in assistant_content:
+            if block.type == "tool_use":
+                tool_name = block.name
+                task = block.input["task"]
+
+                # Map tool names to workers
+                worker_map = {
+                    "dispatch_researcher": "researcher",
+                    "dispatch_analyst": "analyst",
+                }
+                worker_name = worker_map[tool_name]
+
+                print(f"[Supervisor] Dispatching to {worker_name}: {task[:80]}...")
+                result = call_worker(worker_name, task)
+                worker_results[worker_name] = result
+                print(f"[{worker_name}] Returned {len(result)} chars")
+
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": block.id,
+                    "content": result,
+                })
+
+        # Feed results back to the supervisor for synthesis
+        messages.append({"role": "assistant", "content": assistant_content})
+        messages.append({"role": "user", "content": tool_results})
+
+
+# --- Run it ---
+query = "Compare serverless and container-based architectures for a startup building a real-time analytics platform."
+print(f"Query: {query}\\n{'='*60}")
+result = supervisor(query)
+print(f"\\nFinal Response:\\n{result}")
+`} language="python" filename="supervisor_agent.py" />
+
+Several design choices in this implementation deserve attention:
+
+- **Workers-as-tools.** The supervisor uses Claude's tool_use mechanism to dispatch to workers. Each worker is represented as a tool, which means the supervisor's LLM naturally decides *when* and *how many* workers to call. It might call the researcher once and the analyst twice, or skip the analyst entirely -- the decision is dynamic, not hardcoded.
+
+- **The agentic loop.** The `while True` loop lets the supervisor iterate: dispatch workers, receive results, decide if more work is needed, and dispatch again. This is the same tool-use loop you learned in Module 3, but now the "tools" are other agents rather than external APIs.
+
+- **Synthesis happens last.** After all workers report back, the supervisor produces a final response that weaves together the research and analysis. This synthesis step is what separates a supervisor from a simple router -- the supervisor does not just relay a worker's response, it adds value by combining and contextualizing multiple outputs.
+
+> **Connection to Module 4:** Compare this supervisor implementation with the router from Module 4 Lesson 05. The router classified intent and delegated to *one* specialist. The supervisor decomposes the task and delegates to *multiple* workers, potentially calling the same worker more than once. The structural pattern is the same -- classify, delegate, return -- but the supervisor's expressiveness is far greater because it controls the loop.
+
+## Topology Comparison at a Glance
+
+| Characteristic | Supervisor | Swarm | Pipeline | Hierarchical |
+|---|---|---|---|---|
+| **Control flow** | Centralized | Decentralized | Sequential | Nested centralized |
+| **Communication** | Hub-and-spoke | Peer-to-peer | Chain | Tree |
+| **Best for** | Task decomposition | Conversational routing | Data transformation | Large-scale systems |
+| **Parallelism** | Yes (workers) | Implicit (handoffs) | No (sequential) | Yes (within teams) |
+| **Debugging** | Easy (single point) | Hard (trace handoffs) | Easy (linear flow) | Moderate (layered) |
+| **Failure mode** | Supervisor bottleneck | Circular handoffs | Stage blockage | Communication overhead |
+| **Framework example** | LangGraph supervisor | OpenAI Agents SDK | CrewAI sequential | CrewAI hierarchical |
+
+## Hybrid Topologies in Practice
+
+Real-world systems rarely use a single topology in isolation. A production multi-agent system might combine several:
+
+- A **supervisor** at the top level decomposes the user's request into research and implementation subtasks.
+- The research subtask is handled by a **pipeline** of agents: search, summarize, fact-check.
+- The implementation subtask is managed by a **hierarchical** team: an engineering manager coordinates a backend developer, a frontend developer, and a QA tester.
+- Within the implementation team, the QA tester uses **swarm-style handoffs** with the developers -- filing bugs, receiving fixes, and re-testing in a peer-to-peer loop.
+
+The topologies are composable building blocks, not rigid choices. Understanding each one individually gives you the vocabulary to design hybrid architectures that match your problem's actual structure.
+
+## Summary
+
+**Orchestration patterns** define how agents in a multi-agent system are organized and how control flows between them. The four major topologies are:
+
+- **Supervisor** -- a central coordinator decomposes tasks, dispatches to workers, and synthesizes results. Best for task decomposition where a single point of control is desirable. This is the direct evolution of the routing pattern from Module 4 Lesson 05.
+- **Swarm** -- peer agents hand off control directly to each other without a central coordinator. Best for conversational systems where the interaction naturally flows between domains.
+- **Pipeline** -- agents are arranged in a fixed sequence where each stage transforms and passes data forward. Best for workflows with clear, ordered stages. This maps to CrewAI's sequential process (Module 8 Lesson 05).
+- **Hierarchical** -- supervisors manage sub-supervisors, who manage workers, forming a tree of delegation. Best for large-scale systems with many agents organized into functional teams. This maps to CrewAI's hierarchical process.
+
+The right topology depends on your task structure: whether subtasks are independent or sequential, whether centralized control helps or hinders, and how many agents you need to coordinate. Start with the simplest topology that works -- usually a supervisor -- and add complexity only when the problem demands it.
+
+In the next lesson, we will explore **Agent Communication** -- the protocols and patterns agents use to exchange information, share state, and coordinate their work within whatever topology you choose.

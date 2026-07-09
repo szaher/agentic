@@ -1,0 +1,439 @@
+---
+title: "Tracing and Debugging Agents"
+quiz:
+  - question: "In a span-based tracing system, what is the relationship between a trace and a span?"
+    options:
+      - "A trace and a span are the same thing -- both represent a single operation"
+      - "A trace is a tree of spans, where each span represents one unit of work (an LLM call, a tool execution, or a reasoning step) within the overall agent run"
+      - "A span contains multiple traces, each representing a different execution path"
+      - "Traces are used for logging while spans are used for metrics -- they serve different purposes"
+    correctIndex: 1
+  - question: "An agent produces a wrong final answer. You open the trace and see that the LLM's reasoning was correct, the tool was called with the right arguments, but the tool returned stale data. What is the root cause category?"
+    options:
+      - "Reasoning error -- the LLM chose the wrong approach"
+      - "Tool misuse -- the LLM called the tool incorrectly"
+      - "Tool failure -- the tool executed but returned incorrect or outdated results"
+      - "Prompt error -- the system prompt gave wrong instructions"
+    correctIndex: 2
+  - question: "Why is distributed tracing with context propagation essential for multi-agent systems but optional for single-agent systems?"
+    options:
+      - "Single-agent systems never use tools, so there is nothing to trace"
+      - "Distributed tracing requires OpenTelemetry, which only supports multi-agent frameworks"
+      - "In multi-agent systems, a request flows across multiple agents and services, so you need a shared trace ID propagated through headers to stitch the full execution path together"
+      - "Multi-agent systems are always deployed on multiple servers, while single-agent systems run on one machine"
+    correctIndex: 2
+  - question: "Which debugging strategy should you try FIRST when an agent enters an infinite loop?"
+    options:
+      - "Rewrite the system prompt from scratch"
+      - "Switch to a more powerful model"
+      - "Examine the trace to find the repeated span pattern, then check whether the loop exit condition depends on tool output that never changes or on a reasoning pattern that the LLM repeats"
+      - "Add a hard iteration limit and move on"
+    correctIndex: 3
+---
+
+## Overview
+
+In Module 6, Lesson 3, you built **middleware and hooks** that intercept every tool call -- logging inputs, outputs, and latency in a composable pipeline. That middleware gives you *local* visibility into individual tool invocations. But when an agent chains together ten LLM calls, five tool executions, and three reasoning steps to answer a single question, you need something more: a way to see the *entire execution* as a connected story, with each step nested inside the one that triggered it.
+
+This is the problem that **observability** solves for agent systems. In traditional software, observability means logs, metrics, and traces. For agents, tracing is by far the most important of the three. A single log line telling you "tool X returned Y" is nearly useless without knowing *why* the agent called that tool, *what* it planned to do with the result, and *what happened next*. Traces give you that full picture.
+
+This lesson introduces distributed tracing for agents, the tooling ecosystem that supports it, common failure patterns you will encounter, and a systematic debugging workflow. By the end, you will be able to instrument an agent so that every run produces a queryable, visual trace -- and you will know how to read that trace to diagnose failures in minutes instead of hours.
+
+## What Is an Agent Trace?
+
+An **agent trace** is a structured record of everything that happened during a single agent run, organized as a tree of **spans**. Each span represents one unit of work: an LLM call, a tool execution, a reasoning step, or an orchestration decision. Spans are nested -- a "plan-and-execute" span might contain child spans for each step, and each step span might contain child spans for the LLM call and the tool call within it.
+
+<MermaidDiagram chart={`sequenceDiagram
+    participant U as User
+    participant A as Agent Orchestrator
+    participant L as LLM
+    participant T1 as search_docs Tool
+    participant T2 as calculate Tool
+
+    Note over U,T2: Trace ID: abc-123
+
+    U->>A: "What is the ROI on Project X?"
+    activate A
+    Note right of A: Span 1: agent_run (root)
+
+    A->>L: System prompt + user query
+    activate L
+    Note right of L: Span 2: llm_call (child of 1)
+    L-->>A: "I need to search for project data"
+    deactivate L
+
+    A->>T1: search_docs("Project X financials")
+    activate T1
+    Note right of T1: Span 3: tool_exec (child of 1)
+    T1-->>A: {revenue: 500000, cost: 350000}
+    deactivate T1
+
+    A->>L: Tool result + "calculate ROI"
+    activate L
+    Note right of L: Span 4: llm_call (child of 1)
+    L-->>A: "Call calculate with revenue and cost"
+    deactivate L
+
+    A->>T2: calculate("(500000-350000)/350000")
+    activate T2
+    Note right of T2: Span 5: tool_exec (child of 1)
+    T2-->>A: 0.4286
+    deactivate T2
+
+    A->>L: Tool result + "format final answer"
+    activate L
+    Note right of L: Span 6: llm_call (child of 1)
+    L-->>A: "The ROI on Project X is 42.86%"
+    deactivate L
+
+    A-->>U: "The ROI on Project X is 42.86%"
+    deactivate A
+`} />
+
+Every span records the same core data: a **span name** (what happened), a **start and end timestamp** (how long it took), **attributes** (key-value metadata like model name, token count, or tool arguments), and a **status** (success or error). The spans share a single **trace ID** so they can be stitched together into one tree, no matter how many services or processes they pass through.
+
+This is the same model used by **OpenTelemetry**, the industry standard for distributed tracing. OpenTelemetry was built for microservices -- tracing an HTTP request as it flows through ten backend services. Agent tracing applies the same idea to a different kind of distributed system: one where the "services" are LLM calls, tool executions, and reasoning steps, and the "request" is a user query being processed through a multi-step agent loop.
+
+## The Tracing Stack
+
+Agent tracing builds on three layers:
+
+- **Instrumentation** -- the code in your agent that creates spans, records attributes, and propagates trace context. This is what you write (or what a framework provides automatically).
+- **Collection** -- a backend that receives spans and stores them. OpenTelemetry collectors, Jaeger, or managed services like Datadog and Honeycomb.
+- **Visualization** -- a UI that renders traces as flame charts or waterfall diagrams, lets you search by attributes, and alerts on anomalies.
+
+For agent-specific tracing, a new category of tools has emerged that combines all three layers with LLM-aware features:
+
+| Tool | Strength | How It Works |
+|------|----------|--------------|
+| **LangSmith** | Deep LangChain integration, dataset management | Auto-instruments LangChain; manual SDK for other frameworks |
+| **Arize Phoenix** | Open-source, local-first, evaluation integration | OpenTelemetry-native; runs locally or hosted |
+| **Braintrust** | Eval-first, prompt playground, scoring | SDK wraps LLM calls; ties traces to eval scores |
+| **OpenTelemetry + Jaeger** | Vendor-neutral, full control, existing infra | Manual instrumentation; works with any agent framework |
+| **Langfuse** | Open-source, self-hostable, cost tracking | SDK or OpenTelemetry bridge; strong cost analytics |
+
+The choice depends on your constraints. If you use LangChain or LangGraph, LangSmith gives you zero-config tracing. If you want vendor neutrality and already run OpenTelemetry in production, instrument with the OpenTelemetry SDK. If you want a local, open-source option, Arize Phoenix runs as a standalone server with no cloud dependency.
+
+## Implementing a Tracing Decorator
+
+Let us build a tracing decorator that captures agent execution traces using OpenTelemetry. This connects directly to the middleware pattern from Module 6 -- but instead of intercepting tool calls at the middleware layer, we are creating spans that nest the entire agent lifecycle.
+
+<CodeBlock code={`import time
+import json
+import functools
+from dataclasses import dataclass, field
+from typing import Any, Optional
+from contextvars import ContextVar
+
+# --- Span and Trace Data Structures ---
+
+@dataclass
+class Span:
+    """A single unit of work in an agent trace."""
+    name: str
+    span_type: str  # "llm_call", "tool_exec", "reasoning", "agent_run"
+    trace_id: str
+    span_id: str
+    parent_span_id: Optional[str]
+    start_time: float
+    end_time: Optional[float] = None
+    status: str = "ok"
+    attributes: dict = field(default_factory=dict)
+    events: list = field(default_factory=list)
+    children: list = field(default_factory=list)
+
+    @property
+    def duration_ms(self) -> float:
+        if self.end_time is None:
+            return 0.0
+        return (self.end_time - self.start_time) * 1000
+
+
+@dataclass
+class Trace:
+    """A complete agent execution trace."""
+    trace_id: str
+    root_span: Optional[Span] = None
+    spans: list = field(default_factory=list)
+
+    def summary(self) -> dict:
+        llm_calls = [s for s in self.spans if s.span_type == "llm_call"]
+        tool_execs = [s for s in self.spans if s.span_type == "tool_exec"]
+        errors = [s for s in self.spans if s.status == "error"]
+        total_tokens = sum(
+            s.attributes.get("total_tokens", 0) for s in llm_calls
+        )
+        return {
+            "trace_id": self.trace_id,
+            "total_spans": len(self.spans),
+            "llm_calls": len(llm_calls),
+            "tool_executions": len(tool_execs),
+            "errors": len(errors),
+            "total_tokens": total_tokens,
+            "total_duration_ms": (
+                self.root_span.duration_ms if self.root_span else 0
+            ),
+        }
+`} language="python" filename="agent_tracing.py" />
+
+This defines the core data structures. A `Span` records one unit of work, and a `Trace` collects all spans from a single agent run. The `summary()` method gives you the high-level metrics you need for monitoring: how many LLM calls, how many tool executions, how many errors, total tokens, and total duration.
+
+Now the tracing context manager and decorators:
+
+<CodeBlock code={`import uuid
+from contextlib import contextmanager
+
+# Context variable tracks the current active span
+_current_span: ContextVar[Optional[Span]] = ContextVar(
+    "_current_span", default=None
+)
+_current_trace: ContextVar[Optional[Trace]] = ContextVar(
+    "_current_trace", default=None
+)
+
+
+@contextmanager
+def start_trace(name: str = "agent_run"):
+    """Start a new trace context for an agent run."""
+    trace_id = uuid.uuid4().hex[:16]
+    trace = Trace(trace_id=trace_id)
+    token = _current_trace.set(trace)
+    try:
+        with start_span(name, span_type="agent_run") as root_span:
+            trace.root_span = root_span
+            yield trace
+    finally:
+        _current_trace.reset(token)
+
+
+@contextmanager
+def start_span(name: str, span_type: str = "generic", **attrs):
+    """Create a child span under the current active span."""
+    trace = _current_trace.get()
+    parent = _current_span.get()
+    span = Span(
+        name=name,
+        span_type=span_type,
+        trace_id=trace.trace_id if trace else "no-trace",
+        span_id=uuid.uuid4().hex[:12],
+        parent_span_id=parent.span_id if parent else None,
+        start_time=time.time(),
+        attributes=dict(attrs),
+    )
+    if parent:
+        parent.children.append(span)
+    if trace:
+        trace.spans.append(span)
+
+    token = _current_span.set(span)
+    try:
+        yield span
+        span.status = "ok"
+    except Exception as e:
+        span.status = "error"
+        span.events.append({
+            "name": "exception",
+            "timestamp": time.time(),
+            "attributes": {
+                "exception.type": type(e).__name__,
+                "exception.message": str(e),
+            },
+        })
+        raise
+    finally:
+        span.end_time = time.time()
+        _current_span.reset(token)
+
+
+def trace_llm_call(func):
+    """Decorator that wraps an LLM call in a tracing span."""
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        model = kwargs.get("model", "unknown")
+        with start_span(
+            f"llm_call:{func.__name__}",
+            span_type="llm_call",
+            model=model,
+        ) as span:
+            result = func(*args, **kwargs)
+            # Record token usage if returned
+            if isinstance(result, dict):
+                span.attributes["total_tokens"] = result.get(
+                    "total_tokens", 0
+                )
+                span.attributes["prompt_tokens"] = result.get(
+                    "prompt_tokens", 0
+                )
+            return result
+    return wrapper
+
+
+def trace_tool(func):
+    """Decorator that wraps a tool execution in a tracing span."""
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        with start_span(
+            f"tool:{func.__name__}",
+            span_type="tool_exec",
+            tool_name=func.__name__,
+            tool_args=json.dumps(kwargs, default=str)[:500],
+        ) as span:
+            result = func(*args, **kwargs)
+            span.attributes["result_preview"] = str(result)[:200]
+            return result
+    return wrapper
+`} language="python" filename="agent_tracing.py (continued)" />
+
+Notice how `ContextVar` handles the parent-child nesting automatically. When you enter a `start_span` context, the new span becomes the "current" span. Any span created inside that context gets the outer span as its parent. This is exactly how OpenTelemetry's context propagation works -- `ContextVar` ensures it is thread-safe and async-safe.
+
+Here is how you use it in an actual agent:
+
+<CodeBlock code={`# --- Using the Tracer in an Agent ---
+
+@trace_tool
+def search_docs(query: str) -> dict:
+    """Search the document store."""
+    # Simulate a document search
+    return {"results": [f"Doc about {query}"], "count": 1}
+
+
+@trace_tool
+def calculate(expression: str) -> float:
+    """Evaluate a math expression."""
+    return eval(expression)  # In production, use a safe parser
+
+
+@trace_llm_call
+def call_llm(messages: list, model: str = "claude-sonnet") -> dict:
+    """Call the LLM with messages."""
+    # Simulated -- replace with actual API call
+    return {
+        "content": "I'll search for the data first.",
+        "total_tokens": 150,
+        "prompt_tokens": 100,
+    }
+
+
+def run_agent(user_query: str):
+    with start_trace("research_agent") as trace:
+        # Step 1: Initial LLM reasoning
+        response = call_llm(
+            messages=[{"role": "user", "content": user_query}],
+            model="claude-sonnet",
+        )
+
+        # Step 2: Tool execution
+        with start_span("planning", span_type="reasoning"):
+            docs = search_docs(query=user_query)
+
+        # Step 3: Follow-up LLM call with tool results
+        final = call_llm(
+            messages=[
+                {"role": "user", "content": user_query},
+                {"role": "assistant", "content": str(docs)},
+            ],
+            model="claude-sonnet",
+        )
+
+        # Print the trace summary
+        summary = trace.summary()
+        print(f"Trace {summary['trace_id']}:")
+        print(f"  Spans: {summary['total_spans']}")
+        print(f"  LLM calls: {summary['llm_calls']}")
+        print(f"  Tool executions: {summary['tool_executions']}")
+        print(f"  Total tokens: {summary['total_tokens']}")
+        print(f"  Duration: {summary['total_duration_ms']:.1f}ms")
+        return trace
+
+
+# Run it
+trace = run_agent("What is the ROI on Project X?")
+`} language="python" filename="run_agent.py" />
+
+This produces a trace with five spans: the root `agent_run`, two `llm_call` spans, one `reasoning` span, and one `tool_exec` span nested inside the reasoning span. Every span records its duration, parent, and attributes. In production, you would export these spans to an OpenTelemetry collector or a tool like LangSmith instead of printing them.
+
+## Common Agent Failure Patterns
+
+Traces are only useful if you know what to look for. After debugging hundreds of agent runs, certain failure patterns appear again and again. Knowing these patterns lets you jump straight to the relevant spans instead of reading every line of a trace.
+
+**Infinite loops** -- The agent repeats the same action endlessly. In the trace, you see a repeating pattern of identical spans: the same tool called with the same arguments, or the same LLM producing the same reasoning. The root cause is usually a loop exit condition that depends on tool output that never changes, or a reasoning pattern where the LLM cannot recognize it is stuck.
+
+**Tool misuse** -- The agent calls a tool with wrong arguments, calls a tool that does not exist (hallucinated tool names), or calls the right tool but misinterprets the result. In the trace, look for `tool_exec` spans with error status or with arguments that do not match the tool's expected schema.
+
+**Reasoning errors** -- The LLM's chain of thought leads to a wrong conclusion even though all the data was correct. The trace shows correct tool outputs but incorrect reasoning in the subsequent LLM call. This is the hardest failure to catch automatically because the spans all show "ok" status.
+
+**Context overflow** -- The conversation grows so long that the LLM starts losing early context. The trace shows increasing token counts across LLM calls, and the quality of responses degrades in later spans. Look for `prompt_tokens` attributes that approach the model's context window limit.
+
+**Cascading failures** -- One tool fails, and the agent's attempt to recover makes things worse. The trace shows an error span followed by increasingly confused LLM reasoning as the agent tries to work around the missing data. This is where the **fallback and escalation patterns** from Module 6 come in -- without them, one failure poisons the entire run.
+
+## The Debugging Decision Tree
+
+When an agent produces a wrong answer, you need a systematic approach. Do not guess -- follow the trace.
+
+<MermaidDiagram chart={`flowchart TD
+    START["Agent produced wrong output"] --> CHECK_TRACE["Open the execution trace"]
+
+    CHECK_TRACE --> Q1{"Any spans with<br/>error status?"}
+    Q1 -->|Yes| ERROR_SPAN["Examine the failed span"]
+    Q1 -->|No| Q2{"Did the agent<br/>call the right tools?"}
+
+    ERROR_SPAN --> Q_TOOL_ERR{"Is it a<br/>tool_exec span?"}
+    Q_TOOL_ERR -->|Yes| TOOL_FIX["Check tool arguments<br/>and tool implementation"]
+    Q_TOOL_ERR -->|No| LLM_ERR["Check LLM error:<br/>rate limit? context overflow?<br/>malformed response?"]
+
+    Q2 -->|No - wrong tools| Q_HALLUC{"Did the agent call<br/>a non-existent tool?"}
+    Q_HALLUC -->|Yes| FIX_TOOLS["Fix tool descriptions in<br/>system prompt. Add available<br/>tool list explicitly."]
+    Q_HALLUC -->|No - wrong choice| FIX_ROUTING["Improve tool descriptions<br/>or add routing examples<br/>to the prompt"]
+
+    Q2 -->|Yes - right tools| Q3{"Were the tool<br/>results correct?"}
+    Q3 -->|No| TOOL_DATA["Tool returned bad data.<br/>Fix the tool or<br/>its data source."]
+    Q3 -->|Yes| Q4{"Was the LLM<br/>reasoning correct?"}
+
+    Q4 -->|No| FIX_REASONING["Reasoning error.<br/>Add chain-of-thought,<br/>few-shot examples, or<br/>decompose into sub-steps."]
+    Q4 -->|Yes| FIX_FINAL["Final synthesis error.<br/>Check the last LLM call's<br/>prompt and output format."]
+
+    style START fill:#fed7d7,stroke:#c53030
+    style TOOL_FIX fill:#c6f6d5,stroke:#38a169
+    style LLM_ERR fill:#c6f6d5,stroke:#38a169
+    style FIX_TOOLS fill:#c6f6d5,stroke:#38a169
+    style FIX_ROUTING fill:#c6f6d5,stroke:#38a169
+    style TOOL_DATA fill:#c6f6d5,stroke:#38a169
+    style FIX_REASONING fill:#c6f6d5,stroke:#38a169
+    style FIX_FINAL fill:#c6f6d5,stroke:#38a169
+    style CHECK_TRACE fill:#ebf8ff,stroke:#3182ce
+    style ERROR_SPAN fill:#fefcbf,stroke:#d69e2e
+`} />
+
+This decision tree encodes a key principle: **always start with the trace, never with the prompt**. Most developers instinctively reach for the system prompt when an agent fails. But the trace tells you *where* the failure happened, and that determines *what* to fix. A tool returning stale data will not be fixed by rewriting the prompt. A reasoning error will not be fixed by changing the tool implementation. The trace directs your attention to the right layer.
+
+## Debugging Strategies in Practice
+
+Beyond the decision tree, several strategies make agent debugging significantly more productive:
+
+**Trace comparison** -- When an agent sometimes succeeds and sometimes fails on similar inputs, export a passing trace and a failing trace, then diff them. The divergence point tells you exactly which step behaves differently. Most tracing tools support side-by-side trace comparison for this purpose.
+
+**Span filtering** -- In a complex agent with dozens of spans, filter by `span_type` to focus on one layer at a time. Start with `tool_exec` spans to verify all tool calls succeeded. Then check `llm_call` spans to verify the reasoning. This layered approach prevents information overload.
+
+**Replay and time-travel** -- Some tracing tools (LangSmith, Braintrust) let you replay a traced run with modified inputs. If you suspect a tool returned bad data, you can edit the tool's return value in the trace and re-run the downstream LLM calls to confirm that fixing the data fixes the output. This is dramatically faster than re-running the entire agent.
+
+**Cost attribution** -- Each `llm_call` span records token counts. Aggregating these by span type or by step tells you where your agent spends money. A common finding: agents waste 60-80% of their tokens on retries and recovery from earlier failures. Fixing the root cause of the first failure cuts costs more than optimizing the prompts.
+
+> **Key takeaway:** Tracing is not just for debugging failures. It is also how you discover that your agent takes twelve steps to do something that should take four, that it calls the same tool three times with identical arguments, or that 90% of your token budget goes to a single reasoning step. The traces reveal optimization opportunities that are invisible without instrumentation.
+
+## From Middleware to Traces: Connecting the Layers
+
+In Module 6, Lesson 3, you built logging middleware that records every tool call's inputs, outputs, and latency. That middleware is the *instrumentation layer* of your tracing stack. The connection is direct: each `before_tool` and `after_tool` hook in your middleware creates a `tool_exec` span in the trace.
+
+The key difference is **context propagation**. Middleware sees individual tool calls in isolation. Tracing connects those calls into a tree by passing a trace ID and parent span ID through the entire execution. The `ContextVar` approach in the code above achieves this within a single process. For **distributed tracing** -- where your agent calls tools that run in separate services, or where multiple agents collaborate -- you propagate the trace context through HTTP headers (the W3C `traceparent` header) or message metadata.
+
+This is where OpenTelemetry shines. If your tools are microservices that already use OpenTelemetry, your agent traces automatically connect to your tool traces. You see the full picture: the agent decided to call the search API, the search API processed the query, the database executed the SQL, and the result flowed back through every layer. One trace, one view, complete visibility.
+
+## Summary
+
+Tracing is the foundation of agent observability. A single agent run becomes a tree of spans -- LLM calls, tool executions, reasoning steps -- that you can visualize, search, and analyze. The tracing decorator pattern gives you instrumentation with minimal code changes, and tools like LangSmith, Arize Phoenix, and OpenTelemetry provide the collection and visualization layers.
+
+The debugging decision tree gives you a systematic workflow: start with the trace, check for errors, verify tool calls, verify tool results, then check reasoning. This layered approach prevents the most common debugging mistake -- guessing that the problem is in the prompt when it is actually in the data.
+
+Common failure patterns -- infinite loops, tool misuse, reasoning errors, context overflow, and cascading failures -- each leave a distinct signature in the trace. Learning to recognize these signatures is the difference between spending five minutes and five hours on a bug.
+
+In the next lesson, you will put these ideas into practice in the **Evaluation Lab**, building an evaluation harness that uses traces to score agent runs automatically. And looking ahead to Module 12: the traces you build here become your **production monitoring backbone**. The same instrumentation that helps you debug in development becomes the telemetry that keeps your agents healthy in production -- alerting on error rates, tracking latency trends, and catching regressions before your users do.

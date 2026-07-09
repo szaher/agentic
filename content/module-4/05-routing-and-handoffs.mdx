@@ -22,7 +22,7 @@ quiz:
       - "Context loss — the receiving agent lacks the conversation history, memory, or tool state needed to continue effectively"
       - "The receiving agent has more tools available than necessary"
     correctIndex: 2
-  - question: "How does routing relate to multi-agent systems covered in Module 9?"
+  - question: "How does routing relate to multi-agent systems covered in Module 10?"
     options:
       - "Routing replaces the need for multi-agent coordination entirely"
       - "The router evolves into a supervisor agent that orchestrates specialized agents, making routing the gateway pattern for multi-agent architectures"
@@ -39,7 +39,7 @@ In the previous lessons, we explored agent architectures where a single agent ha
 
 **Handoffs** are the mechanism by which the router transfers control -- and critically, transfers *context* -- from one agent to another. A handoff is not just a function call. It involves passing conversation history, relevant memory, tool state, and enough context for the receiving agent to continue seamlessly, as if it had been in the conversation all along.
 
-Together, routing and handoffs form the foundation for building systems where multiple agents collaborate. By the time you reach Module 9 (Multi-Agent Systems), the router will have evolved into a full supervisor agent -- but the core pattern starts here.
+Together, routing and handoffs form the foundation for building systems where multiple agents collaborate. By the time you reach Module 10 (Multi-Agent Systems), the router will have evolved into a full supervisor agent -- but the core pattern starts here.
 
 ## The Routing Architecture
 
@@ -426,9 +426,9 @@ Routing is not just another architecture pattern -- it is the **gateway to multi
 
 1. **Single agent** -- one prompt, one tool set, handles everything (Modules 1-4 so far)
 2. **Router + specialists** -- one classifier delegates to focused agents (this lesson)
-3. **Supervisor + workers** -- the router gains the ability to coordinate, retry, and synthesize across agents (Module 9: Multi-Agent Systems)
+3. **Supervisor + workers** -- the router gains the ability to coordinate, retry, and synthesize across agents (Module 10: Multi-Agent Systems)
 
-The router you built in this lesson is already a simple supervisor. It classifies, delegates, and returns results. In Module 9, you will extend this pattern with agents that can communicate with each other, share intermediate results, and collaborate on tasks that no single specialist can solve alone.
+The router you built in this lesson is already a simple supervisor. It classifies, delegates, and returns results. In Module 10, you will extend this pattern with agents that can communicate with each other, share intermediate results, and collaborate on tasks that no single specialist can solve alone.
 
 ## Summary
 
@@ -438,6 +438,6 @@ Three main routing strategies exist: **LLM-based classification** (flexible but 
 
 **Handoffs** are how context transfers between agents. Effective handoffs carry not just the current message but the full conversation history, extracted entities, prior tool results, and routing metadata. The quality of the handoff determines whether the transition feels seamless or jarring to the user.
 
-The key trade-offs are specialization and efficiency versus classification errors and context loss. Routing shines when your problem space has clearly distinct domains, and struggles when user requests span multiple categories. As systems grow more complex, the router naturally evolves into a supervisor -- making routing the foundational pattern for the multi-agent architectures you will explore in Module 9.
+The key trade-offs are specialization and efficiency versus classification errors and context loss. Routing shines when your problem space has clearly distinct domains, and struggles when user requests span multiple categories. As systems grow more complex, the router naturally evolves into a supervisor -- making routing the foundational pattern for the multi-agent architectures you will explore in Module 10.
 
 In the next lesson, we will explore **Workflow and State Machine Agents** -- architectures that combine routing with deterministic control flow, giving you explicit state transitions and predictable execution paths rather than relying on LLM classification at every step.

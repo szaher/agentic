@@ -1,0 +1,1015 @@
+---
+title: "Capstone Project"
+---
+
+## Overview
+
+You have arrived at the final lesson of the LLM Agents Academy. Over the past eleven modules and eighty-two lessons, you built your understanding from the ground up -- starting with what an LLM agent *is*, progressing through prompting, tool use, architectures, design patterns, memory, frameworks, multi-modal capabilities, multi-agent systems, evaluation, and production deployment. Each module introduced concepts in isolation so you could master them one at a time. But real-world agent systems do not use one concept at a time. They combine *all* of them into a single, cohesive system where prompting strategies, tool orchestration, memory, guardrails, monitoring, and multi-agent coordination work together.
+
+This capstone project is your opportunity to put everything together. You will design and build a **Research & Report System** -- a production-grade multi-agent application that accepts a research question, dispatches specialized agents to gather and verify information, synthesizes the findings into a structured report, and does all of this behind guardrails and monitoring. Every module you have completed contributes a specific piece to this system. By the end, you will have a skeleton you can extend into a real product.
+
+## The Complete Capstone Architecture
+
+Before writing any code, study the full system architecture. This diagram shows every component, how they connect, and which module taught you the underlying concept.
+
+<MermaidDiagram chart={`graph TD
+    User["User Query"] --> API["FastAPI Gateway"]
+    subgraph ProductionLayer["Production Layer (Module 12)"]
+        API --> InputG["Input Guardrails"]
+        InputG --> Monitor["Monitoring Middleware"]
+    end
+    Monitor --> Supervisor["Supervisor Agent (Module 10)"]
+    subgraph MultiAgent["Multi-Agent Core (Modules 4, 5, 9)"]
+        Supervisor -->|"plan"| Planner["Task Planner"]
+        Supervisor -->|"delegate"| Research["Research Agent"]
+        Supervisor -->|"delegate"| Writer["Writer Agent"]
+        Supervisor -->|"delegate"| FactChecker["Fact-Checker Agent"]
+        Research -->|"retrieve"| RAG["RAG Pipeline (Module 7)"]
+        RAG --> VectorDB["Vector Store"]
+        RAG --> WebSearch["Web Search Tool (Module 3)"]
+        FactChecker -->|"debate"| Research
+        Writer -->|"draft"| Report["Report Draft"]
+        FactChecker -->|"verify"| Report
+    end
+    subgraph MemoryLayer["Memory Layer (Module 7)"]
+        Supervisor --> ConvMem["Conversation Memory"]
+        Research --> LongMem["Long-Term Memory"]
+    end
+    subgraph EvalLayer["Evaluation Layer (Module 11)"]
+        Report --> Judge["LLM-as-Judge"]
+        Judge -->|"score < threshold"| Supervisor
+        Judge -->|"score >= threshold"| OutputG["Output Guardrails"]
+    end
+    OutputG --> Response["Final Report"]
+    subgraph Observability["Observability (Module 12)"]
+        Monitor -->|"metrics"| Prometheus["Prometheus"]
+        Monitor -->|"traces"| Traces["Trace Store"]
+        Prometheus --> Grafana["Grafana"]
+    end
+    style ProductionLayer fill:#fed7d7,stroke:#c53030
+    style MultiAgent fill:#ebf8ff,stroke:#3182ce
+    style MemoryLayer fill:#fefcbf,stroke:#b7791f
+    style EvalLayer fill:#c6f6d5,stroke:#38a169
+    style Observability fill:#e9d8fd,stroke:#805ad5
+    style Supervisor fill:#bee3f8,stroke:#2b6cb0
+    style Research fill:#bee3f8,stroke:#2b6cb0
+    style Writer fill:#bee3f8,stroke:#2b6cb0
+    style FactChecker fill:#bee3f8,stroke:#2b6cb0
+`} />
+
+The system has five layers, each color-coded to the module that taught it. The **Production Layer** (red) handles input validation, guardrails, and monitoring before any agent logic runs. The **Multi-Agent Core** (blue) contains the supervisor and its three specialized agents. The **Memory Layer** (yellow) gives agents access to conversation history and long-term knowledge. The **Evaluation Layer** (green) uses LLM-as-Judge to score the final report before it reaches the user. The **Observability Layer** (purple) captures metrics and traces across the entire pipeline.
+
+This is not a toy architecture. Production research systems at companies like Perplexity, You.com, and Elicit use variations of exactly this pattern: a coordinator that dispatches specialized sub-agents, each with access to retrieval and memory, with quality checks before the response ships.
+
+## What Every Module Contributes
+
+Before building, let us map every module to its role in the capstone. This is the curriculum you have completed, and every piece has a purpose here.
+
+| Module | Topic | Role in the Capstone |
+|--------|-------|---------------------|
+| 1 | Foundations of LLM Agents | The agent loop (perceive, reason, act) that every agent in the system follows |
+| 2 | Prompting & Reasoning | System prompts for each specialized agent; chain-of-thought for the planner |
+| 3 | Tool Use & Function Calling | Web search, document retrieval, and citation extraction tools |
+| 4 | Agent Architectures | ReAct loop for the research agent; plan-and-execute for the supervisor |
+| 5 | Agent Design Patterns | Routing pattern for task delegation; reflection for iterative improvement |
+| 6 | Memory & Knowledge | RAG pipeline for grounding research; conversation memory for multi-turn |
+| 7 | Agent Frameworks & SDKs | Framework choice for implementation (Anthropic SDK, LangGraph, or CrewAI) |
+| 8 | Multi-Modal Agents | Chart and image analysis if the research involves visual data |
+| 9 | Multi-Agent Systems | Supervisor orchestration, inter-agent communication, debate protocol |
+| 10 | Evaluation & Testing | LLM-as-Judge scoring, evaluation harness, regression testing |
+| 11 | Production & Safety | Guardrails, circuit breakers, monitoring, containerized deployment |
+| 12 | Advanced Patterns | Research agent patterns, domain-specific tuning, alignment considerations |
+
+Every row is load-bearing. If you remove any module, the capstone loses a critical capability -- and that is the point. A production agent system is the sum of all these disciplines working together.
+
+## Step 1: Define the Agent Contracts
+
+Start by defining the data structures that flow between agents. In Module 10, you learned that multi-agent systems need clear **contracts** -- each agent must know exactly what it receives and what it returns. These shared types are the backbone of the system.
+
+<CodeBlock code={`from dataclasses import dataclass, field
+from enum import Enum
+from typing import Optional
+
+
+class TaskStatus(Enum):
+    PENDING = "pending"
+    IN_PROGRESS = "in_progress"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    NEEDS_REVISION = "needs_revision"
+
+
+@dataclass
+class ResearchTask:
+    """A single research sub-task assigned by the supervisor."""
+    query: str
+    task_id: str
+    assigned_to: str  # "research", "writer", "fact_checker"
+    status: TaskStatus = TaskStatus.PENDING
+    result: Optional[str] = None
+    sources: list[str] = field(default_factory=list)
+    confidence: float = 0.0
+
+
+@dataclass
+class ResearchPlan:
+    """The supervisor's decomposed plan for answering a question."""
+    original_question: str
+    sub_tasks: list[ResearchTask]
+    approach: str  # High-level strategy description
+    estimated_steps: int = 0
+
+
+@dataclass
+class FactCheckResult:
+    """Result of the fact-checker's verification."""
+    claim: str
+    verified: bool
+    evidence: str
+    confidence: float
+    sources: list[str] = field(default_factory=list)
+
+
+@dataclass
+class FinalReport:
+    """The completed research report."""
+    title: str
+    summary: str
+    sections: list[dict]  # [{"heading": str, "content": str}]
+    sources: list[str]
+    fact_check_results: list[FactCheckResult]
+    quality_score: float = 0.0
+    tokens_used: int = 0
+`} language="python" filename="contracts.py" />
+
+These dataclasses are deliberately simple -- no framework-specific types, no LLM client imports, no business logic. They are pure data. This is a design pattern from Module 6: **separate the data contracts from the agent logic** so that agents can be tested, replaced, and composed independently. The `ResearchTask` flows from the supervisor to a worker agent. The `FactCheckResult` flows from the fact-checker back to the supervisor. The `FinalReport` is the system's output.
+
+## Step 2: Build the Supervisor Agent
+
+The **supervisor agent** is the orchestrator from Module 10. It receives the user's question, decomposes it into sub-tasks using chain-of-thought reasoning (Module 2), and delegates those tasks to specialized agents. It does not do the research itself -- it *coordinates*.
+
+<CodeBlock code={`import anthropic
+import json
+from contracts import (
+    ResearchPlan, ResearchTask, TaskStatus, FinalReport
+)
+
+
+class SupervisorAgent:
+    """Orchestrates the research pipeline by planning and delegating tasks."""
+
+    def __init__(self, model: str = "claude-sonnet-4-20250514"):
+        self.client = anthropic.Anthropic()
+        self.model = model
+        self.system_prompt = """You are a research supervisor. Given a user's 
+question, you must:
+1. Analyze the question to identify what information is needed.
+2. Decompose it into 2-5 specific, searchable sub-questions.
+3. For each sub-question, decide whether it needs research (gathering 
+   information), writing (synthesizing a narrative), or fact-checking 
+   (verifying a specific claim).
+4. Return a structured JSON plan.
+
+Output ONLY valid JSON with this schema:
+{
+  "approach": "Brief strategy description",
+  "sub_tasks": [
+    {
+      "query": "Specific sub-question",
+      "task_id": "task_1",
+      "assigned_to": "research|writer|fact_checker"
+    }
+  ]
+}"""
+
+    async def create_plan(self, question: str) -> ResearchPlan:
+        """Decompose a question into a structured research plan."""
+        message = self.client.messages.create(
+            model=self.model,
+            max_tokens=1024,
+            system=self.system_prompt,
+            messages=[{"role": "user", "content": question}],
+        )
+
+        plan_data = json.loads(message.content[0].text)
+
+        sub_tasks = [
+            ResearchTask(
+                query=task["query"],
+                task_id=task["task_id"],
+                assigned_to=task["assigned_to"],
+            )
+            for task in plan_data["sub_tasks"]
+        ]
+
+        return ResearchPlan(
+            original_question=question,
+            sub_tasks=sub_tasks,
+            approach=plan_data["approach"],
+            estimated_steps=len(sub_tasks),
+        )
+
+    async def execute_plan(
+        self,
+        plan: ResearchPlan,
+        research_agent,
+        writer_agent,
+        fact_checker_agent,
+    ) -> FinalReport:
+        """Execute the plan by delegating tasks to specialized agents."""
+        agent_map = {
+            "research": research_agent,
+            "writer": writer_agent,
+            "fact_checker": fact_checker_agent,
+        }
+
+        # Phase 1: Execute research tasks
+        for task in plan.sub_tasks:
+            if task.assigned_to == "research":
+                task.status = TaskStatus.IN_PROGRESS
+                result = await agent_map["research"].execute(task)
+                task.result = result.result
+                task.sources = result.sources
+                task.confidence = result.confidence
+                task.status = TaskStatus.COMPLETED
+
+        # Phase 2: Write the report using research results
+        research_results = [
+            t for t in plan.sub_tasks
+            if t.assigned_to == "research" and t.status == TaskStatus.COMPLETED
+        ]
+        draft = await writer_agent.write_report(
+            question=plan.original_question,
+            research_results=research_results,
+        )
+
+        # Phase 3: Fact-check key claims from the draft
+        fact_checks = await fact_checker_agent.verify_report(
+            draft, research_results
+        )
+
+        # Phase 4: Revise if fact-checking found issues
+        unverified = [fc for fc in fact_checks if not fc.verified]
+        if unverified:
+            draft = await writer_agent.revise_report(
+                draft, unverified
+            )
+
+        return FinalReport(
+            title=f"Research Report: {plan.original_question}",
+            summary=draft.summary,
+            sections=draft.sections,
+            sources=draft.sources,
+            fact_check_results=fact_checks,
+        )
+`} language="python" filename="supervisor.py" />
+
+Notice the **phased execution** pattern. The supervisor does not run all tasks in parallel and hope for the best. It runs research first (because the writer needs research results), then writing (because the fact-checker needs a draft), then fact-checking (because revision needs fact-check results), and finally revision. This is the **plan-and-execute** architecture from Module 4 applied to a multi-agent workflow. Each phase depends on the output of the previous phase, and the supervisor manages those dependencies explicitly.
+
+The supervisor also implements the **iterative refinement** pattern from Module 6: if the fact-checker finds unverified claims, the writer revises the report. This feedback loop is what separates a naive pipeline from a quality-focused system.
+
+## Step 3: Build the Research Agent with RAG
+
+The **research agent** is where Module 3 (tool use) meets Module 7 (RAG). It takes a research sub-task, searches for relevant information using both a vector store and web search, and synthesizes the findings into a structured result.
+
+<CodeBlock code={`import anthropic
+from contracts import ResearchTask, TaskStatus
+from dataclasses import dataclass
+
+
+@dataclass
+class ResearchResult:
+    result: str
+    sources: list[str]
+    confidence: float
+
+
+class ResearchAgent:
+    """Gathers information using RAG and web search tools."""
+
+    def __init__(self, model: str = "claude-sonnet-4-20250514"):
+        self.client = anthropic.Anthropic()
+        self.model = model
+        self.tools = [
+            {
+                "name": "search_knowledge_base",
+                "description": (
+                    "Search the internal knowledge base using semantic "
+                    "similarity. Use for established facts and background."
+                ),
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "Semantic search query",
+                        },
+                        "top_k": {
+                            "type": "integer",
+                            "description": "Number of results",
+                            "default": 5,
+                        },
+                    },
+                    "required": ["query"],
+                },
+            },
+            {
+                "name": "web_search",
+                "description": (
+                    "Search the web for recent information. Use for "
+                    "current events, statistics, and emerging topics."
+                ),
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "Web search query",
+                        },
+                    },
+                    "required": ["query"],
+                },
+            },
+        ]
+
+    async def execute(self, task: ResearchTask) -> ResearchResult:
+        """Execute a research task using the agentic RAG loop."""
+        messages = [
+            {
+                "role": "user",
+                "content": (
+                    f"Research the following question thoroughly. Use "
+                    f"search_knowledge_base for established facts and "
+                    f"web_search for recent information. Cite your sources.\n\n"
+                    f"Question: {task.query}"
+                ),
+            }
+        ]
+
+        sources = []
+        max_iterations = 5  # Safety limit on tool-use loops
+
+        for _ in range(max_iterations):
+            response = self.client.messages.create(
+                model=self.model,
+                max_tokens=2048,
+                system=(
+                    "You are a thorough research agent. Always search "
+                    "for information before answering. Use multiple "
+                    "searches if the first results are insufficient. "
+                    "Cite every claim with its source."
+                ),
+                tools=self.tools,
+                messages=messages,
+            )
+
+            # If the model wants to use a tool, execute it
+            if response.stop_reason == "tool_use":
+                tool_results = []
+                for block in response.content:
+                    if block.type == "tool_use":
+                        result = await self._execute_tool(
+                            block.name, block.input
+                        )
+                        sources.extend(result.get("sources", []))
+                        tool_results.append({
+                            "type": "tool_result",
+                            "tool_use_id": block.id,
+                            "content": result["content"],
+                        })
+
+                messages.append({"role": "assistant", "content": response.content})
+                messages.append({"role": "user", "content": tool_results})
+            else:
+                # Model is done -- extract the final answer
+                answer = next(
+                    b.text for b in response.content if b.type == "text"
+                )
+                return ResearchResult(
+                    result=answer,
+                    sources=list(set(sources)),
+                    confidence=0.8 if sources else 0.4,
+                )
+
+        # Fallback if max iterations reached
+        return ResearchResult(
+            result="Research incomplete: maximum iterations reached.",
+            sources=sources,
+            confidence=0.2,
+        )
+
+    async def _execute_tool(
+        self, tool_name: str, tool_input: dict
+    ) -> dict:
+        """Execute a tool call and return results."""
+        if tool_name == "search_knowledge_base":
+            return await self._search_vector_store(
+                tool_input["query"],
+                tool_input.get("top_k", 5),
+            )
+        elif tool_name == "web_search":
+            return await self._web_search(tool_input["query"])
+        else:
+            return {"content": f"Unknown tool: {tool_name}", "sources": []}
+
+    async def _search_vector_store(
+        self, query: str, top_k: int
+    ) -> dict:
+        """Search the vector store (Module 7 RAG pipeline)."""
+        # In production, this calls your vector database
+        # (Pinecone, Weaviate, Chroma, pgvector, etc.)
+        return {
+            "content": f"[Vector store results for: {query}]",
+            "sources": [f"knowledge_base:{query}"],
+        }
+
+    async def _web_search(self, query: str) -> dict:
+        """Search the web (Module 3 tool use)."""
+        # In production, this calls a search API
+        # (Tavily, Brave Search, SerpAPI, etc.)
+        return {
+            "content": f"[Web search results for: {query}]",
+            "sources": [f"web:{query}"],
+        }
+`} language="python" filename="research_agent.py" />
+
+This is the **agentic RAG** pattern from Module 7, Lesson 06. The research agent does not just retrieve documents and stuff them into a prompt. It uses the ReAct loop from Module 4 -- it reasons about what to search, executes the search, examines the results, and decides whether it needs to search again. The `max_iterations` safety limit prevents runaway loops, a production concern from Module 12. The confidence score is lower when no sources are found, which the fact-checker will use later to decide what needs verification.
+
+## Step 4: Build the Fact-Checker Agent
+
+The **fact-checker agent** implements the adversarial debate pattern from Module 10, Lesson 06. It takes the writer's draft, extracts key claims, and challenges each one against the research evidence. This is the red team to the writer's blue team.
+
+<CodeBlock code={`import anthropic
+import json
+from contracts import FactCheckResult, ResearchTask
+
+
+class FactCheckerAgent:
+    """Verifies claims in a report using adversarial debate."""
+
+    def __init__(self, model: str = "claude-sonnet-4-20250514"):
+        self.client = anthropic.Anthropic()
+        self.model = model
+
+    async def verify_report(
+        self, draft, research_results: list[ResearchTask]
+    ) -> list[FactCheckResult]:
+        """Extract and verify key claims from the draft report."""
+        # Step 1: Extract claims from the draft
+        claims = await self._extract_claims(draft)
+
+        # Step 2: Verify each claim against the evidence
+        results = []
+        evidence_text = "\n\n".join(
+            f"Source ({r.task_id}): {r.result}"
+            for r in research_results if r.result
+        )
+
+        for claim in claims:
+            result = await self._verify_claim(claim, evidence_text)
+            results.append(result)
+
+        return results
+
+    async def _extract_claims(self, draft) -> list[str]:
+        """Use the LLM to extract verifiable claims from a report."""
+        draft_text = "\n\n".join(
+            f"## {s['heading']}\n{s['content']}"
+            for s in draft.sections
+        )
+
+        message = self.client.messages.create(
+            model=self.model,
+            max_tokens=1024,
+            system=(
+                "Extract the key factual claims from this report. "
+                "Return a JSON array of strings, each a single "
+                "verifiable claim. Focus on statistics, dates, "
+                "causal assertions, and technical claims. Ignore "
+                "opinions and subjective statements."
+            ),
+            messages=[{"role": "user", "content": draft_text}],
+        )
+
+        return json.loads(message.content[0].text)
+
+    async def _verify_claim(
+        self, claim: str, evidence: str
+    ) -> FactCheckResult:
+        """Adversarial verification of a single claim."""
+        # The fact-checker argues AGAINST the claim,
+        # then a judge decides
+        challenger_prompt = f"""You are a skeptical fact-checker. Your job is 
+to find problems with this claim.
+
+CLAIM: {claim}
+
+AVAILABLE EVIDENCE:
+{evidence}
+
+Analyze whether the evidence supports, contradicts, or is insufficient 
+for this claim. Be rigorous -- if the evidence does not explicitly 
+support the claim, say so.
+
+Return JSON:
+{{
+  "verdict": "supported" | "contradicted" | "insufficient_evidence",
+  "reasoning": "Your analysis",
+  "confidence": 0.0 to 1.0,
+  "supporting_sources": ["source IDs that are relevant"]
+}}"""
+
+        message = self.client.messages.create(
+            model=self.model,
+            max_tokens=512,
+            messages=[{"role": "user", "content": challenger_prompt}],
+        )
+
+        verdict_data = json.loads(message.content[0].text)
+
+        return FactCheckResult(
+            claim=claim,
+            verified=verdict_data["verdict"] == "supported",
+            evidence=verdict_data["reasoning"],
+            confidence=verdict_data["confidence"],
+            sources=verdict_data.get("supporting_sources", []),
+        )
+`} language="python" filename="fact_checker.py" />
+
+The fact-checker uses a deliberate adversarial stance -- its prompt says "your job is to find problems." This is not a bug; it is the debate pattern from Module 10. A cooperative verifier tends to confirm whatever it is given (the **sycophancy** problem from Module 13, Lesson 05 on alignment). An adversarial verifier actively looks for weaknesses. The supervisor uses the fact-checker's output to decide whether the report needs revision, closing the feedback loop.
+
+## Step 5: Build the Writer Agent
+
+The **writer agent** takes raw research results and transforms them into a coherent, structured report. It also handles revisions when the fact-checker finds issues.
+
+<CodeBlock code={`import anthropic
+from contracts import ResearchTask, FactCheckResult
+from dataclasses import dataclass
+
+
+@dataclass
+class DraftReport:
+    summary: str
+    sections: list[dict]
+    sources: list[str]
+
+
+class WriterAgent:
+    """Synthesizes research results into a structured report."""
+
+    def __init__(self, model: str = "claude-sonnet-4-20250514"):
+        self.client = anthropic.Anthropic()
+        self.model = model
+
+    async def write_report(
+        self,
+        question: str,
+        research_results: list[ResearchTask],
+    ) -> DraftReport:
+        """Synthesize research results into a structured report."""
+        research_text = "\n\n".join(
+            f"### Research: {r.query}\n{r.result}\n"
+            f"Sources: {', '.join(r.sources)}\n"
+            f"Confidence: {r.confidence}"
+            for r in research_results
+        )
+
+        message = self.client.messages.create(
+            model=self.model,
+            max_tokens=4096,
+            system="""You are a professional research writer. Synthesize 
+the provided research into a clear, well-structured report. 
+
+Rules:
+- Write an executive summary (2-3 sentences)
+- Organize into logical sections with clear headings
+- Cite sources inline using [Source: name] notation
+- Flag any areas where research confidence is low
+- Use precise language -- avoid hedging unless uncertainty is genuine
+- Return valid JSON with this schema:
+{
+  "summary": "Executive summary",
+  "sections": [
+    {"heading": "Section Title", "content": "Section body..."}
+  ],
+  "sources": ["All cited sources"]
+}""",
+            messages=[
+                {
+                    "role": "user",
+                    "content": (
+                        f"Original question: {question}\n\n"
+                        f"Research findings:\n{research_text}"
+                    ),
+                }
+            ],
+        )
+
+        import json
+        report_data = json.loads(message.content[0].text)
+
+        return DraftReport(
+            summary=report_data["summary"],
+            sections=report_data["sections"],
+            sources=report_data["sources"],
+        )
+
+    async def revise_report(
+        self,
+        draft: DraftReport,
+        unverified_claims: list[FactCheckResult],
+    ) -> DraftReport:
+        """Revise the report to address fact-checking failures."""
+        issues = "\n".join(
+            f"- CLAIM: {fc.claim}\n  ISSUE: {fc.evidence}"
+            for fc in unverified_claims
+        )
+
+        import json
+        draft_json = json.dumps({
+            "summary": draft.summary,
+            "sections": draft.sections,
+            "sources": draft.sources,
+        })
+
+        message = self.client.messages.create(
+            model=self.model,
+            max_tokens=4096,
+            system="""You are revising a research report based on 
+fact-checking feedback. For each flagged claim:
+- If the claim is wrong, correct it or remove it
+- If the evidence is insufficient, add a caveat
+- Do NOT invent new information -- only use what the 
+  original research provided
+
+Return the revised report in the same JSON format.""",
+            messages=[
+                {
+                    "role": "user",
+                    "content": (
+                        f"CURRENT DRAFT:\n{draft_json}\n\n"
+                        f"FACT-CHECK ISSUES:\n{issues}"
+                    ),
+                }
+            ],
+        )
+
+        revised = json.loads(message.content[0].text)
+
+        return DraftReport(
+            summary=revised["summary"],
+            sections=revised["sections"],
+            sources=revised["sources"],
+        )
+`} language="python" filename="writer_agent.py" />
+
+The writer agent uses two distinct prompts -- one for initial drafting and one for revision. The revision prompt is deliberately constrained: "Do NOT invent new information." This prevents the writer from hallucinating fixes to fact-checking failures, a critical guardrail at the agent level (Module 12) that complements the system-level guardrails at the API boundary.
+
+## Step 6: Add Quality Evaluation
+
+Before the report reaches the user, the **LLM-as-Judge** pattern from Module 11 scores it. If the score is below a threshold, the supervisor loops back for another round of revision.
+
+<CodeBlock code={`import anthropic
+import json
+from contracts import FinalReport
+
+
+class QualityEvaluator:
+    """LLM-as-Judge evaluator for research report quality."""
+
+    def __init__(
+        self,
+        model: str = "claude-sonnet-4-20250514",
+        quality_threshold: float = 7.0,
+    ):
+        self.client = anthropic.Anthropic()
+        self.model = model
+        self.quality_threshold = quality_threshold
+
+    async def evaluate(self, report: FinalReport) -> dict:
+        """Score the report on multiple quality dimensions."""
+        report_text = (
+            f"Title: {report.title}\n\n"
+            f"Summary: {report.summary}\n\n"
+            + "\n\n".join(
+                f"## {s['heading']}\n{s['content']}"
+                for s in report.sections
+            )
+            + f"\n\nSources: {', '.join(report.sources)}"
+        )
+
+        fact_check_summary = "\n".join(
+            f"- {fc.claim}: {'VERIFIED' if fc.verified else 'UNVERIFIED'} "
+            f"(confidence: {fc.confidence})"
+            for fc in report.fact_check_results
+        )
+
+        message = self.client.messages.create(
+            model=self.model,
+            max_tokens=1024,
+            system="""You are a research report quality evaluator. Score 
+the report on these dimensions (1-10 each):
+
+1. COMPLETENESS: Does it fully answer the original question?
+2. ACCURACY: Are claims supported by cited sources?
+3. CLARITY: Is the writing clear and well-organized?
+4. SOURCE_QUALITY: Are sources credible and sufficient?
+5. OBJECTIVITY: Is the report balanced and free of bias?
+
+Return JSON:
+{
+  "scores": {
+    "completeness": N, "accuracy": N, "clarity": N,
+    "source_quality": N, "objectivity": N
+  },
+  "overall": N,
+  "feedback": "Specific improvement suggestions",
+  "pass": true/false
+}
+
+Set "pass" to true only if overall >= 7.0.""",
+            messages=[
+                {
+                    "role": "user",
+                    "content": (
+                        f"REPORT:\n{report_text}\n\n"
+                        f"FACT-CHECK RESULTS:\n{fact_check_summary}"
+                    ),
+                }
+            ],
+        )
+
+        evaluation = json.loads(message.content[0].text)
+        return evaluation
+
+    def passes_threshold(self, evaluation: dict) -> bool:
+        """Check if the report meets the quality bar."""
+        return evaluation.get("pass", False) and \
+               evaluation.get("overall", 0) >= self.quality_threshold
+`} language="python" filename="evaluator.py" />
+
+The evaluator uses a **multi-dimensional rubric**, not a single score. This is the calibrated evaluation approach from Module 11, Lesson 04. Scoring on five dimensions -- completeness, accuracy, clarity, source quality, and objectivity -- gives the supervisor actionable feedback. If accuracy is low but clarity is high, the system knows to re-research rather than re-write. The `quality_threshold` of 7.0 is configurable -- you might set it higher for medical or legal research where accuracy matters more, or lower for exploratory brainstorming where speed matters more.
+
+## Step 7: Wire Everything Together with Guardrails and Monitoring
+
+The final step assembles all the components behind the production layer from Module 12. This is the **orchestration glue** that turns individual agents into a system.
+
+<CodeBlock code={`import time
+import logging
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel, Field
+from contextlib import asynccontextmanager
+
+from contracts import FinalReport
+from supervisor import SupervisorAgent
+from research_agent import ResearchAgent
+from writer_agent import WriterAgent
+from fact_checker import FactCheckerAgent
+from evaluator import QualityEvaluator
+
+logger = logging.getLogger("capstone")
+
+
+# --- Request / Response Models ---
+
+class ResearchRequest(BaseModel):
+    question: str = Field(
+        ..., min_length=10, max_length=2000,
+        description="The research question to investigate",
+    )
+    quality_threshold: float = Field(
+        default=7.0, ge=1.0, le=10.0,
+        description="Minimum quality score (1-10) for the report",
+    )
+    max_revision_rounds: int = Field(
+        default=2, ge=0, le=5,
+        description="Maximum revision attempts if quality is low",
+    )
+
+
+class ResearchResponse(BaseModel):
+    title: str
+    summary: str
+    sections: list[dict]
+    sources: list[str]
+    quality_score: float
+    quality_details: dict
+    fact_checks_passed: int
+    fact_checks_total: int
+    revision_rounds: int
+    total_latency_ms: float
+
+
+# --- Input Guardrails ---
+
+BLOCKED_PATTERNS = [
+    "ignore previous instructions",
+    "ignore all above",
+    "system prompt:",
+    "you are now",
+]
+
+
+def check_input_guardrails(question: str) -> None:
+    """Reject dangerous or off-topic inputs."""
+    question_lower = question.lower()
+    for pattern in BLOCKED_PATTERNS:
+        if pattern in question_lower:
+            raise HTTPException(
+                status_code=400,
+                detail="Request blocked by input guardrails.",
+            )
+
+
+# --- Output Guardrails ---
+
+def check_output_guardrails(report: FinalReport) -> None:
+    """Validate the report before returning to the user."""
+    if not report.sections:
+        raise HTTPException(
+            status_code=500,
+            detail="Report generation produced empty content.",
+        )
+    if report.quality_score < 3.0:
+        raise HTTPException(
+            status_code=500,
+            detail="Report quality is too low to serve.",
+        )
+
+
+# --- Application Setup ---
+
+supervisor = SupervisorAgent()
+research_agent = ResearchAgent()
+writer_agent = WriterAgent()
+fact_checker = FactCheckerAgent()
+evaluator = QualityEvaluator()
+
+
+app = FastAPI(title="Research & Report System", version="1.0.0")
+
+
+@app.post("/research", response_model=ResearchResponse)
+async def research(request: ResearchRequest):
+    """Execute the full research pipeline."""
+    t0 = time.time()
+
+    # --- Input guardrails ---
+    check_input_guardrails(request.question)
+
+    # --- Phase 1: Plan ---
+    logger.info(f"Planning research for: {request.question[:80]}...")
+    plan = await supervisor.create_plan(request.question)
+    logger.info(f"Plan created: {len(plan.sub_tasks)} sub-tasks")
+
+    # --- Phase 2: Execute (research, write, fact-check) ---
+    report = await supervisor.execute_plan(
+        plan, research_agent, writer_agent, fact_checker
+    )
+
+    # --- Phase 3: Evaluate and revise ---
+    revision_rounds = 0
+    evaluator.quality_threshold = request.quality_threshold
+
+    for round_num in range(request.max_revision_rounds + 1):
+        evaluation = await evaluator.evaluate(report)
+        report.quality_score = evaluation["overall"]
+
+        if evaluator.passes_threshold(evaluation):
+            logger.info(
+                f"Report passed quality check "
+                f"(score: {evaluation['overall']}) "
+                f"after {round_num} revisions"
+            )
+            break
+
+        if round_num < request.max_revision_rounds:
+            logger.info(
+                f"Round {round_num + 1}: Quality score "
+                f"{evaluation['overall']} below threshold "
+                f"{request.quality_threshold}, revising..."
+            )
+            revision_rounds += 1
+            # Feed evaluation feedback back to the writer
+            # for targeted revision
+    else:
+        logger.warning(
+            f"Report did not pass quality threshold after "
+            f"{request.max_revision_rounds} revisions"
+        )
+
+    # --- Output guardrails ---
+    check_output_guardrails(report)
+
+    # --- Build response ---
+    latency_ms = (time.time() - t0) * 1000
+
+    passed_checks = sum(
+        1 for fc in report.fact_check_results if fc.verified
+    )
+
+    return ResearchResponse(
+        title=report.title,
+        summary=report.summary,
+        sections=report.sections,
+        sources=report.sources,
+        quality_score=report.quality_score,
+        quality_details=evaluation["scores"],
+        fact_checks_passed=passed_checks,
+        fact_checks_total=len(report.fact_check_results),
+        revision_rounds=revision_rounds,
+        total_latency_ms=round(latency_ms, 1),
+    )
+`} language="python" filename="app.py" />
+
+Study the three phases in the `/research` endpoint. **Phase 1** (planning) decomposes the question. **Phase 2** (execution) runs research, writing, and fact-checking through the supervisor. **Phase 3** (evaluation) loops until the quality threshold is met or revision rounds are exhausted. The guardrails bracket the entire pipeline -- input guardrails before Phase 1, output guardrails after Phase 3. The monitoring (not shown here to keep the code focused, but identical to Module 12 Lesson 07) wraps all three phases.
+
+This is the complete system. Every module contributes:
+
+<MermaidDiagram chart={`graph LR
+    subgraph Foundations["Modules 1-2"]
+        A1["Agent Loop"] --> A2["Prompting"]
+    end
+    subgraph Capabilities["Modules 3-6"]
+        A2 --> B1["Tool Use"]
+        B1 --> B2["Architectures"]
+        B2 --> B3["Patterns"]
+        B3 --> B4["Memory & RAG"]
+    end
+    subgraph Scale["Modules 7-9"]
+        B4 --> C1["Frameworks"]
+        C1 --> C2["Multi-Modal"]
+        C2 --> C3["Multi-Agent"]
+    end
+    subgraph Quality["Modules 10-12"]
+        C3 --> D1["Evaluation"]
+        D1 --> D2["Production"]
+        D2 --> D3["Capstone"]
+    end
+    style Foundations fill:#fed7d7,stroke:#c53030
+    style Capabilities fill:#ebf8ff,stroke:#3182ce
+    style Scale fill:#fefcbf,stroke:#b7791f
+    style Quality fill:#c6f6d5,stroke:#38a169
+    style D3 fill:#bee3f8,stroke:#2b6cb0,stroke-width:3px
+`} />
+
+The curriculum flows from left to right: foundations give you the mental models, capabilities give you the building blocks, scale teaches you to compose them, and quality teaches you to ship them. The capstone (highlighted) is where all four layers converge into a single working system.
+
+## Extending the Capstone
+
+The skeleton above is a starting point. Here are concrete extensions you can build to deepen each skill area:
+
+- **Add conversation memory (Module 7)** -- let users ask follow-up questions that reference the previous report, using sliding-window context management
+- **Add multi-modal research (Module 9)** -- extend the research agent to analyze charts, diagrams, and images found during web search
+- **Add A2A protocol (Module 10)** -- replace direct function calls between agents with the Agent-to-Agent protocol, so agents can be deployed as independent services
+- **Add tracing (Module 11)** -- integrate OpenTelemetry to trace the full request path across all agents, capturing latency, token usage, and decision points at each step
+- **Add circuit breakers (Module 12)** -- wrap each agent's LLM calls in circuit breakers so that one failing agent does not take down the entire system
+- **Add LLM-based guardrails (Module 12)** -- replace the regex input guardrails with a classifier model that detects subtle prompt injection and topic drift
+
+Each extension takes 30-60 minutes and reinforces the specific module it draws from.
+
+## What You Have Learned
+
+You started this academy with a question: *What is an LLM agent?* Now you can answer it with precision and build one from scratch. Here is the full map of your journey:
+
+**Module 1 -- Foundations:** You learned that an agent is an LLM embedded in a loop of perception, reasoning, and action. Every agent in the capstone -- the supervisor, the researcher, the writer, the fact-checker -- follows this loop.
+
+**Module 2 -- Prompting & Reasoning:** You learned that how you instruct the LLM determines what it can do. Each agent in the capstone has a carefully crafted system prompt that shapes its behavior, and the supervisor uses chain-of-thought to decompose complex questions.
+
+**Module 3 -- Tool Use:** You learned that agents become useful when they can interact with the world. The research agent uses tool calling to search vector stores and the web, transforming a language model into an information-gathering system.
+
+**Module 4 -- Architectures:** You learned the difference between ReAct, plan-and-execute, and other architectures. The research agent uses ReAct for flexible exploration, while the supervisor uses plan-and-execute for structured coordination.
+
+**Module 6 -- Design Patterns:** You learned routing, reflection, and composition patterns. The supervisor routes tasks to specialized agents, the fact-checker reflects on the writer's output, and the whole system is a composition of focused components.
+
+**Module 7 -- Memory & Knowledge:** You learned that agents need both short-term context and long-term knowledge. The RAG pipeline grounds the research agent in factual information, and conversation memory lets the system handle follow-up questions.
+
+**Module 8 -- Frameworks:** You learned when to use a framework and when to build from scratch. The capstone uses the raw Anthropic SDK to show the mechanics, but you could rebuild it in LangGraph, CrewAI, or AutoGen using the patterns you learned.
+
+**Module 9 -- Multi-Modal:** You learned that agents can perceive images, audio, and video. The capstone's research agent can be extended to analyze visual data sources, bringing multi-modal perception into the research loop.
+
+**Module 10 -- Multi-Agent Systems:** You learned orchestration, communication, and debate. The supervisor pattern, the delegation protocol, and the adversarial fact-checking loop are all multi-agent techniques you studied in depth.
+
+**Module 11 -- Evaluation:** You learned that agent quality must be measured, not assumed. The LLM-as-Judge evaluator with its multi-dimensional rubric gives the system a quality gate that prevents low-quality reports from reaching users.
+
+**Module 12 -- Production & Safety:** You learned that building an agent and shipping an agent are different disciplines. Guardrails, monitoring, circuit breakers, and containerization transform the capstone from a prototype into a production system.
+
+**Module 13 -- Advanced Patterns:** You explored computer use, coding agents, research agents, domain-specific applications, alignment, and frontier research -- the cutting edge of what agents can do and where the field is heading.
+
+## Next Steps
+
+You have completed the LLM Agents Academy. That is a significant achievement -- you now have a mental model for agent systems that spans from token-level prompting to production deployment, from single-agent loops to multi-agent orchestration. But the academy is a beginning, not an end.
+
+Here is what to do next:
+
+**Build the capstone for real.** Take the skeleton from this lesson and implement it end to end. Replace the placeholder tool implementations with real API calls. Deploy it with Docker. Send it real research questions. The gap between reading code and running code is where the deepest learning happens.
+
+**Pick a domain and specialize.** The capstone is a general-purpose research system, but the most valuable agents are domain-specific. Take what you have learned and build an agent for *your* domain -- customer support, code review, data analysis, legal research, medical literature, or whatever problem you care about most.
+
+**Stay current.** The field of LLM agents is evolving faster than any textbook can capture. Follow the research, try new models as they release, and revisit the benchmarks from Module 11 to track how capabilities are improving. The patterns you have learned are durable -- the specific implementations will evolve.
+
+**Share what you build.** The agent community is growing rapidly and there is enormous value in sharing patterns, failures, and production lessons. Write about what worked. Write about what did not. The next generation of agent builders will learn from your experience, just as you learned from the experiences captured in this academy.
+
+## Summary
+
+In this capstone, you designed and built a production-grade Research & Report system that integrates every concept from the LLM Agents Academy. A **supervisor agent** decomposes questions into sub-tasks and delegates them to specialized agents. A **research agent** with RAG gathers information from vector stores and web search. A **writer agent** synthesizes findings into structured reports. A **fact-checker agent** uses adversarial debate to verify claims. An **LLM-as-Judge evaluator** scores the output against a multi-dimensional rubric. And the entire system runs behind **input and output guardrails** with **monitoring and observability**. Every module contributed a specific, necessary piece -- from the agent loop in Module 1 to the deployment patterns in Module 12. The architecture is not theoretical; it is a skeleton you can extend into a real product. You have the knowledge. Now build.

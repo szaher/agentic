@@ -332,7 +332,7 @@ Even with these principles in mind, several mistakes appear repeatedly in practi
 
 **Exposing internal identifiers.** If a tool requires an internal database ID that the user would never know, the LLM will hallucinate one. Instead, provide a lookup tool (like `search_users`) that returns IDs, and have the LLM chain calls: search first, then act on the result.
 
-**Ignoring the tool count.** Research shows that LLM accuracy on tool selection degrades as the number of available tools increases. If your agent has 50 tools, consider organizing them into categories and loading only the relevant subset per turn. The **tool registry pattern** you will encounter in Module 5 (Design Patterns) builds directly on this idea.
+**Ignoring the tool count.** Research shows that LLM accuracy on tool selection degrades as the number of available tools increases. If your agent has 50 tools, consider organizing them into categories and loading only the relevant subset per turn. The **tool registry pattern** you will encounter in Module 6 (Design Patterns) builds directly on this idea.
 
 ## Putting It All Together
 
@@ -436,4 +436,4 @@ Tool interface design is the single highest-leverage activity when building reli
 5. **One tool per action** keeps interfaces focused and predictable
 6. **Consistent return formats** let the LLM reason reliably about results
 
-These principles are not theoretical -- they directly affect whether your agent succeeds or fails. In the next lesson, **Error Handling and Retries**, you will learn what happens when tools fail despite good design, and how agents can recover gracefully. And in Module 5, the **tool registry pattern** will show you how to manage large tool sets by dynamically selecting which tools to expose based on context.
+These principles are not theoretical -- they directly affect whether your agent succeeds or fails. In the next lesson, **Error Handling and Retries**, you will learn what happens when tools fail despite good design, and how agents can recover gracefully. And in Module 6, the **tool registry pattern** will show you how to manage large tool sets by dynamically selecting which tools to expose based on context.

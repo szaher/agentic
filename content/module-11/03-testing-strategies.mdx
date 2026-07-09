@@ -1,0 +1,819 @@
+---
+title: "Testing Strategies for Agents"
+quiz:
+  - question: "In the agent testing pyramid, which layer provides the fastest feedback but catches the fewest integration issues?"
+    options:
+      - "End-to-end tests that run full agent scenarios against golden datasets"
+      - "Integration tests that exercise the agent loop with deterministic LLM responses"
+      - "Unit tests that verify individual tool functions with mocked LLM calls"
+      - "Snapshot tests that compare agent outputs to stored baselines"
+    correctIndex: 2
+  - question: "Why should you mock the LLM when unit-testing an agent's tools?"
+    options:
+      - "Because LLM APIs are too expensive to call during development"
+      - "Because real LLM responses are non-deterministic, making assertions unreliable, and mocking isolates the logic you are actually testing"
+      - "Because mocking makes tests run in parallel automatically"
+      - "Because LLM providers block automated test traffic"
+    correctIndex: 1
+  - question: "What is the primary purpose of snapshot testing in an agent system?"
+    options:
+      - "To verify that the LLM generates grammatically correct responses"
+      - "To measure agent latency under production load"
+      - "To detect regressions by comparing current agent behavior against a previously approved baseline"
+      - "To ensure the agent uses the minimum number of tool calls"
+    correctIndex: 2
+  - question: "A property-based test for a calculator agent asserts that calculate('5 + 3') and calculate('3 + 5') produce the same result. What property is this testing?"
+    options:
+      - "Idempotency -- the agent produces the same result when called twice with identical input"
+      - "Commutativity -- the agent respects mathematical properties regardless of operand order"
+      - "Determinism -- the agent always returns the same output for the same input"
+      - "Convergence -- the agent reaches the correct answer within a bounded number of steps"
+    correctIndex: 1
+---
+
+## Overview
+
+In the previous two lessons, you explored *why* evaluation matters for non-deterministic systems and *how* benchmarks like SWE-Bench and GAIA measure agent capabilities at scale. But benchmarks answer a different question than testing. Benchmarks tell you how your agent compares to others on standardized tasks. **Testing** tells you whether *your specific agent* still works correctly after you changed something.
+
+Traditional software has well-established testing practices: unit tests, integration tests, end-to-end tests. Agent systems need the same layers, but each one requires adaptation. You cannot assert that an LLM produces an exact string. You cannot replay a conversation and expect identical tool calls. You cannot run a full agent loop in milliseconds. These constraints demand new strategies.
+
+This lesson introduces a **testing pyramid for agents** -- a layered approach where each level trades speed for realism. You will learn how to unit test tools with mocked LLM responses, integration test the agent loop with deterministic scenarios, run end-to-end evaluations against golden datasets, catch regressions with snapshot testing, and explore properties your agent should always satisfy. By the end, you will have a practical pytest test suite for an agent system.
+
+## The Agent Testing Pyramid
+
+The classic testing pyramid applies to agents, but the layers map differently. At the base, fast and cheap **unit tests** verify that individual tools behave correctly in isolation. In the middle, **integration tests** exercise the agent loop -- the cycle of LLM reasoning, tool selection, and response assembly -- with deterministic (mocked) LLM responses. At the top, slower **end-to-end tests** run the full agent against real or near-real LLM calls and compare outputs to **golden datasets**.
+
+<MermaidDiagram chart={`graph TD
+    E2E["End-to-End Tests<br/>Full agent + real/near-real LLM<br/>Golden datasets<br/>Slow — minutes per case"] --> INT["Integration Tests<br/>Agent loop + mocked LLM<br/>Deterministic scenarios<br/>Medium — seconds per case"]
+    INT --> UNIT["Unit Tests<br/>Individual tools + assertions<br/>Mocked dependencies<br/>Fast — milliseconds per case"]
+
+    SNAP["Snapshot Tests<br/>Regression detection<br/>Stored baselines"] -.-> INT
+    SNAP -.-> E2E
+
+    PROP["Property-Based Tests<br/>Invariant checking<br/>Random inputs"] -.-> UNIT
+    PROP -.-> INT
+
+    subgraph Pyramid["Agent Testing Pyramid"]
+        E2E
+        INT
+        UNIT
+    end
+
+    subgraph CrossCutting["Cross-Cutting Strategies"]
+        SNAP
+        PROP
+    end
+
+    style Pyramid fill:#ebf8ff,stroke:#3182ce
+    style CrossCutting fill:#fefcbf,stroke:#d69e2e
+    style E2E fill:#fed7d7,stroke:#e53e3e
+    style INT fill:#fefcbf,stroke:#d69e2e
+    style UNIT fill:#c6f6d5,stroke:#38a169
+    style SNAP fill:#e9d8fd,stroke:#805ad5
+    style PROP fill:#e9d8fd,stroke:#805ad5
+`} />
+
+The pyramid shape is intentional: you should have *many* unit tests, *some* integration tests, and *few* end-to-end tests. Unit tests run in milliseconds and catch most bugs. End-to-end tests take minutes and cost real money (LLM API calls), so you run them less frequently -- typically in CI before a release, not on every code change.
+
+Two **cross-cutting strategies** span multiple layers. **Snapshot testing** can apply at any level: store an approved output, and fail the test if the current output diverges. **Property-based testing** generates random inputs and checks that your agent satisfies invariants -- properties that should *always* hold regardless of input.
+
+## Test Execution Pipeline
+
+Before diving into each layer, let's see how these tests fit into a development workflow. The following flowchart shows a typical **test execution pipeline** for an agent system.
+
+<MermaidDiagram chart={`flowchart LR
+    DEV["Developer<br/>changes code"] --> UNIT_RUN["Run Unit Tests<br/>pytest -m unit<br/>~5 seconds"]
+    UNIT_RUN -->|Pass| INT_RUN["Run Integration Tests<br/>pytest -m integration<br/>~30 seconds"]
+    UNIT_RUN -->|Fail| FIX1["Fix and retry"]
+    FIX1 --> UNIT_RUN
+
+    INT_RUN -->|Pass| SNAP_RUN["Run Snapshot Tests<br/>pytest -m snapshot<br/>~10 seconds"]
+    INT_RUN -->|Fail| FIX2["Fix and retry"]
+    FIX2 --> INT_RUN
+
+    SNAP_RUN -->|Pass| CI["Push to CI"]
+    SNAP_RUN -->|Drift detected| REVIEW["Review snapshots<br/>Accept or reject"]
+    REVIEW -->|Accept| UPDATE["Update baselines"]
+    UPDATE --> CI
+    REVIEW -->|Reject| FIX3["Fix regression"]
+    FIX3 --> UNIT_RUN
+
+    CI --> E2E_RUN["Run E2E Tests<br/>pytest -m e2e<br/>~5 minutes"]
+    E2E_RUN -->|Pass| DEPLOY["Deploy"]
+    E2E_RUN -->|Fail| INVESTIGATE["Investigate<br/>failure"]
+
+    subgraph Local["Local Development"]
+        DEV
+        UNIT_RUN
+        INT_RUN
+        SNAP_RUN
+        FIX1
+        FIX2
+        FIX3
+        REVIEW
+        UPDATE
+    end
+
+    subgraph CIPipeline["CI Pipeline"]
+        CI
+        E2E_RUN
+        DEPLOY
+        INVESTIGATE
+    end
+
+    style Local fill:#ebf8ff,stroke:#3182ce
+    style CIPipeline fill:#f0fff4,stroke:#38a169
+    style DEPLOY fill:#c6f6d5,stroke:#38a169
+    style INVESTIGATE fill:#fed7d7,stroke:#e53e3e
+`} />
+
+Developers run unit, integration, and snapshot tests locally -- they are fast enough to run on every save. End-to-end tests run in CI because they require LLM API calls and take minutes. Snapshot drift triggers a human review step: you decide whether the change is intentional (update the baseline) or a regression (fix the code).
+
+## Layer 1: Unit Testing Tools
+
+The base of the pyramid is **unit testing** individual tools. A tool is just a function: given inputs, it produces outputs. You test it the same way you test any function -- call it with known arguments, assert on the result.
+
+The challenge with agent tools is that they often depend on external services (APIs, databases, file systems) and on the LLM itself. The solution is **mocking**: replace the real dependencies with controlled substitutes that return predetermined responses.
+
+<CodeBlock code={`import pytest
+from unittest.mock import patch, MagicMock
+from dataclasses import dataclass
+from typing import Any, Optional
+
+
+# ── The agent's tools (production code) ──────────────────────────
+
+def search_documents(query: str, top_k: int = 3) -> list[dict]:
+    """Search a vector database for relevant documents."""
+    # In production, this calls a real vector DB
+    from vector_db import client  # noqa: F401
+    results = client.search(query, top_k=top_k)
+    return [{"title": r.title, "score": r.score} for r in results]
+
+
+def calculate(expression: str) -> dict:
+    """Safely evaluate a mathematical expression."""
+    allowed_chars = set("0123456789+-*/.(). ")
+    if not all(c in allowed_chars for c in expression):
+        return {"error": "Invalid characters in expression"}
+    try:
+        result = eval(expression)  # safe due to character whitelist
+        return {"result": round(result, 6)}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+def send_notification(user_id: str, message: str) -> dict:
+    """Send a notification to a user via an external API."""
+    from notification_service import api  # noqa: F401
+    response = api.send(user_id=user_id, message=message)
+    return {"status": response.status, "notification_id": response.id}
+
+
+# ── Unit tests ───────────────────────────────────────────────────
+
+class TestCalculateTool:
+    """Unit tests for the calculate tool -- no mocking needed."""
+
+    def test_basic_addition(self):
+        result = calculate("2 + 3")
+        assert result == {"result": 5}
+
+    def test_floating_point(self):
+        result = calculate("10 / 3")
+        assert result["result"] == pytest.approx(3.333333, rel=1e-5)
+
+    def test_invalid_characters_rejected(self):
+        result = calculate("import os; os.system('rm -rf /')")
+        assert "error" in result
+        assert "Invalid characters" in result["error"]
+
+    def test_division_by_zero(self):
+        result = calculate("1 / 0")
+        assert "error" in result
+
+
+class TestSearchDocumentsTool:
+    """Unit tests with mocked vector DB dependency."""
+
+    @patch("vector_db.client")
+    def test_returns_formatted_results(self, mock_client):
+        # Arrange: mock the vector DB to return controlled results
+        mock_result = MagicMock()
+        mock_result.title = "Agent Design Patterns"
+        mock_result.score = 0.92
+        mock_client.search.return_value = [mock_result]
+
+        # Act
+        results = search_documents("design patterns", top_k=1)
+
+        # Assert
+        assert len(results) == 1
+        assert results[0]["title"] == "Agent Design Patterns"
+        assert results[0]["score"] == 0.92
+        mock_client.search.assert_called_once_with("design patterns", top_k=1)
+
+    @patch("vector_db.client")
+    def test_empty_results(self, mock_client):
+        mock_client.search.return_value = []
+        results = search_documents("nonexistent topic")
+        assert results == []
+
+
+class TestSendNotificationTool:
+    """Unit tests with mocked external API."""
+
+    @patch("notification_service.api")
+    def test_successful_send(self, mock_api):
+        mock_response = MagicMock()
+        mock_response.status = "delivered"
+        mock_response.id = "notif-123"
+        mock_api.send.return_value = mock_response
+
+        result = send_notification("user-42", "Task complete")
+
+        assert result == {"status": "delivered", "notification_id": "notif-123"}
+        mock_api.send.assert_called_once_with(
+            user_id="user-42", message="Task complete"
+        )
+`} language="python" filename="test_tools_unit.py" />
+
+Notice the pattern: tools that have no external dependencies (like `calculate`) need no mocking at all. Tools that call external services get their dependencies replaced with `MagicMock` objects that return predetermined data. The tests are fast (milliseconds), deterministic (same result every run), and isolated (no network calls, no database).
+
+> **Key insight:** If you designed your tools using the middleware pattern from Module 6, Lesson 3, your tools are already decoupled from cross-cutting concerns. This makes them inherently easier to test -- you can test the tool logic without the middleware, and test the middleware without the tools.
+
+## Layer 2: Integration Testing the Agent Loop
+
+Unit tests verify tools in isolation, but they do not tell you whether the agent *uses* tools correctly. **Integration tests** exercise the full agent loop -- the cycle where the LLM reasons about a task, selects a tool, processes the result, and decides what to do next.
+
+The key technique is **mocking the LLM** itself. Instead of calling a real model, you replace the LLM with a function that returns predetermined responses. This makes the test deterministic: you know exactly what the agent will "think" and can assert on the tool calls it makes and the final answer it produces.
+
+<CodeBlock code={`from dataclasses import dataclass, field
+from typing import Any, Callable, Optional
+import json
+
+
+# ── Minimal agent framework for testing ──────────────────────────
+
+@dataclass
+class ToolCall:
+    name: str
+    arguments: dict[str, Any]
+
+@dataclass
+class AgentMessage:
+    role: str  # "assistant", "tool"
+    content: Optional[str] = None
+    tool_calls: list[ToolCall] = field(default_factory=list)
+    tool_call_id: Optional[str] = None
+
+@dataclass
+class AgentState:
+    messages: list[AgentMessage] = field(default_factory=list)
+    max_steps: int = 10
+    step_count: int = 0
+
+
+class Agent:
+    """Simplified agent that runs an LLM-tool loop."""
+
+    def __init__(self, llm_fn: Callable, tools: dict[str, Callable]):
+        self.llm_fn = llm_fn  # function(messages) -> AgentMessage
+        self.tools = tools
+
+    def run(self, user_query: str) -> str:
+        state = AgentState()
+        state.messages.append(AgentMessage(role="user", content=user_query))
+
+        while state.step_count < state.max_steps:
+            # Step 1: Ask the LLM what to do
+            response = self.llm_fn(state.messages)
+            state.messages.append(response)
+            state.step_count += 1
+
+            # Step 2: If no tool calls, return the final answer
+            if not response.tool_calls:
+                return response.content
+
+            # Step 3: Execute each tool call
+            for tc in response.tool_calls:
+                tool_fn = self.tools.get(tc.name)
+                if tool_fn:
+                    result = tool_fn(**tc.arguments)
+                else:
+                    result = {"error": f"Unknown tool: {tc.name}"}
+                state.messages.append(AgentMessage(
+                    role="tool",
+                    content=json.dumps(result),
+                    tool_call_id=tc.name,
+                ))
+
+        return "Max steps reached without a final answer."
+
+
+# ── Integration tests with mocked LLM ───────────────────────────
+
+class TestAgentLoop:
+    """Integration tests that verify the agent loop with a mocked LLM."""
+
+    def test_single_tool_call_and_answer(self):
+        """Agent should call calculate, then produce a final answer."""
+        call_sequence = iter([
+            # Step 1: LLM decides to call the calculate tool
+            AgentMessage(
+                role="assistant",
+                tool_calls=[ToolCall(name="calculate", arguments={"expression": "42 * 3"})],
+            ),
+            # Step 2: LLM sees the result and gives a final answer
+            AgentMessage(
+                role="assistant",
+                content="The result of 42 * 3 is 126.",
+            ),
+        ])
+        mock_llm = lambda messages: next(call_sequence)
+
+        agent = Agent(
+            llm_fn=mock_llm,
+            tools={"calculate": calculate},
+        )
+
+        answer = agent.run("What is 42 times 3?")
+
+        assert "126" in answer
+        # The mock LLM was called exactly twice
+        # (once to decide tool call, once to produce answer)
+
+    def test_multi_step_tool_usage(self):
+        """Agent should chain two tool calls before answering."""
+        call_sequence = iter([
+            AgentMessage(
+                role="assistant",
+                tool_calls=[ToolCall(name="calculate", arguments={"expression": "100 / 4"})],
+            ),
+            AgentMessage(
+                role="assistant",
+                tool_calls=[ToolCall(name="calculate", arguments={"expression": "25 * 2"})],
+            ),
+            AgentMessage(
+                role="assistant",
+                content="100 / 4 = 25, and 25 * 2 = 50.",
+            ),
+        ])
+        mock_llm = lambda messages: next(call_sequence)
+
+        agent = Agent(
+            llm_fn=mock_llm,
+            tools={"calculate": calculate},
+        )
+
+        answer = agent.run("Divide 100 by 4, then double it.")
+
+        assert "50" in answer
+
+    def test_unknown_tool_handled_gracefully(self):
+        """Agent should not crash when the LLM calls a non-existent tool."""
+        call_sequence = iter([
+            AgentMessage(
+                role="assistant",
+                tool_calls=[ToolCall(name="fly_to_moon", arguments={})],
+            ),
+            AgentMessage(
+                role="assistant",
+                content="I don't have the ability to fly to the moon.",
+            ),
+        ])
+        mock_llm = lambda messages: next(call_sequence)
+
+        agent = Agent(
+            llm_fn=mock_llm,
+            tools={"calculate": calculate},
+        )
+
+        answer = agent.run("Fly me to the moon.")
+
+        assert "don't" in answer.lower() or "cannot" in answer.lower() or "moon" in answer.lower()
+
+    def test_max_steps_prevents_infinite_loop(self):
+        """Agent should stop after max_steps even if LLM keeps calling tools."""
+        # LLM always calls a tool, never gives a final answer
+        mock_llm = lambda messages: AgentMessage(
+            role="assistant",
+            tool_calls=[ToolCall(name="calculate", arguments={"expression": "1+1"})],
+        )
+
+        agent = Agent(
+            llm_fn=mock_llm,
+            tools={"calculate": calculate},
+        )
+
+        answer = agent.run("Loop forever please.")
+
+        assert "Max steps" in answer
+`} language="python" filename="test_agent_integration.py" />
+
+These tests verify *behavior*, not exact outputs. The assertions check that the agent called the right tools, handled errors gracefully, and terminated within bounds. This is the right level of specificity for integration tests -- precise enough to catch real bugs, loose enough to survive minor prompt changes.
+
+## Layer 3: End-to-End Evaluation with Golden Datasets
+
+At the top of the pyramid, **end-to-end tests** run the full agent with a real (or near-real) LLM and compare outputs against a **golden dataset** -- a curated set of inputs and their expected outputs, reviewed and approved by humans.
+
+<CodeBlock code={`import json
+from pathlib import Path
+from typing import Callable
+
+
+# ── Golden dataset structure ─────────────────────────────────────
+
+GOLDEN_DATASET = [
+    {
+        "id": "math-001",
+        "input": "What is 15% of 200?",
+        "expected_answer": "30",
+        "expected_tools": ["calculate"],
+        "tags": ["math", "percentage"],
+    },
+    {
+        "id": "math-002",
+        "input": "If I have 3 apples and buy 5 more, how many do I have?",
+        "expected_answer": "8",
+        "expected_tools": ["calculate"],
+        "tags": ["math", "arithmetic"],
+    },
+    {
+        "id": "search-001",
+        "input": "Find documents about prompt engineering techniques.",
+        "expected_answer_contains": ["prompt", "engineering"],
+        "expected_tools": ["search_documents"],
+        "tags": ["search", "retrieval"],
+    },
+]
+
+
+# ── E2E test runner ──────────────────────────────────────────────
+
+@dataclass
+class EvalResult:
+    case_id: str
+    passed: bool
+    actual_answer: str
+    expected: str
+    tools_used: list[str]
+    expected_tools: list[str]
+    tool_match: bool
+
+
+def run_e2e_evaluation(
+    agent: Agent,
+    dataset: list[dict],
+    tool_tracker: dict,
+) -> list[EvalResult]:
+    """Run the agent against every case in the golden dataset."""
+    results = []
+    for case in dataset:
+        # Reset tool tracking
+        tool_tracker["calls"] = []
+
+        answer = agent.run(case["input"])
+        tools_used = tool_tracker["calls"]
+
+        # Check answer correctness
+        if "expected_answer" in case:
+            passed = case["expected_answer"].lower() in answer.lower()
+            expected = case["expected_answer"]
+        elif "expected_answer_contains" in case:
+            passed = all(
+                keyword.lower() in answer.lower()
+                for keyword in case["expected_answer_contains"]
+            )
+            expected = str(case["expected_answer_contains"])
+        else:
+            passed = True  # no assertion on answer
+            expected = "(none)"
+
+        # Check tool usage
+        tool_match = set(case.get("expected_tools", [])) == set(tools_used)
+
+        results.append(EvalResult(
+            case_id=case["id"],
+            passed=passed and tool_match,
+            actual_answer=answer[:200],
+            expected=expected,
+            tools_used=tools_used,
+            expected_tools=case.get("expected_tools", []),
+            tool_match=tool_match,
+        ))
+
+    return results
+
+
+# ── Pytest integration for golden dataset tests ─────────────────
+
+@pytest.mark.e2e
+@pytest.mark.parametrize(
+    "case",
+    GOLDEN_DATASET,
+    ids=[c["id"] for c in GOLDEN_DATASET],
+)
+def test_golden_dataset(case, live_agent, tool_tracker):
+    """Each golden dataset case runs as a separate parametrized test."""
+    tool_tracker["calls"] = []
+
+    answer = live_agent.run(case["input"])
+
+    if "expected_answer" in case:
+        assert case["expected_answer"].lower() in answer.lower(), (
+            f"Expected '{case['expected_answer']}' in answer, got: {answer[:200]}"
+        )
+
+    if "expected_answer_contains" in case:
+        for keyword in case["expected_answer_contains"]:
+            assert keyword.lower() in answer.lower(), (
+                f"Expected keyword '{keyword}' in answer, got: {answer[:200]}"
+            )
+
+    expected_tools = set(case.get("expected_tools", []))
+    actual_tools = set(tool_tracker["calls"])
+    assert expected_tools == actual_tools, (
+        f"Expected tools {expected_tools}, got {actual_tools}"
+    )
+`} language="python" filename="test_agent_e2e.py" />
+
+Golden dataset tests are expensive -- each case calls a real LLM and may take seconds. Mark them with `@pytest.mark.e2e` so you can skip them during local development (`pytest -m "not e2e"`) and run them only in CI. Build your dataset incrementally: every time you find a bug in production, add the failing case to the golden dataset so it never regresses.
+
+## Snapshot Testing for Regression Detection
+
+**Snapshot testing** captures the agent's output for a given input and stores it as a baseline. On subsequent runs, the test compares the current output to the stored snapshot. If they differ, the test fails -- forcing you to either fix the regression or explicitly approve the new behavior.
+
+This is especially valuable for agents because small changes to prompts, tool descriptions, or model versions can subtly alter behavior. Snapshot tests make these changes visible.
+
+<CodeBlock code={`import hashlib
+import json
+from pathlib import Path
+
+SNAPSHOT_DIR = Path("tests/snapshots")
+
+
+def normalize_output(output: str) -> str:
+    """Normalize agent output for stable comparison.
+
+    Strips whitespace variations and standardizes number formats
+    so that semantically identical outputs match.
+    """
+    output = " ".join(output.split())  # collapse whitespace
+    output = output.lower().strip()
+    return output
+
+
+def get_snapshot_path(test_id: str) -> Path:
+    """Generate a deterministic file path for a snapshot."""
+    return SNAPSHOT_DIR / f"{test_id}.snapshot.json"
+
+
+def assert_matches_snapshot(
+    test_id: str,
+    actual_output: str,
+    tools_used: list[str],
+    update: bool = False,
+) -> None:
+    """Compare actual output against stored snapshot.
+
+    If no snapshot exists or update=True, writes the current output
+    as the new baseline.
+
+    Args:
+        test_id: Unique identifier for this test case.
+        actual_output: The agent's current output.
+        tools_used: List of tools the agent called.
+        update: If True, overwrite the existing snapshot.
+    """
+    snapshot_path = get_snapshot_path(test_id)
+    current = {
+        "output": normalize_output(actual_output),
+        "tools_used": sorted(tools_used),
+        "output_hash": hashlib.sha256(
+            normalize_output(actual_output).encode()
+        ).hexdigest()[:16],
+    }
+
+    if not snapshot_path.exists() or update:
+        SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
+        snapshot_path.write_text(json.dumps(current, indent=2))
+        return  # first run or explicit update -- snapshot written
+
+    stored = json.loads(snapshot_path.read_text())
+
+    assert current["tools_used"] == stored["tools_used"], (
+        f"Tool usage changed for {test_id}:\n"
+        f"  Stored:  {stored['tools_used']}\n"
+        f"  Current: {current['tools_used']}"
+    )
+
+    assert current["output_hash"] == stored["output_hash"], (
+        f"Output changed for {test_id}:\n"
+        f"  Stored:  {stored['output'][:100]}\n"
+        f"  Current: {current['output'][:100]}\n"
+        f"Run with --update-snapshots to accept the new baseline."
+    )
+
+
+# ── Usage in tests ───────────────────────────────────────────────
+
+@pytest.mark.snapshot
+def test_math_agent_snapshot(agent, tool_tracker):
+    tool_tracker["calls"] = []
+    answer = agent.run("What is the square root of 144?")
+
+    assert_matches_snapshot(
+        test_id="math-sqrt-144",
+        actual_output=answer,
+        tools_used=tool_tracker["calls"],
+        update=False,  # set True once to create initial baseline
+    )
+`} language="python" filename="test_snapshots.py" />
+
+The `normalize_output` function is critical. Without normalization, trivial differences in whitespace or capitalization would cause false failures. The hash-based comparison catches meaningful content changes while ignoring formatting noise. When a snapshot test fails, you review the diff, decide whether the change is intentional, and either fix the code or run with `update=True` to accept the new baseline.
+
+## Property-Based Testing for Agents
+
+Traditional tests check specific cases: "given this input, expect that output." **Property-based testing** takes a different approach: define *properties* (invariants) that should hold for *all* inputs, then let a testing framework generate hundreds of random inputs to find violations.
+
+For agents, useful properties include:
+
+- **Termination** -- the agent always finishes within `max_steps`, regardless of input
+- **Tool safety** -- the agent never calls a tool with arguments that violate the tool's schema
+- **Consistency** -- semantically equivalent inputs produce semantically equivalent outputs
+- **Monotonic progress** -- each agent step moves closer to a solution (no infinite loops)
+
+<CodeBlock code={`from hypothesis import given, strategies as st, settings
+
+
+# ── Properties of the calculate tool ─────────────────────────────
+
+@given(a=st.integers(min_value=-1000, max_value=1000),
+       b=st.integers(min_value=-1000, max_value=1000))
+def test_addition_is_commutative(a, b):
+    """calculate(a + b) should equal calculate(b + a)."""
+    result_ab = calculate(f"{a} + {b}")
+    result_ba = calculate(f"{b} + {a}")
+    assert result_ab == result_ba
+
+
+@given(expr=st.from_regex(r"[0-9]{1,3}( [+\-*/] [0-9]{1,3}){0,3}", fullmatch=True))
+def test_calculate_never_crashes(expr):
+    """calculate should return a dict with 'result' or 'error', never raise."""
+    result = calculate(expr)
+    assert isinstance(result, dict)
+    assert "result" in result or "error" in result
+
+
+# ── Properties of the agent loop ─────────────────────────────────
+
+@given(query=st.text(min_size=1, max_size=200))
+@settings(max_examples=50, deadline=None)
+def test_agent_always_terminates(query):
+    """The agent must always return a string, never hang or crash."""
+    # Use a mock LLM that gives a direct answer after one tool call
+    responses = iter([
+        AgentMessage(
+            role="assistant",
+            tool_calls=[ToolCall(name="calculate", arguments={"expression": "1+1"})],
+        ),
+        AgentMessage(role="assistant", content="Done."),
+    ])
+    mock_llm = lambda msgs: next(responses, AgentMessage(role="assistant", content="Fallback."))
+
+    agent = Agent(llm_fn=mock_llm, tools={"calculate": calculate})
+    result = agent.run(query)
+
+    assert isinstance(result, str)
+    assert len(result) > 0
+
+
+@given(query=st.text(min_size=1, max_size=100))
+@settings(max_examples=30, deadline=None)
+def test_agent_respects_max_steps(query):
+    """No matter the input, the agent must not exceed max_steps."""
+    step_counter = {"count": 0}
+
+    def counting_llm(messages):
+        step_counter["count"] += 1
+        # Always request a tool call to stress-test the step limit
+        return AgentMessage(
+            role="assistant",
+            tool_calls=[ToolCall(name="calculate", arguments={"expression": "1"})],
+        )
+
+    agent = Agent(llm_fn=counting_llm, tools={"calculate": calculate})
+    agent.run(query)
+
+    # The agent framework has max_steps=10 by default
+    assert step_counter["count"] <= 10
+`} language="python" filename="test_properties.py" />
+
+Property-based tests with the **Hypothesis** library are powerful for finding edge cases you would never think to write manually. The `test_calculate_never_crashes` test generates random arithmetic expressions and verifies the tool always returns structured data rather than raising an exception. The `test_agent_always_terminates` test sends random text as queries and verifies the agent always produces an answer -- catching potential infinite loops or crash-on-input bugs.
+
+## Connecting Middleware to Testing
+
+In Module 6, Lesson 3, you learned how the **middleware and hooks pattern** creates an interception layer around every tool call. That pattern is not just useful in production -- it is a powerful **testing enabler**.
+
+Middleware hooks give you natural injection points for test instrumentation:
+
+- **Tool call recording** -- A test-only middleware can record every tool call the agent makes during a test, building the `tool_tracker` dictionary used in the examples above. In production, you remove this middleware. In tests, you add it.
+- **Deterministic stubbing** -- Instead of mocking the LLM globally, a middleware can intercept specific tool calls and return canned responses, letting the rest of the pipeline run normally.
+- **Latency simulation** -- A middleware can add artificial delays to tool calls during integration tests, verifying that your agent handles timeouts correctly.
+- **Fault injection** -- A middleware can randomly fail tool calls with configurable probability, stress-testing the agent's error recovery.
+
+<CodeBlock code={`class TestInstrumentationMiddleware(Middleware):
+    """Middleware that records tool calls for test assertions.
+
+    Add this to your executor during tests to capture what tools
+    the agent called, with what arguments, and what results came back.
+    This is the bridge between the middleware pattern and your test suite.
+    """
+
+    def __init__(self):
+        self.calls: list[dict] = []
+
+    def before_tool(self, call: ToolCall) -> Optional[ToolResult]:
+        self.calls.append({
+            "tool": call.tool_name,
+            "args": call.arguments,
+            "phase": "before",
+        })
+        return None  # always proceed
+
+    def after_tool(self, call: ToolCall, result: ToolResult) -> ToolResult:
+        self.calls[-1]["result"] = result.output
+        self.calls[-1]["error"] = result.error
+        self.calls[-1]["phase"] = "after"
+        return result
+
+    def reset(self):
+        self.calls = []
+
+    def assert_tool_called(self, tool_name: str, times: int = 1):
+        actual = sum(1 for c in self.calls if c["tool"] == tool_name)
+        assert actual == times, (
+            f"Expected {tool_name} to be called {times} time(s), "
+            f"but it was called {actual} time(s)"
+        )
+
+    def assert_tool_not_called(self, tool_name: str):
+        self.assert_tool_called(tool_name, times=0)
+
+
+# ── Using it in a test ───────────────────────────────────────────
+
+def test_agent_uses_correct_tools():
+    tracker = TestInstrumentationMiddleware()
+    executor = MiddlewareExecutor()
+    executor.use(tracker)
+    executor.register_tool("calculate", calculate)
+
+    executor.execute("calculate", {"expression": "7 * 8"})
+
+    tracker.assert_tool_called("calculate", times=1)
+    assert tracker.calls[0]["result"] == {"result": 56}
+`} language="python" filename="test_middleware_hooks.py" />
+
+This is the payoff of investing in middleware architecture early. Systems that use middleware are inherently more testable because the interception points already exist. You do not need to refactor your tools to accept mock dependencies -- you add a test middleware and the pipeline handles the rest.
+
+## Practical Testing Checklist
+
+When building a test suite for your agent, work through these levels in order:
+
+**Unit tests (write first, run fastest):**
+- Every tool function has at least one happy-path and one error-path test
+- External dependencies are mocked -- tests make zero network calls
+- Edge cases: empty inputs, maximum-length inputs, special characters
+
+**Integration tests (write second, run on every commit):**
+- The agent loop completes within `max_steps` for representative queries
+- The agent calls the expected tool(s) for each query type
+- Error recovery works: agent handles tool failures without crashing
+- Unknown tool calls are caught and reported gracefully
+
+**Snapshot tests (add incrementally):**
+- Capture baselines for your most important use cases
+- Normalize outputs before comparison to avoid false failures
+- Review snapshot diffs on every model upgrade or prompt change
+
+**End-to-end tests (write selectively, run in CI):**
+- Golden dataset covers your top 10-20 most critical scenarios
+- Each production bug becomes a new golden dataset case
+- Assertions check for key facts in the output, not exact string matches
+
+**Property-based tests (add for invariants):**
+- Agent always terminates (never hangs)
+- Tools never crash on valid inputs
+- Mathematical properties hold (commutativity, idempotency where expected)
+
+## Summary
+
+Testing agents requires adapting traditional strategies to handle non-determinism, multi-step reasoning, and external dependencies. The **agent testing pyramid** provides a framework: many fast **unit tests** at the base, fewer **integration tests** in the middle with mocked LLMs for deterministic scenarios, and selective **end-to-end tests** at the top using golden datasets with real model calls.
+
+Two cross-cutting strategies complement the pyramid. **Snapshot testing** catches regressions by comparing current outputs against approved baselines -- essential when prompt changes or model upgrades silently alter behavior. **Property-based testing** with tools like Hypothesis generates random inputs to verify invariants your agent should always satisfy, finding edge cases you would never write by hand.
+
+The **middleware pattern** from Module 6 is a natural testing enabler. The same hooks that provide logging and validation in production can record tool calls, inject faults, and simulate latency in tests -- no refactoring needed.
+
+In the next lesson, you will learn about **LLM-as-Judge evaluation** -- using one LLM to evaluate the outputs of another. This technique unlocks scalable evaluation for open-ended tasks where there is no single correct answer, such as summarization quality, instruction following, and conversational coherence.

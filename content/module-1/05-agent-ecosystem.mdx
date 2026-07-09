@@ -128,7 +128,7 @@ Here is a snapshot of the major frameworks:
 
 These frameworks differ in philosophy. **LangGraph** models agent behavior as a state graph with explicit transitions. **CrewAI** thinks in terms of crews, roles, and tasks. **AutoGen** structures agents as participants in a conversation. Each abstraction fits different problem shapes.
 
-> We will build with these frameworks hands-on in **Module 7: Agent Frameworks & SDKs**, comparing their strengths on the same problem.
+> We will build with these frameworks hands-on in **Module 8: Agent Frameworks & SDKs**, comparing their strengths on the same problem.
 
 ## Protocols and Standards
 
@@ -161,7 +161,7 @@ A2A defines a standard for agents to:
 
 This matters as organizations deploy multiple specialized agents that need to coordinate -- a research agent handing off findings to a writing agent, or a coding agent requesting a review from a testing agent.
 
-> We will explore A2A in depth in **Module 9: Multi-Agent Systems**, where you will build agents that discover and collaborate with each other.
+> We will explore A2A in depth in **Module 10: Multi-Agent Systems**, where you will build agents that discover and collaborate with each other.
 
 ## Infrastructure
 
@@ -171,19 +171,19 @@ Agents need more than models and frameworks. A production agent stack includes s
 
 **Vector databases** store and search over embeddings -- numerical representations of text, images, and other data. They power **Retrieval-Augmented Generation (RAG)**, where an agent retrieves relevant context from a knowledge base before generating a response. Popular options include Pinecone, Weaviate, Chroma, and pgvector.
 
-> Covered in **Module 6: Memory & Knowledge**, where you will build RAG pipelines and compare retrieval strategies.
+> Covered in **Module 7: Memory & Knowledge**, where you will build RAG pipelines and compare retrieval strategies.
 
 ### Observability and Tracing
 
 When an agent takes ten steps to answer a question, you need to see each step. **Observability tools** like LangSmith, Arize Phoenix, and Braintrust provide tracing, logging, and debugging for agent runs. They show you the full chain of thought, tool calls, and model responses so you can diagnose failures and optimize performance.
 
-> Covered in **Module 10: Evaluation & Testing** and **Module 11: Production, Deployment & Safety**.
+> Covered in **Module 11: Evaluation & Testing** and **Module 12: Production, Deployment & Safety**.
 
 ### Deployment Platforms
 
 Getting agents from notebook to production requires containerization, scaling, and monitoring. Platforms like modal, AWS Bedrock Agents, and Google Vertex AI Agent Builder provide managed infrastructure for running agents at scale. Even a simple Docker container with a well-structured agent can go a long way.
 
-> Covered in **Module 11: Production, Deployment & Safety**.
+> Covered in **Module 12: Production, Deployment & Safety**.
 
 ## Evaluation and Benchmarks
 
@@ -195,7 +195,7 @@ How do you know if your agent actually works? The field has developed several **
 
 These benchmarks matter because traditional LLM evaluations (multiple choice, summarization quality) do not capture what makes an agent effective. An agent might use a brilliant model but fail because it calls the wrong tool, gets stuck in a loop, or misinterprets an observation.
 
-> We will cover evaluation strategies, including building your own task-specific benchmarks, in **Module 10: Evaluation & Testing**.
+> We will cover evaluation strategies, including building your own task-specific benchmarks, in **Module 11: Evaluation & Testing**.
 
 ## How the Pieces Fit Together
 
@@ -219,14 +219,14 @@ This lesson's ecosystem map is also your roadmap for the remaining modules:
 | Foundation models & capabilities | Module 1 (done) and Module 2 (prompting) |
 | Tool use & MCP | Module 3 |
 | Agent architectures | Module 4 |
-| Design patterns | Module 5 |
-| Memory, RAG, vector stores | Module 6 |
-| Frameworks & SDKs | Module 7 |
-| Multimodal agents | Module 8 |
-| Multi-agent systems & A2A | Module 9 |
-| Evaluation & benchmarks | Module 10 |
-| Production & safety | Module 11 |
-| Advanced patterns | Module 12 |
+| Design patterns | Module 6 |
+| Memory, RAG, vector stores | Module 7 |
+| Frameworks & SDKs | Module 8 |
+| Multimodal agents | Module 9 |
+| Multi-agent systems & A2A | Module 10 |
+| Evaluation & benchmarks | Module 11 |
+| Production & safety | Module 12 |
+| Advanced patterns | Module 13 |
 
 Each module builds on the foundations you have established here. By the end, you will have worked with every layer of this ecosystem.
 

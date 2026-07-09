@@ -1,69 +1,69 @@
 {
   "id": 8,
-  "title": "Multi-Modal Agents",
-  "description": "Building agents that see, hear, and generate across text, images, audio, and video",
+  "title": "Agent Frameworks & SDKs",
+  "description": "Hands-on tour of the major agent frameworks and when to use each one",
   "color": "#fc8181",
   "lessons": [
     {
-      "slug": "01-why-multi-modal",
-      "title": "Why Multi-Modal Agents?",
-      "description": "Beyond text: why real-world agent tasks require vision, audio, and cross-modal reasoning",
+      "slug": "01-framework-landscape",
+      "title": "The Framework Landscape",
+      "description": "Why frameworks exist and the spectrum from low-level SDKs to high-level orchestrators",
       "estimatedMinutes": 10,
-      "diagramTypes": ["architecture", "comparison"],
+      "diagramTypes": ["comparison", "architecture"],
       "hasCode": false,
       "hasQuiz": true
     },
     {
-      "slug": "02-vision-language-agents",
-      "title": "Vision-Language Agents",
-      "description": "Agents that understand images and screenshots: document parsing, UI understanding, visual QA",
+      "slug": "02-openai-agents-sdk",
+      "title": "OpenAI Agents SDK",
+      "description": "Building agents with the OpenAI Agents SDK: tools, handoffs, and guardrails",
       "estimatedMinutes": 12,
-      "diagramTypes": ["architecture", "flowchart"],
-      "hasCode": true,
-      "hasQuiz": true
-    },
-    {
-      "slug": "03-audio-and-speech-agents",
-      "title": "Audio and Speech Agents",
-      "description": "Voice-driven agents: speech-to-text, text-to-speech, real-time conversation, and audio analysis",
-      "estimatedMinutes": 12,
-      "diagramTypes": ["sequence", "architecture"],
-      "hasCode": true,
-      "hasQuiz": true
-    },
-    {
-      "slug": "04-image-and-video-generation",
-      "title": "Image and Video Generation",
-      "description": "Agents that create visual content: integrating DALL-E, Stable Diffusion, and video models",
-      "estimatedMinutes": 12,
-      "diagramTypes": ["flowchart", "architecture"],
-      "hasCode": true,
-      "hasQuiz": true
-    },
-    {
-      "slug": "05-cross-modal-reasoning",
-      "title": "Cross-Modal Reasoning",
-      "description": "Combining modalities: agents that see a chart, describe it, and answer questions about it",
-      "estimatedMinutes": 12,
-      "diagramTypes": ["flowchart", "sequence"],
-      "hasCode": true,
-      "hasQuiz": true
-    },
-    {
-      "slug": "06-multi-modal-tool-use",
-      "title": "Multi-Modal Tool Use",
-      "description": "Screen capture, browser interaction, camera input, and file-type-aware processing",
-      "estimatedMinutes": 10,
       "diagramTypes": ["architecture", "sequence"],
       "hasCode": true,
       "hasQuiz": true
     },
     {
-      "slug": "07-multi-modal-lab",
-      "title": "Multi-Modal Lab",
-      "description": "Hands-on: build an agent that analyzes images, generates reports, and narrates with speech",
+      "slug": "03-anthropic-claude-agents",
+      "title": "Anthropic Claude Agent SDK",
+      "description": "Building agents with Claude: extended thinking, tool use, and the agent loop",
+      "estimatedMinutes": 12,
+      "diagramTypes": ["architecture", "sequence"],
+      "hasCode": true,
+      "hasQuiz": true
+    },
+    {
+      "slug": "04-langgraph",
+      "title": "LangGraph",
+      "description": "Graph-based agent workflows: nodes, edges, state, and conditional routing",
+      "estimatedMinutes": 14,
+      "diagramTypes": ["flowchart", "state"],
+      "hasCode": true,
+      "hasQuiz": true
+    },
+    {
+      "slug": "05-crewai-and-autogen",
+      "title": "CrewAI and AutoGen",
+      "description": "Role-based multi-agent frameworks: crews, agents, and conversation patterns",
+      "estimatedMinutes": 12,
+      "diagramTypes": ["architecture", "sequence"],
+      "hasCode": true,
+      "hasQuiz": true
+    },
+    {
+      "slug": "06-framework-comparison",
+      "title": "Framework Comparison and Selection",
+      "description": "Head-to-head comparison: features, tradeoffs, and when to use each framework",
+      "estimatedMinutes": 10,
+      "diagramTypes": ["comparison"],
+      "hasCode": false,
+      "hasQuiz": true
+    },
+    {
+      "slug": "07-framework-lab",
+      "title": "Framework Lab",
+      "description": "Hands-on: build the same agent in three different frameworks and compare",
       "estimatedMinutes": 15,
-      "diagramTypes": ["architecture"],
+      "diagramTypes": ["comparison"],
       "hasCode": true,
       "hasQuiz": false
     }

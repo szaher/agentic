@@ -1,0 +1,705 @@
+---
+title: "Multi-Modal Lab"
+---
+
+## Overview
+
+Throughout Module 9, you explored every dimension of multi-modal agents: why they matter, how vision-language models interpret images, how audio and speech pipelines work, how to generate images and video, how cross-modal reasoning connects modalities together, and how multi-modal tool use ties everything into practical agent workflows. Now it is time to build something real.
+
+In this capstone lab, you will build an **image analysis report agent** -- an agent that accepts an image, analyzes it with Claude's vision capabilities, extracts structured data from what it sees, generates a formatted report of its findings, and optionally narrates that report using text-to-speech. This is the kind of pipeline that production multi-modal agents run every day: insurance claims processing, medical image triage, quality control on manufacturing lines, accessibility narration for visually impaired users.
+
+By the end of this lab, you will have a working system that demonstrates every concept from this module in a single cohesive pipeline. You will also see exactly where a single multi-modal agent hits its limits -- which sets the stage for Module 10, where multiple specialized agents collaborate to handle tasks no single agent can manage alone.
+
+## What We Are Building
+
+The agent takes an image file path (or a base64-encoded image), runs it through a multi-stage pipeline, and produces both a written report and an optional audio narration. Here is the complete architecture:
+
+<MermaidDiagram chart={`graph TD
+    IMG["Image Input"] --> VA["Vision Analysis"]
+    VA --> SE["Structured Extraction"]
+    SE --> RG["Report Generation"]
+    RG --> TTS["Optional TTS Narration"]
+    TTS --> OUT["Final Output"]
+
+    subgraph Pipeline["Multi-Modal Agent Pipeline"]
+        VA
+        SE
+        RG
+        TTS
+    end
+
+    subgraph Outputs["Deliverables"]
+        OUT --> RPT["Written Report (Markdown)"]
+        OUT --> AUD["Audio Narration (MP3)"]
+        OUT --> DATA["Structured Data (JSON)"]
+    end
+
+    style IMG fill:#ebf8ff,stroke:#3182ce
+    style Pipeline fill:#f7fafc,stroke:#a0aec0
+    style Outputs fill:#f0fff4,stroke:#38a169
+    style VA fill:#fed7e2,stroke:#d53f8f
+    style SE fill:#fefcbf,stroke:#d69e2e
+    style RG fill:#c6f6d5,stroke:#38a169
+    style TTS fill:#e9d8fd,stroke:#805ad5
+    style RPT fill:#c6f6d5,stroke:#38a169
+    style AUD fill:#e9d8fd,stroke:#805ad5
+    style DATA fill:#fefcbf,stroke:#d69e2e
+`} />
+
+Each stage builds on the previous one. The vision analysis produces a natural language description. The structured extraction converts that description into typed data. The report generator synthesizes both into a polished document. The TTS stage narrates the report for accessibility or convenience. This is a **sequential pipeline** -- each stage needs the output of the previous stage to proceed.
+
+## Stage 1: Image Analysis with Claude Vision
+
+The first stage sends an image to Claude's vision API and asks for a detailed analysis. This is the foundation that everything else builds on. If the vision analysis misses something, no downstream stage can recover it.
+
+<CodeBlock code={`import anthropic
+import base64
+import json
+from pathlib import Path
+
+client = anthropic.Anthropic()
+MODEL = "claude-sonnet-4-6"
+
+
+def load_image(image_path: str) -> tuple[str, str]:
+    """Load an image file and return base64 data with media type.
+
+    Supports JPEG, PNG, GIF, and WebP -- the formats Claude's
+    vision API accepts.
+    """
+    path = Path(image_path)
+    suffix = path.suffix.lower()
+
+    media_types = {
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".png": "image/png",
+        ".gif": "image/gif",
+        ".webp": "image/webp",
+    }
+
+    if suffix not in media_types:
+        raise ValueError(
+            f"Unsupported image format: {suffix}. "
+            f"Supported: {list(media_types.keys())}"
+        )
+
+    media_type = media_types[suffix]
+    image_data = base64.standard_b64encode(
+        path.read_bytes()
+    ).decode("utf-8")
+
+    return image_data, media_type
+
+
+def analyze_image(image_path: str) -> str:
+    """Stage 1: Send an image to Claude and get a detailed
+    visual analysis.
+
+    Returns a natural language description covering:
+    - What the image shows (objects, people, text, scenes)
+    - Notable details (colors, layout, condition, context)
+    - Any text visible in the image (OCR)
+    - Overall assessment and key observations
+    """
+    image_data, media_type = load_image(image_path)
+
+    response = client.messages.create(
+        model=MODEL,
+        max_tokens=2048,
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": media_type,
+                            "data": image_data,
+                        },
+                    },
+                    {
+                        "type": "text",
+                        "text": (
+                            "Analyze this image in detail. Describe:\n"
+                            "1. What the image shows (main subjects, "
+                            "objects, scene)\n"
+                            "2. Notable visual details (colors, layout, "
+                            "condition, spatial relationships)\n"
+                            "3. Any text visible in the image "
+                            "(read it verbatim)\n"
+                            "4. Context clues (setting, time of day, "
+                            "purpose)\n"
+                            "5. Key observations or anomalies\n\n"
+                            "Be thorough but factual. Describe only "
+                            "what you can actually see -- do not "
+                            "speculate beyond the visual evidence."
+                        ),
+                    },
+                ],
+            }
+        ],
+    )
+
+    return response.content[0].text
+`} language="python" filename="stage1_vision.py" />
+
+A few design choices worth calling out:
+
+- **The prompt asks for structured categories.** Rather than saying "describe this image," we request five specific types of information. This mirrors lesson 02's principle: vision-language models produce better output when the prompt defines the expected structure.
+- **The factuality constraint** ("describe only what you can actually see") reduces hallucination. Vision models sometimes infer things that are not actually visible. Grounding the analysis in observable evidence produces more reliable downstream data.
+- **We return raw text, not JSON.** At this stage, we want the richest possible description. Forcing JSON output here would limit the model's ability to describe nuances. We will extract structure in Stage 2.
+
+## Stage 2: Structured Data Extraction
+
+Raw descriptions are useful for humans, but agents need structured data to reason over. This stage takes the natural language analysis from Stage 1 and extracts typed, validated fields. This is the **cross-modal reasoning** pattern from lesson 05: converting one modality (visual description) into another (structured data).
+
+<CodeBlock code={`from dataclasses import dataclass, field, asdict
+
+
+@dataclass
+class ImageFindings:
+    """Structured representation of image analysis results."""
+    category: str              # e.g., "document", "scene", "product"
+    primary_subject: str       # Main thing in the image
+    detected_objects: list[str] = field(default_factory=list)
+    detected_text: list[str] = field(default_factory=list)
+    colors: list[str] = field(default_factory=list)
+    condition: str = ""        # e.g., "good", "damaged", "unclear"
+    confidence: str = "medium" # "high", "medium", "low"
+    key_observations: list[str] = field(default_factory=list)
+    raw_analysis: str = ""     # Original Stage 1 output
+
+
+def extract_structured_data(analysis_text: str) -> ImageFindings:
+    """Stage 2: Extract structured data from the vision analysis.
+
+    Uses Claude to parse the natural language description into
+    typed fields. This is more reliable than regex or keyword
+    matching because the model understands context.
+    """
+    extraction_prompt = f"""You are a data extraction system.
+Given the following image analysis, extract structured data.
+
+IMAGE ANALYSIS:
+{analysis_text}
+
+Return a JSON object with exactly these fields:
+{{
+    "category": "one of: document, photograph, screenshot, diagram, product, medical, satellite, other",
+    "primary_subject": "one sentence describing the main subject",
+    "detected_objects": ["list", "of", "distinct", "objects"],
+    "detected_text": ["any", "text", "found", "in", "the", "image"],
+    "colors": ["dominant", "colors"],
+    "condition": "one of: excellent, good, fair, poor, unclear",
+    "confidence": "one of: high, medium, low",
+    "key_observations": ["notable", "findings", "or", "anomalies"]
+}}
+
+Rules:
+- Only include information that was explicitly mentioned
+  in the analysis.
+- If a field has no data, use an empty list [] or
+  empty string "".
+- Do NOT invent or infer data not present in the analysis.
+
+Return only valid JSON, no other text."""
+
+    response = client.messages.create(
+        model=MODEL,
+        max_tokens=1024,
+        messages=[
+            {"role": "user", "content": extraction_prompt}
+        ],
+    )
+
+    response_text = response.content[0].text.strip()
+
+    # Handle markdown code fences if the model wraps the JSON
+    if response_text.startswith("```"):
+        lines = response_text.split("\n")
+        # Remove first and last lines (``` markers)
+        response_text = "\n".join(lines[1:-1])
+
+    try:
+        data = json.loads(response_text)
+    except json.JSONDecodeError:
+        # Fallback: return findings with raw analysis only
+        return ImageFindings(
+            category="other",
+            primary_subject="Unable to parse structured data",
+            raw_analysis=analysis_text,
+            confidence="low",
+        )
+
+    return ImageFindings(
+        category=data.get("category", "other"),
+        primary_subject=data.get("primary_subject", ""),
+        detected_objects=data.get("detected_objects", []),
+        detected_text=data.get("detected_text", []),
+        colors=data.get("colors", []),
+        condition=data.get("condition", "unclear"),
+        confidence=data.get("confidence", "medium"),
+        key_observations=data.get("key_observations", []),
+        raw_analysis=analysis_text,
+    )
+`} language="python" filename="stage2_extraction.py" />
+
+Two patterns from earlier lessons show up here:
+
+- **Two-pass analysis.** We use Claude twice: once to look at the image (Stage 1), once to structure the text (Stage 2). This is more reliable than asking a single prompt to both analyze an image and return structured JSON. Splitting modalities across passes is a pattern from lesson 05 on cross-modal reasoning.
+- **Graceful fallback.** If JSON parsing fails, we do not crash. We return an `ImageFindings` object with `confidence: "low"` and the raw analysis intact. The downstream stages can still produce a report -- it just will not have structured data sections. This is the same error resilience philosophy from Module 3's tool error handling.
+
+## Stage 3: Report Generation
+
+Now we combine the raw analysis and the structured data into a polished, human-readable report. This stage is pure text generation, but it is informed by everything the multi-modal pipeline has discovered.
+
+<CodeBlock code={`def generate_report(findings: ImageFindings) -> str:
+    """Stage 3: Generate a formatted Markdown report from the
+    structured findings.
+
+    The report includes:
+    - Executive summary
+    - Detailed findings organized by category
+    - Extracted text (if any)
+    - Key observations and recommendations
+    """
+    report_prompt = f"""You are a report writer. Generate a
+professional Markdown report based on these image analysis findings.
+
+STRUCTURED DATA:
+{json.dumps(asdict(findings), indent=2, default=str)}
+
+ORIGINAL ANALYSIS:
+{findings.raw_analysis}
+
+Generate a report with these sections:
+1. **Executive Summary** -- 2-3 sentences summarizing what was
+   found and its significance
+2. **Image Classification** -- Category, primary subject,
+   confidence level
+3. **Detailed Findings** -- Objects detected, spatial
+   relationships, visual details
+4. **Extracted Text** -- Any text found in the image (verbatim),
+   or state "No text detected"
+5. **Key Observations** -- Notable findings, anomalies, or
+   actionable insights
+6. **Metadata** -- Colors, condition assessment, analysis
+   confidence
+
+Rules:
+- Use ## for section headings (never #)
+- Use bullet points for lists
+- Bold key terms on first use
+- Be factual -- do not add information not in the data
+- Write for a professional audience
+
+Return only the Markdown report, no preamble."""
+
+    response = client.messages.create(
+        model=MODEL,
+        max_tokens=2048,
+        messages=[
+            {"role": "user", "content": report_prompt}
+        ],
+    )
+
+    return response.content[0].text
+`} language="python" filename="stage3_report.py" />
+
+The report generator receives both the structured data and the raw analysis. This is intentional. The structured data provides reliable facts for the classification and metadata sections. The raw analysis preserves nuances and descriptions that the structured extraction might have simplified. Combining both sources produces a richer report than either could alone.
+
+## Stage 4: Optional TTS Narration
+
+The final stage converts the written report into spoken audio. This is the **text-to-speech** pipeline from lesson 03, applied to a real use case: making analysis reports accessible through audio. Not every use case needs narration, so this stage is optional.
+
+<CodeBlock code={`from pathlib import Path
+
+
+def narrate_report(
+    report_text: str,
+    output_path: str = "report_narration.mp3",
+) -> str:
+    """Stage 4: Convert the report to speech using a TTS API.
+
+    In production, this would call a real TTS service like:
+    - Google Cloud Text-to-Speech
+    - Amazon Polly
+    - ElevenLabs
+    - OpenAI TTS
+
+    Here we demonstrate the integration pattern with a stub
+    that shows how the pipeline connects.
+    """
+    # Clean markdown formatting for better TTS output
+    narration_text = prepare_text_for_speech(report_text)
+
+    # --- Production implementation ---
+    # Uncomment one of these blocks to use a real TTS service:
+
+    # Option A: Google Cloud TTS
+    # from google.cloud import texttospeech
+    # tts_client = texttospeech.TextToSpeechClient()
+    # synthesis_input = texttospeech.SynthesisInput(
+    #     text=narration_text
+    # )
+    # voice = texttospeech.VoiceSelectionParams(
+    #     language_code="en-US",
+    #     ssml_gender=texttospeech.SsmlVoiceGender.NEUTRAL,
+    # )
+    # audio_config = texttospeech.AudioConfig(
+    #     audio_encoding=texttospeech.AudioEncoding.MP3,
+    # )
+    # response = tts_client.synthesize_speech(
+    #     input=synthesis_input,
+    #     voice=voice,
+    #     audio_config=audio_config,
+    # )
+    # Path(output_path).write_bytes(response.audio_content)
+
+    # Option B: OpenAI TTS
+    # from openai import OpenAI
+    # openai_client = OpenAI()
+    # response = openai_client.audio.speech.create(
+    #     model="tts-1",
+    #     voice="nova",
+    #     input=narration_text,
+    # )
+    # response.stream_to_file(output_path)
+
+    # --- Stub for this lab ---
+    word_count = len(narration_text.split())
+    estimated_duration = word_count / 150  # ~150 words per minute
+    print(f"  TTS: Would narrate {word_count} words "
+          f"(~{estimated_duration:.1f} minutes)")
+    print(f"  TTS: Output would be saved to {output_path}")
+
+    return json.dumps({
+        "status": "narration_ready",
+        "output_path": output_path,
+        "word_count": word_count,
+        "estimated_duration_minutes": round(estimated_duration, 1),
+    })
+
+
+def prepare_text_for_speech(markdown_text: str) -> str:
+    """Strip Markdown formatting to produce clean text for TTS.
+
+    TTS engines read markdown syntax characters aloud (stars,
+    hashes, pipes), which sounds terrible. This function strips
+    formatting while preserving the content and adding natural
+    pauses.
+    """
+    import re
+
+    text = markdown_text
+
+    # Remove markdown headings but keep the text
+    text = re.sub(r"^#{1,6}\s+", "", text, flags=re.MULTILINE)
+
+    # Remove bold/italic markers
+    text = re.sub(r"\*\*(.+?)\*\*", r"\1", text)
+    text = re.sub(r"\*(.+?)\*", r"\1", text)
+
+    # Remove bullet points but keep content
+    text = re.sub(r"^[\-\*]\s+", "", text, flags=re.MULTILINE)
+
+    # Replace multiple newlines with pauses
+    text = re.sub(r"\n{3,}", "\n\n", text)
+
+    # Remove any remaining markdown artifacts
+    text = re.sub(r"`(.+?)`", r"\1", text)
+
+    return text.strip()
+`} language="python" filename="stage4_tts.py" />
+
+The **`prepare_text_for_speech`** function solves a problem that is easy to overlook: Markdown formatting sounds awful when read aloud. A TTS engine will literally say "hash hash Executive Summary, star star Key finding star star" if you feed it raw Markdown. Stripping the formatting while preserving content and adding natural pauses produces audio that actually sounds professional.
+
+## Putting It All Together
+
+Now we combine all four stages into a single **pipeline orchestrator** that runs the complete multi-modal workflow:
+
+<MermaidDiagram chart={`sequenceDiagram
+    participant U as User
+    participant P as Pipeline
+    participant V as Claude Vision
+    participant E as Claude Extraction
+    participant R as Claude Report
+    participant T as TTS Service
+
+    U->>P: analyze("photo.jpg", narrate=True)
+    P->>V: analyze_image(photo.jpg)
+    V-->>P: detailed description
+    P->>E: extract_structured_data(description)
+    E-->>P: ImageFindings(category, objects, text, ...)
+    P->>R: generate_report(findings)
+    R-->>P: Markdown report
+    P->>T: narrate_report(report)
+    T-->>P: audio file path
+    P->>U: {report, findings, audio_path}
+`} />
+
+<CodeBlock code={`@dataclass
+class AnalysisResult:
+    """Complete output from the multi-modal analysis pipeline."""
+    image_path: str
+    findings: ImageFindings
+    report: str
+    narration_path: str | None = None
+
+
+def run_analysis_pipeline(
+    image_path: str,
+    narrate: bool = False,
+    narration_output: str = "report_narration.mp3",
+) -> AnalysisResult:
+    """Run the complete multi-modal image analysis pipeline.
+
+    Stages:
+    1. Vision analysis -- describe the image in detail
+    2. Structured extraction -- parse description into typed data
+    3. Report generation -- synthesize findings into a report
+    4. TTS narration (optional) -- convert report to audio
+
+    Args:
+        image_path: Path to the image file to analyze
+        narrate: If True, generate audio narration of the report
+        narration_output: File path for the audio output
+
+    Returns:
+        AnalysisResult with findings, report text, and
+        optional narration path
+    """
+    print(f"{'='*60}")
+    print(f"Multi-Modal Analysis Pipeline")
+    print(f"Image: {image_path}")
+    print(f"{'='*60}")
+
+    # Stage 1: Vision analysis
+    print("\n[Stage 1/4] Analyzing image with Claude Vision...")
+    analysis = analyze_image(image_path)
+    print(f"  Vision analysis complete "
+          f"({len(analysis)} chars)")
+
+    # Stage 2: Structured extraction
+    print("\n[Stage 2/4] Extracting structured data...")
+    findings = extract_structured_data(analysis)
+    print(f"  Category: {findings.category}")
+    print(f"  Subject: {findings.primary_subject}")
+    print(f"  Objects found: {len(findings.detected_objects)}")
+    print(f"  Text segments: {len(findings.detected_text)}")
+    print(f"  Confidence: {findings.confidence}")
+
+    # Stage 3: Report generation
+    print("\n[Stage 3/4] Generating report...")
+    report = generate_report(findings)
+    print(f"  Report complete ({len(report)} chars)")
+
+    # Stage 4: Optional TTS narration
+    narration_path = None
+    if narrate:
+        print("\n[Stage 4/4] Generating audio narration...")
+        tts_result = narrate_report(report, narration_output)
+        tts_data = json.loads(tts_result)
+        narration_path = tts_data.get("output_path")
+        print(f"  Narration: {narration_path}")
+    else:
+        print("\n[Stage 4/4] Skipping narration (narrate=False)")
+
+    print(f"\n{'='*60}")
+    print("Pipeline complete!")
+    print(f"{'='*60}")
+
+    return AnalysisResult(
+        image_path=image_path,
+        findings=findings,
+        report=report,
+        narration_path=narration_path,
+    )
+`} language="python" filename="pipeline.py" />
+
+The orchestrator is deliberately simple: four function calls in sequence, with logging between each stage. There is no agent loop here, no tool calling, no autonomous decision-making. That is intentional. A **sequential pipeline** is the right architecture when the stages are fixed and each stage depends on the previous one. Not every multi-modal system needs to be an autonomous agent -- sometimes a well-structured pipeline is clearer, faster, and easier to debug.
+
+## Running the Pipeline
+
+<CodeBlock code={`if __name__ == "__main__":
+    # Example: analyze an image with narration
+    result = run_analysis_pipeline(
+        image_path="sample_image.jpg",
+        narrate=True,
+        narration_output="analysis_narration.mp3",
+    )
+
+    # Access individual outputs
+    print("\n--- Structured Findings ---")
+    print(json.dumps(asdict(result.findings), indent=2, default=str))
+
+    print("\n--- Report Preview ---")
+    print(result.report[:500])
+
+    if result.narration_path:
+        print(f"\n--- Narration saved to: {result.narration_path} ---")
+`} language="python" filename="run_pipeline.py" />
+
+Here is what the output looks like when the pipeline runs:
+
+<CodeBlock code={`============================================================
+Multi-Modal Analysis Pipeline
+Image: sample_image.jpg
+============================================================
+
+[Stage 1/4] Analyzing image with Claude Vision...
+  Vision analysis complete (1247 chars)
+
+[Stage 2/4] Extracting structured data...
+  Category: photograph
+  Subject: A modern office workspace with dual monitors
+  Objects found: 8
+  Text segments: 3
+  Confidence: high
+
+[Stage 3/4] Generating report...
+  Report complete (1834 chars)
+
+[Stage 4/4] Generating audio narration...
+  TTS: Would narrate 287 words (~1.9 minutes)
+  TTS: Output would be saved to analysis_narration.mp3
+
+============================================================
+Pipeline complete!
+============================================================
+`} language="text" filename="output" />
+
+## Extending the Pipeline: Batch Processing
+
+In production, you rarely analyze a single image. Insurance adjusters process dozens of claim photos. Quality control systems inspect hundreds of products per hour. Here is how to extend the pipeline for **batch processing** with concurrent execution:
+
+<CodeBlock code={`import asyncio
+from concurrent.futures import ThreadPoolExecutor
+
+
+def run_batch_analysis(
+    image_paths: list[str],
+    max_concurrent: int = 3,
+    narrate: bool = False,
+) -> list[AnalysisResult]:
+    """Run the analysis pipeline on multiple images with
+    controlled concurrency.
+
+    Args:
+        image_paths: List of image file paths to analyze
+        max_concurrent: Maximum parallel analyses (be mindful
+            of API rate limits)
+        narrate: Whether to generate audio for each report
+
+    Returns:
+        List of AnalysisResult objects, one per image
+    """
+    results: list[AnalysisResult] = []
+
+    with ThreadPoolExecutor(max_workers=max_concurrent) as pool:
+        futures = {
+            pool.submit(
+                run_analysis_pipeline,
+                path,
+                narrate,
+                f"narration_{i}.mp3",
+            ): path
+            for i, path in enumerate(image_paths)
+        }
+
+        for future in futures:
+            path = futures[future]
+            try:
+                result = future.result()
+                results.append(result)
+                print(f"Completed: {path}")
+            except Exception as e:
+                print(f"Failed: {path} -- {e}")
+
+    # Generate a summary across all images
+    summary = generate_batch_summary(results)
+    print(f"\nBatch Summary:\n{summary}")
+
+    return results
+
+
+def generate_batch_summary(results: list[AnalysisResult]) -> str:
+    """Generate a summary report across all analyzed images."""
+    summary_data = []
+    for r in results:
+        summary_data.append({
+            "image": r.image_path,
+            "category": r.findings.category,
+            "subject": r.findings.primary_subject,
+            "confidence": r.findings.confidence,
+            "condition": r.findings.condition,
+            "object_count": len(r.findings.detected_objects),
+        })
+
+    prompt = f"""Summarize these image analysis results into
+a brief batch report:
+
+{json.dumps(summary_data, indent=2)}
+
+Include:
+- Total images processed
+- Breakdown by category
+- Any images flagged as low confidence or poor condition
+- Overall patterns or notable findings
+
+Return a concise Markdown summary."""
+
+    response = client.messages.create(
+        model=MODEL,
+        max_tokens=1024,
+        messages=[{"role": "user", "content": prompt}],
+    )
+
+    return response.content[0].text
+`} language="python" filename="batch_processing.py" />
+
+The **`max_concurrent`** parameter is critical. Each pipeline run makes 3-4 API calls to Claude. Processing 50 images with unlimited concurrency would fire 200 API calls simultaneously, which would hit rate limits and produce errors. Controlled concurrency keeps throughput high without overwhelming the API. This is the same rate-limiting pattern from Module 3's error handling lesson, applied at the pipeline level.
+
+## What This Lab Taught You
+
+Trace each piece of the pipeline back to the lesson where you learned it:
+
+- **Vision analysis** with structured prompts that request specific categories of information (lesson 02: vision-language agents)
+- **Text-to-speech integration** with Markdown-to-speech preprocessing (lesson 03: audio and speech agents)
+- **Structured data extraction** using a two-pass approach -- analyze first, extract second (lesson 05: cross-modal reasoning)
+- **Multi-modal tool orchestration** with a sequential pipeline that connects vision, text, and audio (lesson 06: multi-modal tool use)
+- **Batch processing** with controlled concurrency for production workloads (lesson 01: why multi-modal agents)
+- **Graceful error handling** throughout -- fallbacks for failed JSON parsing, missing TTS services, and API errors (Module 3: tool error handling)
+
+This is the complete multi-modal toolkit. Every stage -- image input, vision analysis, structured extraction, report generation, audio output -- is a building block you can recombine for your own use cases.
+
+## Where a Single Agent Hits Its Limits
+
+The pipeline you built works well for its task, but look at what happens when you try to scale it to more complex scenarios:
+
+- **No specialization.** The same Claude model handles vision analysis, data extraction, and report writing. A more complex system might benefit from specialized models for each task -- a vision-optimized model for image analysis, a data extraction model fine-tuned on structured output, a writing model tuned for report quality.
+
+- **No collaboration.** Each stage runs in isolation. The report writer cannot ask the vision analyzer to look at the image again if something is unclear. There is no back-and-forth between stages.
+
+- **No delegation.** If the image contains both a document and a photograph, the pipeline treats everything the same way. A smarter system would route different types of content to different specialist processors.
+
+- **No parallel reasoning.** The pipeline is strictly sequential. But some stages could run in parallel -- you could analyze visual content and extract text simultaneously, then merge the results.
+
+These are not bugs in your code. They are fundamental limitations of a **single-agent architecture**. When a task requires multiple skills, multiple perspectives, or parallel reasoning tracks, you need more than one agent.
+
+## What Comes Next
+
+You have built agents that see images, extract data, write reports, and speak. Each of these is a powerful capability. But in **Module 10: Multi-Agent Systems**, you will learn how to make these agents collaborate:
+
+- **Supervisor agents** that delegate image analysis to a vision specialist, data extraction to a parsing specialist, and report writing to a content specialist -- each optimized for its task
+- **Pipeline orchestration** where agents hand off work to each other with structured messages, not just function calls
+- **Parallel agent execution** where a vision agent and a text-extraction agent analyze the same document simultaneously, then a synthesis agent merges their findings
+- **Debate and consensus** where multiple agents review the same analysis and converge on a more accurate conclusion than any single agent could reach
+
+You have built agents that see and hear -- Module 10 teaches them to collaborate with other agents.
+
+## Summary
+
+You built a complete multi-modal image analysis pipeline that demonstrates every concept from Module 9 in a single working system. The pipeline accepts an image, analyzes it with Claude's vision capabilities, extracts structured data from the analysis, generates a formatted Markdown report, and optionally narrates that report with text-to-speech. You extended it with batch processing for production workloads. The four-stage architecture -- vision, extraction, reporting, narration -- shows how multi-modal capabilities compose into practical workflows. But the single-agent, sequential pipeline also reveals its own limits: no specialization, no collaboration, no delegation. Module 10 introduces multi-agent systems that overcome these constraints by letting specialized agents work together.

@@ -351,7 +351,7 @@ Best practices for prompt versioning:
 - **A/B testing**: When making significant changes, run the old and new prompts in parallel and compare outputs on a test suite of common queries.
 - **Regression testing**: Maintain a set of test cases -- inputs and expected outputs -- that you run against the prompt after every change. This catches regressions where fixing one behavior breaks another.
 
-> In production, system prompts need the same CI/CD discipline as application code: versioning, automated testing, staged rollouts, and rollback capabilities. We will cover this in detail in Module 11 (Production).
+> In production, system prompts need the same CI/CD discipline as application code: versioning, automated testing, staged rollouts, and rollback capabilities. We will cover this in detail in Module 12 (Production).
 
 ## System Prompts in Multi-Agent Systems
 
@@ -365,7 +365,7 @@ Consider a customer support system with three agents:
 
 Each agent has a tightly scoped identity, narrow capabilities, and specific tool access. This specialization makes each agent more reliable than a single general-purpose agent trying to handle everything.
 
-> When building multi-agent systems, the system prompt becomes even more important: it is how you enforce the division of responsibilities between agents. We will explore this in depth in Module 9 (Multi-Agent Systems).
+> When building multi-agent systems, the system prompt becomes even more important: it is how you enforce the division of responsibilities between agents. We will explore this in depth in Module 10 (Multi-Agent Systems).
 
 ## Design Heuristics
 

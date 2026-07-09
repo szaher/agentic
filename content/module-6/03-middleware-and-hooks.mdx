@@ -1,0 +1,433 @@
+---
+title: "Middleware and Hooks"
+quiz:
+  - question: "In a middleware pipeline, what is the correct order of execution when an agent invokes a tool?"
+    options:
+      - "Tool executes first, then pre-middleware runs, then post-middleware runs"
+      - "Pre-middleware chain runs in registration order, then the tool executes, then post-middleware chain runs in reverse registration order"
+      - "All middleware runs simultaneously in parallel around the tool call"
+      - "Pre-middleware chain runs in reverse order, then the tool executes, then post-middleware chain runs in registration order"
+    correctIndex: 1
+  - question: "Why is middleware a better approach than adding logging statements directly inside each tool function?"
+    options:
+      - "Middleware runs faster because it uses async I/O"
+      - "Logging inside tools is not supported by most LLM frameworks"
+      - "Middleware separates cross-cutting concerns from business logic, so you can add, remove, or change logging without modifying any tool code"
+      - "Middleware automatically catches all exceptions, while inline logging does not"
+    correctIndex: 2
+  - question: "A middleware's before_tool hook returns None. What does this signal to the pipeline?"
+    options:
+      - "The tool call should be skipped entirely"
+      - "The middleware encountered an error"
+      - "Proceed normally -- the call is approved and passes to the next middleware or to tool execution"
+      - "The middleware wants to replace the tool's result with None"
+    correctIndex: 2
+  - question: "Which middleware use case connects most directly to Module 12's production observability requirements?"
+    options:
+      - "PII redaction middleware that masks sensitive data before tool calls"
+      - "Rate-limiting middleware that throttles API calls"
+      - "Logging and cost-tracking middleware that records every tool invocation, its latency, token usage, and outcome"
+      - "Validation middleware that checks tool input schemas"
+    correctIndex: 0
+---
+
+## Overview
+
+In the previous lesson, you built a **Tool Registry** that lets agents discover and select tools dynamically. But registration is only half the story. Once a tool is called, you need to *intercept* that call -- to log it, validate the inputs, enforce rate limits, track costs, or redact sensitive data before it reaches an external API.
+
+If you have worked with web frameworks like Express.js, Django, or FastAPI, this concept will feel familiar. In those frameworks, **middleware** sits between the incoming request and the route handler. Every request passes through a chain of middleware functions that can inspect, transform, or reject the request before it reaches your business logic. The same pattern applies to agent systems, except the "request" is a tool call and the "handler" is the tool function.
+
+This lesson introduces the **middleware and hooks pattern** for agent systems. You will learn how to build a pipeline that wraps every tool invocation, giving you a single place to add cross-cutting concerns without modifying any tool code. This is the pattern that turns scattered `print()` statements and ad-hoc `try/except` blocks into a clean, composable interception layer.
+
+## The Middleware Pipeline
+
+The core idea is simple: instead of calling a tool function directly, the agent passes every tool call through an ordered chain of middleware. Each middleware gets a chance to inspect or modify the call before execution (**pre-hooks**) and after execution (**post-hooks**).
+
+<MermaidDiagram chart={`flowchart TD
+    REQ["Agent requests tool call"] --> PRE1["Pre-Middleware 1<br/>(Logging)"]
+    PRE1 --> PRE2["Pre-Middleware 2<br/>(Validation)"]
+    PRE2 --> PRE3["Pre-Middleware 3<br/>(Rate Limiting)"]
+    PRE3 --> EXEC["Tool Execution"]
+    EXEC --> POST3["Post-Middleware 3<br/>(Rate Limiting)"]
+    POST3 --> POST2["Post-Middleware 2<br/>(Validation)"]
+    POST2 --> POST1["Post-Middleware 1<br/>(Logging)"]
+    POST1 --> RES["Response returned to agent"]
+
+    subgraph PreChain["Pre-Execution Phase"]
+        PRE1
+        PRE2
+        PRE3
+    end
+
+    subgraph ExecPhase["Execution"]
+        EXEC
+    end
+
+    subgraph PostChain["Post-Execution Phase"]
+        POST3
+        POST2
+        POST1
+    end
+
+    style PreChain fill:#ebf8ff,stroke:#3182ce
+    style ExecPhase fill:#f0fff4,stroke:#68d391
+    style PostChain fill:#fefcbf,stroke:#d69e2e
+    style REQ fill:#e2e8f0,stroke:#718096
+    style RES fill:#e2e8f0,stroke:#718096
+    style EXEC fill:#c6f6d5,stroke:#38a169
+`} />
+
+Notice the **onion model**: pre-middleware runs in registration order (1, 2, 3), but post-middleware runs in *reverse* order (3, 2, 1). This means the first middleware registered is the outermost layer -- it sees the raw request first and the final response last. This is identical to how middleware works in Express.js or Django.
+
+Why reverse order for post-hooks? Because each middleware wraps the next one. Logging middleware wraps validation, which wraps rate limiting, which wraps the actual tool call. When the call returns, it "unwinds" back through the layers in the opposite direction. The logging middleware is the first to see the request and the last to see the response -- perfect for measuring total latency including all middleware overhead.
+
+## Middleware in Action: A Sequence Diagram
+
+Let's trace a concrete example. An agent calls a `web_search` tool. Three middleware components are registered: a logger, a validator, and a rate limiter.
+
+<MermaidDiagram chart={`sequenceDiagram
+    participant Agent
+    participant Logger as Logging Middleware
+    participant Validator as Validation Middleware
+    participant RateLimiter as Rate-Limit Middleware
+    participant Tool as web_search Tool
+
+    Agent->>Logger: call("web_search", {"query": "LLM agents"})
+    Note over Logger: Records timestamp, tool name, args
+
+    Logger->>Validator: forward call
+    Note over Validator: Checks "query" is non-empty string
+
+    Validator->>RateLimiter: forward call
+    Note over RateLimiter: Checks: 3 calls in last 10s,<br/>limit is 5 — allowed
+
+    RateLimiter->>Tool: execute("LLM agents")
+    Tool-->>RateLimiter: {"results": [...], "count": 10}
+
+    Note over RateLimiter: Increments call counter
+
+    RateLimiter-->>Validator: forward result
+    Note over Validator: Result is valid dict — pass through
+
+    Validator-->>Logger: forward result
+    Note over Logger: Records latency: 340ms,<br/>result size: 10 items
+
+    Logger-->>Agent: {"results": [...], "count": 10}
+`} />
+
+Every tool call passes through this same pipeline. If the rate limiter rejects a call, the tool never executes -- the rate limiter returns an error directly, and that error unwinds back through the validator and logger. The logger still records the attempt, including the fact that it was rate-limited. Nothing is lost.
+
+This is the key insight: **middleware makes the invisible visible**. Without it, you would need to add logging code inside `web_search`, validation code inside `web_search`, and rate-limiting code inside `web_search`. Now multiply that by twenty tools. Middleware lets you write each concern once and apply it to every tool automatically.
+
+## Building a Middleware System in Python
+
+Let's implement this pattern. We will define a base middleware class, build three concrete middleware components, and wire them into an executor that runs the pipeline.
+
+<CodeBlock code={`from dataclasses import dataclass, field
+from typing import Any, Callable, Optional
+import time
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class ToolCall:
+    """Represents a tool invocation passing through the middleware pipeline."""
+    tool_name: str
+    arguments: dict[str, Any]
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class ToolResult:
+    """Represents the outcome of a tool invocation."""
+    tool_name: str
+    output: Any
+    error: Optional[str] = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+class Middleware:
+    """Base class for all middleware. Override before_tool and/or after_tool."""
+
+    def before_tool(self, call: ToolCall) -> Optional[ToolResult]:
+        """
+        Inspect or modify a tool call before execution.
+
+        Returns:
+            None  — proceed to next middleware / tool execution.
+            ToolResult — short-circuit: skip the tool and return this result.
+        """
+        return None
+
+    def after_tool(self, call: ToolCall, result: ToolResult) -> ToolResult:
+        """
+        Inspect or modify the result after tool execution.
+
+        Always returns a ToolResult (possibly modified).
+        """
+        return result
+`} language="python" filename="middleware_base.py" />
+
+The contract is straightforward. A **before_tool** hook receives the `ToolCall` and can either let it pass (return `None`) or short-circuit the pipeline by returning a `ToolResult` directly. An **after_tool** hook receives both the call and its result, and returns a (possibly modified) result. This is enough to implement logging, validation, rate limiting, cost tracking, and PII redaction -- all without touching any tool code.
+
+Now let's build three concrete middleware components.
+
+<CodeBlock code={`class LoggingMiddleware(Middleware):
+    """Logs every tool call: name, arguments, latency, and outcome."""
+
+    def before_tool(self, call: ToolCall) -> Optional[ToolResult]:
+        call.metadata["start_time"] = time.time()
+        logger.info(
+            "Tool call started: %s | args: %s",
+            call.tool_name,
+            call.arguments,
+        )
+        return None  # proceed
+
+    def after_tool(self, call: ToolCall, result: ToolResult) -> ToolResult:
+        elapsed = time.time() - call.metadata.get("start_time", 0)
+        status = "SUCCESS" if result.error is None else "FAILED"
+        logger.info(
+            "Tool call finished: %s | status: %s | latency: %.3fs",
+            call.tool_name,
+            status,
+            elapsed,
+        )
+        result.metadata["latency_seconds"] = round(elapsed, 4)
+        return result
+
+
+class ValidationMiddleware(Middleware):
+    """Validates tool arguments against expected schemas before execution."""
+
+    def __init__(self, schemas: dict[str, dict]):
+        # schemas maps tool_name -> {"required": [...field names...]}
+        self.schemas = schemas
+
+    def before_tool(self, call: ToolCall) -> Optional[ToolResult]:
+        schema = self.schemas.get(call.tool_name)
+        if schema is None:
+            return None  # no schema registered, allow
+
+        missing = [
+            f for f in schema.get("required", [])
+            if f not in call.arguments
+        ]
+        if missing:
+            return ToolResult(
+                tool_name=call.tool_name,
+                output=None,
+                error=f"Missing required fields: {missing}",
+            )
+        return None  # all required fields present
+
+
+class RateLimitMiddleware(Middleware):
+    """Enforces per-tool call rate limits using a sliding window."""
+
+    def __init__(self, max_calls: int = 5, window_seconds: float = 60.0):
+        self.max_calls = max_calls
+        self.window_seconds = window_seconds
+        self.call_log: dict[str, list[float]] = {}
+
+    def before_tool(self, call: ToolCall) -> Optional[ToolResult]:
+        now = time.time()
+        window_start = now - self.window_seconds
+        # Get recent calls for this tool
+        recent = self.call_log.get(call.tool_name, [])
+        recent = [t for t in recent if t > window_start]
+        self.call_log[call.tool_name] = recent
+
+        if len(recent) >= self.max_calls:
+            return ToolResult(
+                tool_name=call.tool_name,
+                output=None,
+                error=(
+                    f"Rate limit exceeded: {self.max_calls} calls "
+                    f"per {self.window_seconds}s for '{call.tool_name}'"
+                ),
+            )
+        return None  # under the limit, allow
+
+    def after_tool(self, call: ToolCall, result: ToolResult) -> ToolResult:
+        # Record the call only if it actually executed
+        if result.error is None:
+            self.call_log.setdefault(call.tool_name, []).append(time.time())
+        return result
+`} language="python" filename="middleware_implementations.py" />
+
+Notice how each middleware is a self-contained class with no knowledge of the others. The logging middleware does not know about rate limiting. The rate limiter does not know about validation. Each one handles exactly one concern. This is the **separation of concerns** that makes the pattern powerful.
+
+## The Middleware Executor
+
+Now we need the engine that runs the pipeline. The **MiddlewareExecutor** accepts a list of middleware, and when a tool is called, it runs each `before_tool` hook in order, executes the tool, then runs each `after_tool` hook in reverse order.
+
+<CodeBlock code={`class MiddlewareExecutor:
+    """Runs a tool call through the full middleware pipeline."""
+
+    def __init__(self):
+        self.middlewares: list[Middleware] = []
+        self.tools: dict[str, Callable] = {}
+
+    def use(self, middleware: Middleware) -> "MiddlewareExecutor":
+        """Register a middleware (order matters — first in, outermost layer)."""
+        self.middlewares.append(middleware)
+        return self  # allow chaining: executor.use(a).use(b).use(c)
+
+    def register_tool(self, name: str, func: Callable) -> None:
+        """Register a tool function by name."""
+        self.tools[name] = func
+
+    def execute(self, tool_name: str, arguments: dict[str, Any]) -> ToolResult:
+        """Execute a tool call through the middleware pipeline."""
+        call = ToolCall(tool_name=tool_name, arguments=arguments)
+
+        # --- Pre-execution phase: run before_tool hooks in order ---
+        for mw in self.middlewares:
+            short_circuit = mw.before_tool(call)
+            if short_circuit is not None:
+                # A middleware blocked the call — unwind through
+                # post-hooks of already-visited middleware only
+                result = short_circuit
+                for prev_mw in reversed(self.middlewares[:self.middlewares.index(mw) + 1]):
+                    result = prev_mw.after_tool(call, result)
+                return result
+
+        # --- Execution phase: call the actual tool ---
+        tool_func = self.tools.get(tool_name)
+        if tool_func is None:
+            result = ToolResult(
+                tool_name=tool_name,
+                output=None,
+                error=f"Unknown tool: {tool_name}",
+            )
+        else:
+            try:
+                output = tool_func(**arguments)
+                result = ToolResult(tool_name=tool_name, output=output)
+            except Exception as e:
+                result = ToolResult(
+                    tool_name=tool_name,
+                    output=None,
+                    error=f"{type(e).__name__}: {e}",
+                )
+
+        # --- Post-execution phase: run after_tool hooks in REVERSE order ---
+        for mw in reversed(self.middlewares):
+            result = mw.after_tool(call, result)
+
+        return result
+`} language="python" filename="middleware_executor.py" />
+
+Two design decisions are worth noting here. First, when a `before_tool` hook short-circuits (returns a `ToolResult` instead of `None`), the executor still runs the `after_tool` hooks for the middleware layers that already executed. This ensures the logging middleware always records the outcome, even when a deeper middleware blocks the call. Second, the executor catches exceptions from the tool function and wraps them in a `ToolResult` with an error field. This is the same principle you learned in Module 3, Lesson 4 on error handling -- never let an exception crash the agent; always turn it into structured data the LLM can reason about.
+
+## Wiring It All Together
+
+Here is how you compose the pieces:
+
+<CodeBlock code={`def web_search(query: str) -> dict:
+    """Simulated web search tool."""
+    return {"results": [f"Result for: {query}"], "count": 1}
+
+
+def send_email(to: str, subject: str, body: str) -> dict:
+    """Simulated email tool."""
+    return {"status": "sent", "to": to}
+
+
+# Build the executor with middleware
+executor = MiddlewareExecutor()
+
+executor.use(LoggingMiddleware())
+executor.use(ValidationMiddleware(schemas={
+    "web_search": {"required": ["query"]},
+    "send_email": {"required": ["to", "subject", "body"]},
+}))
+executor.use(RateLimitMiddleware(max_calls=3, window_seconds=60))
+
+executor.register_tool("web_search", web_search)
+executor.register_tool("send_email", send_email)
+
+# Normal call — passes all middleware
+result = executor.execute("web_search", {"query": "LLM agents"})
+print(result)
+# ToolResult(tool_name='web_search', output={'results': [...], 'count': 1}, ...)
+
+# Missing required field — ValidationMiddleware blocks it
+result = executor.execute("send_email", {"to": "alice@example.com"})
+print(result.error)
+# "Missing required fields: ['subject', 'body']"
+
+# After 3 calls — RateLimitMiddleware blocks further calls
+for i in range(4):
+    r = executor.execute("web_search", {"query": f"search {i}"})
+    if r.error:
+        print(f"Call {i}: {r.error}")
+# Call 3: Rate limit exceeded: 3 calls per 60.0s for 'web_search'
+`} language="python" filename="usage_example.py" />
+
+Adding a new concern is now a one-line change. Want to track costs? Write a `CostTrackingMiddleware` and call `executor.use(...)`. Want to redact PII before it reaches external APIs? Write a `PIIRedactionMiddleware`. The core agent logic and all existing tool functions remain untouched.
+
+## Common Middleware Use Cases
+
+The three middleware components above demonstrate the pattern, but production agents benefit from several more. Here are the most common use cases and when to reach for each one.
+
+**Logging and tracing** -- Record every tool call with its arguments, result, latency, and any errors. This is the foundation of observability. Without it, debugging a misbehaving agent in production means reading LLM conversation logs and guessing what happened. With it, you have a structured audit trail of every action the agent took. These hooks become your observability layer in production -- something you will rely on heavily in Module 12.
+
+**Input validation** -- Check that the LLM-generated arguments actually match the tool's expectations before calling the tool. This catches malformed dates, missing required fields, out-of-range values, and invalid enum choices. It is much cheaper to reject a bad call in middleware than to let it hit an external API and fail with a cryptic error.
+
+**Rate limiting** -- Enforce per-tool or global call limits. This prevents runaway agents from burning through API quotas or getting your account suspended. Especially important for tools that call paid external APIs.
+
+**Cost tracking** -- Record the estimated cost of each tool call (API fees, token usage, compute time) and enforce budgets. A middleware can track cumulative cost and short-circuit when a spending threshold is reached, preventing unexpected bills.
+
+**PII redaction** -- Scan tool arguments for personally identifiable information (names, emails, phone numbers, SSNs) and redact or mask them before the arguments reach the tool function. This is critical for agents handling user data, particularly when tools send data to third-party APIs. A `before_tool` hook can scrub sensitive fields, and an `after_tool` hook can ensure that PII does not leak into logs.
+
+**Retry wrapping** -- Automatically retry failed tool calls with exponential backoff. This middleware catches transient errors (network timeouts, 503 responses) and retries the call a configurable number of times before giving up. This connects directly to what you learned in Module 3, Lesson 4 -- the retry logic lives in middleware now instead of being scattered inside each tool.
+
+> **Design principle:** If you find yourself adding the same logic inside multiple tool functions, that logic belongs in middleware instead. Middleware is the right home for any concern that applies to *all* tools, not just one.
+
+## When to Short-Circuit vs. When to Pass Through
+
+A subtle but important design decision in middleware is *when* a `before_tool` hook should block a call versus letting it proceed.
+
+**Short-circuit** (return a `ToolResult`) when:
+- The call would violate a hard constraint (rate limit exceeded, budget exhausted)
+- Required arguments are missing or invalid
+- PII is detected and cannot be safely redacted
+- The tool is disabled or deprecated
+
+**Pass through** (return `None`) when:
+- The middleware is purely observational (logging, tracing, cost recording)
+- The arguments look valid
+- The rate limit has not been reached yet
+
+A common mistake is building middleware that is too aggressive about blocking. If your validation middleware rejects calls based on heuristics that are sometimes wrong, the agent will fail on legitimate tool calls and the LLM will not understand why. Keep blocking logic strict and well-defined. Use middleware for observation liberally, but use it for enforcement conservatively.
+
+## Connecting to the Bigger Picture
+
+Middleware and hooks do not exist in isolation. They connect to patterns you have already learned and patterns you will learn next.
+
+**Error handling (Module 3, Lesson 4):** In that lesson, you learned to return structured error messages to the LLM instead of crashing. Middleware formalizes this -- the executor wraps tool exceptions in `ToolResult` objects automatically, and middleware like the validator produces clean error messages that the LLM can reason about. If you built ad-hoc error handling before, middleware gives it a permanent, consistent home.
+
+**Tool Registry (Module 6, Lesson 2):** The Tool Registry handles *which* tools exist and *how* they are discovered. Middleware handles *what happens around* each tool call. In a production system, these two patterns work together: the registry resolves the tool, and the executor runs it through the middleware pipeline.
+
+**Context Management (Module 6, Lesson 4, coming next):** Some middleware modifies what goes into the agent's context. A summarization middleware might compress verbose tool results before they are added to the conversation history, helping manage the context window.
+
+**Fallback and Escalation (Module 6, Lesson 5):** When middleware detects repeated failures for a tool, it can signal the fallback chain to switch strategies -- for example, escalating from a fast API to a more reliable but slower alternative.
+
+**Production observability (Module 12):** The logging, cost-tracking, and tracing middleware you build here become the data sources that production monitoring dashboards consume. Structured logs from middleware feed into alerting systems, cost dashboards, and audit trails. You will not need to retrofit observability later because middleware already captures everything. These hooks become your observability layer in production.
+
+## Summary
+
+**Middleware and hooks** give you a composable interception layer around every tool call in your agent. Instead of scattering logging, validation, rate limiting, and error handling inside individual tool functions, you write each concern as a self-contained middleware class and register it with the executor.
+
+- The **middleware pipeline** follows the onion model: pre-hooks run in registration order, post-hooks run in reverse order
+- A **before_tool** hook can inspect, modify, or short-circuit a tool call; returning `None` means "proceed," returning a `ToolResult` means "stop here"
+- An **after_tool** hook can inspect or modify the result after the tool executes
+- Common use cases include **logging**, **input validation**, **rate limiting**, **cost tracking**, **PII redaction**, and **retry wrapping**
+- Middleware separates **cross-cutting concerns** from business logic -- adding a new concern is a one-line `executor.use(...)` call
+- The pattern connects backward to Module 3's error handling and forward to Module 12's production observability
+
+In the next lesson, we move to another critical pattern: **Context Window Management**. As your agents run longer conversations and accumulate tool results, the LLM's context window fills up. You will learn strategies for keeping the most relevant information in context while gracefully handling overflow -- summarization, sliding windows, and priority-based retention.

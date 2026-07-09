@@ -1,0 +1,559 @@
+---
+title: "Agent Communication"
+quiz:
+  - question: "In a blackboard architecture, how do agents coordinate their work?"
+    options:
+      - "Each agent sends direct messages to every other agent in the system"
+      - "Agents read from and write to a shared data structure, reacting to changes made by other agents"
+      - "A central supervisor serializes all communication into a single queue"
+      - "Agents negotiate a communication protocol at startup and then use peer-to-peer sockets"
+    correctIndex: 1
+  - question: "Why is an event bus preferable to direct messaging when the number of agents in a system grows?"
+    options:
+      - "An event bus encrypts messages automatically, while direct messaging does not"
+      - "An event bus runs faster because it uses binary serialization"
+      - "An event bus decouples senders from receivers -- agents publish events without knowing who consumes them, so adding new agents requires no changes to existing ones"
+      - "An event bus guarantees message delivery, while direct messaging always drops messages"
+    correctIndex: 2
+  - question: "What is the primary risk of using shared mutable state (like a blackboard) without access controls?"
+    options:
+      - "Agents cannot read the blackboard concurrently"
+      - "The blackboard consumes too much memory for large systems"
+      - "Race conditions and conflicting writes -- two agents may overwrite each other's contributions, corrupting the shared state"
+      - "The LLM cannot generate structured data to write to the blackboard"
+    correctIndex: 2
+  - question: "How does the middleware pattern from Module 6 Lesson 3 relate to message-based agent communication?"
+    options:
+      - "Middleware replaces the need for any communication between agents"
+      - "Middleware intercepts tool calls within a single agent, while message middleware intercepts messages between agents -- same interception pattern applied at a different boundary"
+      - "Middleware only works with HTTP APIs, not with agent messages"
+      - "Middleware and message passing are unrelated patterns that solve different problems"
+    correctIndex: 1
+---
+
+## Overview
+
+In the previous two lessons, you explored *why* multi-agent systems exist and *how* to organize agents into topologies like supervisors, pipelines, and swarms. But topology only answers one question: who connects to whom. It does not answer the equally important question: **how do agents actually talk to each other?**
+
+Communication is the nervous system of any multi-agent architecture. A supervisor cannot delegate if it cannot send a task description. A pipeline cannot flow if upstream agents cannot pass results downstream. A swarm cannot converge if agents cannot share discoveries. The communication mechanism you choose shapes everything -- how tightly agents are coupled, how easily you can add new agents, how the system handles failures, and how observable the interactions are.
+
+This lesson covers the four fundamental **communication patterns** for multi-agent systems: direct message passing, shared state (the blackboard pattern), event-driven coordination, and communication protocols. You will implement a working message bus in Python and see how each pattern maps to the orchestration topologies from the previous lesson. By the end, you will know which pattern to reach for based on your system's coupling, scalability, and observability needs.
+
+## The Four Communication Patterns
+
+Before diving into each pattern, here is the architectural landscape. These four patterns are not mutually exclusive -- production systems often combine two or more.
+
+<MermaidDiagram chart={`graph TD
+    subgraph Direct["Direct Messaging"]
+        A1["Agent A"] -->|request| A2["Agent B"]
+        A2 -->|response| A1
+    end
+
+    subgraph Blackboard["Shared State / Blackboard"]
+        B1["Agent A"] -->|write| BB["Blackboard"]
+        B2["Agent B"] -->|read/write| BB
+        B3["Agent C"] -->|read| BB
+    end
+
+    subgraph EventBus["Event Bus / Pub-Sub"]
+        C1["Agent A"] -->|publish| BUS["Event Bus"]
+        BUS -->|notify| C2["Agent B"]
+        BUS -->|notify| C3["Agent C"]
+    end
+
+    subgraph Protocol["Communication Protocol"]
+        D1["Agent A"] -->|structured envelope| D2["Agent B"]
+        D2 -->|structured envelope| D1
+        D3["Schema Registry"] -.->|validates| D1
+        D3 -.->|validates| D2
+    end
+
+    style Direct fill:#ebf8ff,stroke:#3182ce
+    style Blackboard fill:#f0fff4,stroke:#38a169
+    style EventBus fill:#fefcbf,stroke:#d69e2e
+    style Protocol fill:#fef0f0,stroke:#e53e3e
+`} />
+
+Each pattern trades off between coupling, complexity, and flexibility. Direct messaging is the simplest but creates tight coupling. A blackboard decouples timing but introduces shared mutable state. An event bus decouples both identity and timing but adds infrastructure. A formal protocol adds structure and interoperability at the cost of upfront design effort.
+
+## Pattern 1: Direct Message Passing
+
+**Direct message passing** is the most intuitive approach: Agent A constructs a message and sends it to Agent B. Agent B processes the message and may send a response back. This is like a function call across agent boundaries.
+
+<MermaidDiagram chart={`sequenceDiagram
+    participant Supervisor as Supervisor Agent
+    participant Researcher as Researcher Agent
+    participant Writer as Writer Agent
+
+    Supervisor->>Researcher: {"type": "research_request", "topic": "LLM scaling laws", "depth": "detailed"}
+    Note over Researcher: Searches sources,<br/>synthesizes findings
+
+    Researcher-->>Supervisor: {"type": "research_result", "findings": [...], "sources": 12}
+
+    Supervisor->>Writer: {"type": "write_request", "content": findings, "format": "blog_post"}
+    Note over Writer: Drafts article from<br/>research findings
+
+    Writer-->>Supervisor: {"type": "write_result", "draft": "...", "word_count": 1200}
+
+    Supervisor->>Researcher: {"type": "fact_check", "claims": [...]}
+    Note over Researcher: Verifies claims<br/>against sources
+
+    Researcher-->>Supervisor: {"type": "fact_check_result", "verified": 8, "disputed": 1}
+
+    Supervisor->>Writer: {"type": "revision_request", "feedback": "Fix disputed claim in paragraph 3"}
+    Writer-->>Supervisor: {"type": "revision_result", "draft": "...", "changes": 1}
+`} />
+
+In this sequence, the supervisor orchestrates a research-and-writing workflow by sending structured messages to specialized agents. Each message has a `type` field that tells the receiver what kind of work is expected. The researcher and writer never communicate directly -- all coordination flows through the supervisor.
+
+**Strengths:** Simple to implement and easy to trace. You can follow the message flow linearly. Works well for supervisor and pipeline topologies.
+
+**Weaknesses:** The sender must know the receiver's identity and interface. Adding a new agent means modifying the sender's code to include it. If Agent B is unavailable, Agent A blocks or fails -- there is no built-in buffering.
+
+## Pattern 2: Shared State (The Blackboard Pattern)
+
+The **blackboard pattern** comes from classical AI research. Instead of sending messages to each other, agents read from and write to a shared data structure -- the blackboard. Each agent monitors the blackboard for changes relevant to its expertise, contributes when it can, and steps back when it has nothing to add.
+
+Think of it like a team of specialists gathered around a whiteboard in a conference room. The detective writes clues. The forensic analyst reads the clues, adds lab results. The profiler reads the lab results and clues, adds a suspect profile. Nobody sends messages to anyone directly. They all react to what appears on the board.
+
+<CodeBlock code={`from dataclasses import dataclass, field
+from typing import Any, Callable
+import threading
+import copy
+
+
+@dataclass
+class BlackboardEntry:
+    """A single piece of data on the blackboard."""
+    key: str
+    value: Any
+    author: str          # which agent wrote this
+    version: int = 0     # incremented on each update
+
+
+class Blackboard:
+    """
+    Shared state that agents read from and write to.
+    Thread-safe with change notifications.
+    """
+
+    def __init__(self):
+        self._data: dict[str, BlackboardEntry] = {}
+        self._subscribers: list[Callable[[str, BlackboardEntry], None]] = []
+        self._lock = threading.Lock()
+
+    def write(self, key: str, value: Any, author: str) -> None:
+        """Write or update a value on the blackboard."""
+        with self._lock:
+            existing = self._data.get(key)
+            version = (existing.version + 1) if existing else 1
+            entry = BlackboardEntry(
+                key=key, value=value, author=author, version=version
+            )
+            self._data[key] = entry
+
+        # Notify subscribers outside the lock to avoid deadlocks
+        for callback in self._subscribers:
+            callback(key, entry)
+
+    def read(self, key: str) -> Any | None:
+        """Read a value from the blackboard. Returns None if not found."""
+        with self._lock:
+            entry = self._data.get(key)
+            return copy.deepcopy(entry.value) if entry else None
+
+    def read_all(self) -> dict[str, Any]:
+        """Snapshot of all current blackboard data."""
+        with self._lock:
+            return {k: copy.deepcopy(e.value) for k, e in self._data.items()}
+
+    def subscribe(self, callback: Callable[[str, BlackboardEntry], None]) -> None:
+        """Register a callback that fires whenever any key is written."""
+        self._subscribers.append(callback)
+
+
+# --- Agents that use the blackboard ---
+
+class ResearchAgent:
+    def __init__(self, blackboard: Blackboard):
+        self.blackboard = blackboard
+        self.name = "researcher"
+
+    def run(self, topic: str) -> None:
+        # Simulate research
+        findings = [
+            f"Finding 1 about {topic}",
+            f"Finding 2 about {topic}",
+            f"Key statistic: 73% of systems use this approach",
+        ]
+        self.blackboard.write("research_findings", findings, author=self.name)
+        self.blackboard.write("research_status", "complete", author=self.name)
+
+
+class AnalysisAgent:
+    def __init__(self, blackboard: Blackboard):
+        self.blackboard = blackboard
+        self.name = "analyst"
+        # React when research findings appear
+        blackboard.subscribe(self._on_update)
+
+    def _on_update(self, key: str, entry: BlackboardEntry) -> None:
+        if key == "research_status" and entry.value == "complete":
+            self.analyze()
+
+    def analyze(self) -> None:
+        findings = self.blackboard.read("research_findings")
+        if findings is None:
+            return
+        summary = f"Analysis of {len(findings)} findings: consensus detected"
+        self.blackboard.write("analysis_result", summary, author=self.name)
+        self.blackboard.write("analysis_status", "complete", author=self.name)
+
+
+# Usage
+board = Blackboard()
+researcher = ResearchAgent(board)
+analyst = AnalysisAgent(board)
+
+researcher.run("LLM scaling laws")
+
+print(board.read("analysis_result"))
+# "Analysis of 3 findings: consensus detected"
+`} language="python" filename="blackboard.py" />
+
+The `Blackboard` class uses a lock for thread safety and a subscriber mechanism for reactive updates. When the `ResearchAgent` writes its findings, the `AnalysisAgent` is automatically notified through its subscription and runs its analysis without any direct communication between the two agents.
+
+**Strengths:** Agents are fully decoupled -- they only know about the blackboard, not about each other. New agents can be added without modifying existing ones. Agents can work asynchronously and at different speeds. Natural fit for problems where partial results build on each other.
+
+**Weaknesses:** The blackboard is shared mutable state, which introduces all the classic concurrency risks: race conditions, lost updates, and ordering ambiguity. Debugging is harder because there is no linear message trail -- you have to reconstruct the sequence of reads and writes. The blackboard can also become a bottleneck if many agents write frequently.
+
+> **Design tip:** Use versioned entries and copy-on-read (as shown above) to reduce the risk of one agent corrupting another's view of the data. For larger systems, consider partitioning the blackboard into namespaced sections so agents only see the keys relevant to their domain.
+
+## Pattern 3: Event-Driven Coordination
+
+**Event-driven coordination** uses a message bus (or event bus) as an intermediary. Agents do not send messages *to* each other. Instead, they **publish** events to named topics, and other agents **subscribe** to the topics they care about. The bus handles routing. This is the **publish-subscribe** (pub/sub) pattern.
+
+This is where the middleware concept from Module 6, Lesson 3 reappears at a new level. In that lesson, middleware intercepted tool calls *within* a single agent. Here, message middleware intercepts messages *between* agents. The same interception principle -- inspect, transform, or block a message as it passes through -- applies at the inter-agent boundary. You can add logging middleware to the bus that records every message, a validation middleware that rejects malformed events, or a rate-limiting middleware that throttles a noisy agent.
+
+<CodeBlock code={`from dataclasses import dataclass, field
+from typing import Any, Callable
+from collections import defaultdict
+import json
+import time
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class Message:
+    """A structured message passed between agents via the bus."""
+    topic: str
+    sender: str
+    payload: dict[str, Any]
+    timestamp: float = field(default_factory=time.time)
+    message_id: str = field(default_factory=lambda: f"msg-{int(time.time()*1000)}")
+
+    def to_dict(self) -> dict:
+        return {
+            "topic": self.topic,
+            "sender": self.sender,
+            "payload": self.payload,
+            "timestamp": self.timestamp,
+            "message_id": self.message_id,
+        }
+
+
+class MessageMiddleware:
+    """Base class for message bus middleware. Same interception pattern
+    as tool-call middleware from Module 6, Lesson 3 -- but applied to
+    inter-agent messages instead of tool invocations."""
+
+    def before_deliver(self, message: Message) -> Message | None:
+        """Inspect/transform a message before delivery.
+        Return the message to proceed, or None to drop it."""
+        return message
+
+    def after_deliver(self, message: Message, subscriber_count: int) -> None:
+        """Called after a message has been delivered to all subscribers."""
+        pass
+
+
+class LoggingMiddleware(MessageMiddleware):
+    """Logs every message that flows through the bus."""
+
+    def before_deliver(self, message: Message) -> Message | None:
+        logger.info(
+            "BUS [%s] %s -> %s | payload_keys=%s",
+            message.message_id,
+            message.sender,
+            message.topic,
+            list(message.payload.keys()),
+        )
+        return message
+
+    def after_deliver(self, message: Message, subscriber_count: int) -> None:
+        logger.info(
+            "BUS [%s] delivered to %d subscribers",
+            message.message_id,
+            subscriber_count,
+        )
+
+
+class MessageBus:
+    """
+    Pub/sub message bus for agent communication.
+    Supports topic-based routing, middleware, and message history.
+    """
+
+    def __init__(self):
+        self._subscribers: dict[str, list[Callable[[Message], None]]] = defaultdict(list)
+        self._middlewares: list[MessageMiddleware] = []
+        self._history: list[Message] = []
+
+    def use(self, middleware: MessageMiddleware) -> "MessageBus":
+        """Register a middleware component."""
+        self._middlewares.append(middleware)
+        return self
+
+    def subscribe(self, topic: str, handler: Callable[[Message], None]) -> None:
+        """Subscribe a handler to a topic."""
+        self._subscribers[topic].append(handler)
+
+    def publish(self, topic: str, sender: str, payload: dict[str, Any]) -> None:
+        """Publish a message to a topic."""
+        message = Message(topic=topic, sender=sender, payload=payload)
+
+        # Run through middleware before delivery
+        for mw in self._middlewares:
+            result = mw.before_deliver(message)
+            if result is None:
+                return  # middleware dropped the message
+            message = result
+
+        # Deliver to all subscribers
+        handlers = self._subscribers.get(topic, [])
+        for handler in handlers:
+            handler(message)
+
+        # Record in history
+        self._history.append(message)
+
+        # Post-delivery middleware hooks
+        for mw in reversed(self._middlewares):
+            mw.after_deliver(message, len(handlers))
+
+    def get_history(self, topic: str | None = None) -> list[dict]:
+        """Retrieve message history, optionally filtered by topic."""
+        messages = self._history
+        if topic:
+            messages = [m for m in messages if m.topic == topic]
+        return [m.to_dict() for m in messages]
+
+
+# --- Agents wired to the bus ---
+
+class PlannerAgent:
+    def __init__(self, bus: MessageBus):
+        self.bus = bus
+        self.name = "planner"
+        bus.subscribe("research.complete", self._on_research_done)
+
+    def create_plan(self, goal: str) -> None:
+        tasks = [
+            {"id": 1, "action": "research", "query": goal},
+            {"id": 2, "action": "analyze", "depends_on": 1},
+            {"id": 3, "action": "write_report", "depends_on": 2},
+        ]
+        self.bus.publish("plan.created", self.name, {"goal": goal, "tasks": tasks})
+        # Kick off the first task
+        self.bus.publish("task.assigned", self.name, tasks[0])
+
+    def _on_research_done(self, message: Message) -> None:
+        # React to research completion by assigning the next task
+        self.bus.publish("task.assigned", self.name, {
+            "id": 2, "action": "analyze", "input": message.payload
+        })
+
+
+class ResearcherAgent:
+    def __init__(self, bus: MessageBus):
+        self.bus = bus
+        self.name = "researcher"
+        bus.subscribe("task.assigned", self._on_task)
+
+    def _on_task(self, message: Message) -> None:
+        if message.payload.get("action") != "research":
+            return  # not my task
+        query = message.payload.get("query", "")
+        findings = [f"Key insight about {query}", f"Data point: 42%"]
+        self.bus.publish("research.complete", self.name, {
+            "query": query, "findings": findings
+        })
+
+
+# --- Run the system ---
+bus = MessageBus()
+bus.use(LoggingMiddleware())
+
+planner = PlannerAgent(bus)
+researcher = ResearcherAgent(bus)
+
+planner.create_plan("benefits of multi-agent systems")
+
+# Check what happened
+for entry in bus.get_history():
+    print(f"  [{entry['sender']}] -> {entry['topic']}")
+# [planner] -> plan.created
+# [planner] -> task.assigned
+# [researcher] -> research.complete
+# [planner] -> task.assigned
+`} language="python" filename="message_bus.py" />
+
+Notice how the `PlannerAgent` and `ResearcherAgent` never reference each other. The planner publishes to `task.assigned`; the researcher subscribes to `task.assigned`. If you add a third agent that also listens for task assignments, the planner's code does not change. This is the decoupling advantage of pub/sub.
+
+The `MessageBus` also keeps a complete history, which gives you a full audit trail of every interaction in the system. Combined with the `LoggingMiddleware`, you get observability without modifying any agent code.
+
+**Strengths:** Maximum decoupling -- agents know only about topics, not about each other. Adding new agents is purely additive (subscribe to existing topics). The bus provides a natural point for cross-cutting concerns like logging, filtering, and rate limiting. Message history enables replay and debugging.
+
+**Weaknesses:** Event-driven systems are harder to reason about than sequential message passing. The execution order depends on subscription order and timing, which can be surprising. Debugging requires tracing through event chains rather than following a call stack. You also need to handle the case where no agent subscribes to a topic (the message is silently dropped).
+
+## Pattern 4: Communication Protocols
+
+The three patterns above describe *mechanisms* -- how messages travel. **Communication protocols** add *structure* -- what messages look like, what fields they must contain, and how agents negotiate capabilities. A protocol is an agreement between agents about the format and semantics of their communication.
+
+Without a protocol, every pair of agents invents its own message format. Agent A sends `{"task": "search", "q": "..."}` while Agent B expects `{"action": "search", "query": "..."}`. This works in small systems where one person writes all the agents, but it breaks down as systems grow or when agents come from different teams or frameworks.
+
+A well-designed protocol defines:
+
+- **Message envelope** -- standard fields every message must have (sender, recipient, timestamp, message type, correlation ID for request-response pairs)
+- **Message types** -- an enumeration of valid message types (request, response, broadcast, error, heartbeat)
+- **Payload schemas** -- the expected structure of the payload for each message type
+- **Conversation patterns** -- valid sequences of message types (a request must be followed by a response or an error, never by another request)
+
+<CodeBlock code={`from dataclasses import dataclass, field
+from enum import Enum
+from typing import Any
+import uuid
+import time
+
+
+class MessageType(Enum):
+    REQUEST = "request"
+    RESPONSE = "response"
+    BROADCAST = "broadcast"
+    ERROR = "error"
+    ACK = "ack"
+
+
+@dataclass
+class ProtocolMessage:
+    """
+    A structured message envelope that enforces a communication protocol.
+    Every message has a standard header regardless of payload content.
+    """
+    sender: str
+    recipient: str | None        # None for broadcasts
+    message_type: MessageType
+    payload: dict[str, Any]
+    correlation_id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    reply_to: str | None = None  # correlation_id of the message being replied to
+    timestamp: float = field(default_factory=time.time)
+
+    def create_reply(
+        self, sender: str, payload: dict[str, Any],
+        message_type: MessageType = MessageType.RESPONSE
+    ) -> "ProtocolMessage":
+        """Create a properly correlated reply to this message."""
+        return ProtocolMessage(
+            sender=sender,
+            recipient=self.sender,
+            message_type=message_type,
+            payload=payload,
+            reply_to=self.correlation_id,
+        )
+
+    def create_error(self, sender: str, error: str) -> "ProtocolMessage":
+        """Create an error reply to this message."""
+        return ProtocolMessage(
+            sender=sender,
+            recipient=self.sender,
+            message_type=MessageType.ERROR,
+            payload={"error": error, "original_type": self.message_type.value},
+            reply_to=self.correlation_id,
+        )
+
+
+class ProtocolRouter:
+    """
+    Routes protocol messages between agents.
+    Validates message structure and enforces conversation rules.
+    """
+
+    def __init__(self):
+        self._agents: dict[str, Any] = {}
+        self._pending: dict[str, ProtocolMessage] = {}  # awaiting replies
+
+    def register(self, agent_id: str, handler) -> None:
+        self._agents[agent_id] = handler
+
+    def send(self, message: ProtocolMessage) -> ProtocolMessage | None:
+        """Send a message and optionally receive a synchronous reply."""
+        # Validate: responses must reference a pending request
+        if message.message_type == MessageType.RESPONSE:
+            if message.reply_to not in self._pending:
+                raise ValueError(
+                    f"Response references unknown correlation_id: {message.reply_to}"
+                )
+            del self._pending[message.reply_to]
+
+        # Route to recipient
+        if message.recipient is None:
+            # Broadcast to all agents except sender
+            for agent_id, handler in self._agents.items():
+                if agent_id != message.sender:
+                    handler.receive(message)
+            return None
+
+        handler = self._agents.get(message.recipient)
+        if handler is None:
+            return message.create_error(
+                "router", f"Unknown recipient: {message.recipient}"
+            )
+
+        # Track requests that expect replies
+        if message.message_type == MessageType.REQUEST:
+            self._pending[message.correlation_id] = message
+
+        return handler.receive(message)
+`} language="python" filename="protocol.py" />
+
+The `ProtocolMessage` enforces a standard envelope with sender, recipient, message type, and correlation IDs for request-response matching. The `create_reply` method ensures that responses are properly correlated with their originating requests. The `ProtocolRouter` validates that responses reference valid pending requests, catching protocol violations early.
+
+This structured approach becomes essential when you move to cross-framework or cross-platform agent communication -- which is exactly what the **A2A (Agent-to-Agent) protocol** addresses in the next lesson.
+
+## Choosing the Right Pattern
+
+There is no single best communication pattern. The right choice depends on your system's requirements.
+
+| Concern | Direct Messaging | Blackboard | Event Bus | Protocol |
+|---------|------------------|------------|-----------|----------|
+| Coupling | Tight -- sender knows receiver | Loose -- agents know only the board | Loose -- agents know only topics | Medium -- agents know the schema |
+| Adding agents | Modify sender code | No changes needed | No changes needed | Register with schema |
+| Debugging | Easy -- follow the call chain | Hard -- reconstruct write order | Medium -- trace event chains | Easy -- structured audit trail |
+| Ordering | Explicit in code | Ambiguous | Subscription-order dependent | Protocol-defined sequences |
+| Best for | Supervisor, pipeline | Collaborative analysis | Swarm, reactive systems | Cross-team, cross-platform |
+
+In practice, most production multi-agent systems combine patterns. A supervisor might use **direct messaging** to delegate tasks to workers while workers use an **event bus** to broadcast progress updates. A research team might use a **blackboard** for shared findings with a **protocol** envelope for message validation. The key is to pick the simplest pattern that meets your coupling and scalability requirements, and add structure only when you need it.
+
+## Summary
+
+**Agent communication** is the mechanism that turns a collection of independent agents into a coordinated system. The four foundational patterns each offer different trade-offs.
+
+- **Direct message passing** is the simplest: Agent A sends a structured message to Agent B and receives a response. It maps naturally to supervisor and pipeline topologies but creates tight coupling between agents.
+- **Shared state (blackboard)** decouples agents by letting them read and write to a common data structure. Agents react to changes without knowing who made them. This pattern excels at collaborative problem-solving but introduces shared mutable state risks.
+- **Event-driven coordination (pub/sub)** uses a message bus to decouple senders from receivers completely. Agents publish events to topics and subscribe to the topics they care about. This is the most scalable pattern for growing systems but makes execution order harder to reason about.
+- **Communication protocols** add structure to any of the above mechanisms by defining message envelopes, types, and conversation rules. They are essential for cross-framework interoperability.
+- The middleware interception pattern from Module 6, Lesson 3 applies at the inter-agent level too -- a message bus supports the same logging, validation, and rate-limiting middleware, just applied to messages between agents instead of tool calls within a single agent.
+
+In the next lesson, we move from general communication patterns to a specific, open standard for inter-agent communication: the **Agent-to-Agent (A2A) protocol**. A2A takes the protocol concepts from this lesson and defines a concrete, industry-backed specification for agents built on different frameworks to discover, authenticate, and collaborate with each other.

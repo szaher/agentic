@@ -1,67 +1,67 @@
 {
   "id": 6,
-  "title": "Memory & Knowledge",
-  "description": "Giving agents short-term context, long-term recall, and access to external knowledge",
+  "title": "Agent Design Patterns",
+  "description": "Reusable software engineering patterns for building robust, maintainable agent systems",
   "color": "#ed8936",
   "lessons": [
     {
-      "slug": "01-why-memory-matters",
-      "title": "Why Memory Matters",
-      "description": "The context window bottleneck and why agents need memory beyond a single turn",
+      "slug": "01-why-patterns-matter",
+      "title": "Why Design Patterns Matter",
+      "description": "Moving from ad-hoc scripts to principled, reusable agent architectures",
       "estimatedMinutes": 10,
       "diagramTypes": ["architecture", "comparison"],
       "hasCode": false,
       "hasQuiz": true
     },
     {
-      "slug": "02-conversation-memory",
-      "title": "Conversation and Short-Term Memory",
-      "description": "Managing conversation history, summarization, and sliding window strategies",
+      "slug": "02-tool-registry-pattern",
+      "title": "The Tool Registry Pattern",
+      "description": "Dynamic tool discovery, registration, and selection at runtime",
+      "estimatedMinutes": 12,
+      "diagramTypes": ["architecture", "class"],
+      "hasCode": true,
+      "hasQuiz": true
+    },
+    {
+      "slug": "03-middleware-and-hooks",
+      "title": "Middleware and Hooks",
+      "description": "Intercepting agent actions for logging, validation, rate limiting, and transformation",
       "estimatedMinutes": 12,
       "diagramTypes": ["flowchart", "sequence"],
       "hasCode": true,
       "hasQuiz": true
     },
     {
-      "slug": "03-long-term-memory",
-      "title": "Long-Term Memory",
-      "description": "Persisting knowledge across sessions with vector stores and structured storage",
-      "estimatedMinutes": 12,
-      "diagramTypes": ["architecture", "flowchart"],
-      "hasCode": true,
-      "hasQuiz": true
-    },
-    {
-      "slug": "04-retrieval-augmented-generation",
-      "title": "Retrieval-Augmented Generation (RAG)",
-      "description": "Combining retrieval and generation to ground agents in factual knowledge",
-      "estimatedMinutes": 12,
-      "diagramTypes": ["architecture", "flowchart"],
-      "hasCode": true,
-      "hasQuiz": true
-    },
-    {
-      "slug": "05-embeddings-and-vector-stores",
-      "title": "Embeddings and Vector Stores",
-      "description": "How embeddings work, choosing vector databases, and indexing strategies",
-      "estimatedMinutes": 12,
-      "diagramTypes": ["architecture", "comparison"],
-      "hasCode": true,
-      "hasQuiz": true
-    },
-    {
-      "slug": "06-advanced-rag-patterns",
-      "title": "Advanced RAG Patterns",
-      "description": "Hybrid search, reranking, query decomposition, and agentic RAG",
+      "slug": "04-context-management",
+      "title": "Context Window Management",
+      "description": "Strategies for fitting relevant information into limited context: summarization, chunking, and prioritization",
       "estimatedMinutes": 12,
       "diagramTypes": ["flowchart", "architecture"],
       "hasCode": true,
       "hasQuiz": true
     },
     {
-      "slug": "07-memory-lab",
-      "title": "Memory Lab",
-      "description": "Hands-on: build an agent with conversation memory and RAG-powered knowledge",
+      "slug": "05-fallback-and-escalation",
+      "title": "Fallback and Escalation Chains",
+      "description": "Cascading from fast/cheap to slow/powerful models, and escalating to humans",
+      "estimatedMinutes": 10,
+      "diagramTypes": ["flowchart", "sequence"],
+      "hasCode": true,
+      "hasQuiz": true
+    },
+    {
+      "slug": "06-idempotency-and-checkpointing",
+      "title": "Idempotency and Checkpointing",
+      "description": "Making agent actions safe to retry and resumable after failures",
+      "estimatedMinutes": 12,
+      "diagramTypes": ["flowchart", "state"],
+      "hasCode": true,
+      "hasQuiz": true
+    },
+    {
+      "slug": "07-patterns-lab",
+      "title": "Design Patterns Lab",
+      "description": "Hands-on: refactor a naive agent using registry, middleware, and checkpoint patterns",
       "estimatedMinutes": 15,
       "diagramTypes": ["architecture"],
       "hasCode": true,

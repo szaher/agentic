@@ -8,7 +8,7 @@ You have learned what agents are, why they matter, and how the **observe-think-a
 
 In this lesson, you will construct a working agent from scratch using raw API calls. No frameworks, no abstractions, just Python and the Anthropic SDK. By the end, you will have a calculator agent that takes natural language math questions, reasons about which operations to perform, and returns the final answer.
 
-Why start from scratch? Because every framework you will encounter in Module 7 and beyond is built on top of exactly these primitives. Understanding them now means you will never be confused by what a framework does under the hood.
+Why start from scratch? Because every framework you will encounter in Module 8 and beyond is built on top of exactly these primitives. Understanding them now means you will never be confused by what a framework does under the hood.
 
 ## What We Are Building
 
@@ -473,7 +473,7 @@ The three properties from lesson 02 are all present here:
 
 ## What Comes Next
 
-This hand-rolled loop is exactly what agent frameworks automate for you. In Module 7, you will see how tools like LangGraph provide the same loop with built-in features like state management, error handling, retries, and streaming. But they all reduce to this same pattern: send a message, check if the model wants to call a tool, execute it, send results back, repeat.
+This hand-rolled loop is exactly what agent frameworks automate for you. In Module 8, you will see how tools like LangGraph provide the same loop with built-in features like state management, error handling, retries, and streaming. But they all reduce to this same pattern: send a message, check if the model wants to call a tool, execute it, send results back, repeat.
 
 > Understanding the raw loop first means you will always be able to debug a framework when something goes wrong, extend it when it does not do what you need, or build your own when no framework fits.
 

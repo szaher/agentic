@@ -321,9 +321,9 @@ Workflow agents are the right choice when the process is more important than the
 
 ## Connecting to Frameworks and Production
 
-The workflow agent pattern is so fundamental that it has become the basis for major agent frameworks. **LangGraph**, which you will explore in Module 7, is built entirely around this idea -- you define a graph of nodes and edges, some nodes call LLMs, and the framework manages state, transitions, and persistence. If you understand the state machine pattern from this lesson, LangGraph will feel immediately familiar.
+The workflow agent pattern is so fundamental that it has become the basis for major agent frameworks. **LangGraph**, which you will explore in Module 8, is built entirely around this idea -- you define a graph of nodes and edges, some nodes call LLMs, and the framework manages state, transitions, and persistence. If you understand the state machine pattern from this lesson, LangGraph will feel immediately familiar.
 
-Workflow agents are also the easiest architecture to deploy and monitor in production, which you will cover in Module 11. Because every path is predefined, you can:
+Workflow agents are also the easiest architecture to deploy and monitor in production, which you will cover in Module 12. Because every path is predefined, you can:
 
 - **Set up alerts** on specific transitions (e.g., "notify me when escalation rate exceeds 10%")
 - **Measure latency** per node to identify bottlenecks
@@ -342,6 +342,6 @@ Compare this to monitoring a ReAct agent, where the number of steps is variable,
 - **Hybrid workflows** combine deterministic nodes (validation, data retrieval, logging) with LLM-powered nodes (classification, generation, judgment) in the same graph.
 - **Implementation** centers on three components: an enum of states, a transition table, and node handlers that return the next state. A shared context object carries data between nodes.
 - **The key advantage** over autonomous agents is predictability: all paths are known, invalid transitions are caught, and every step is logged. The key tradeoff is flexibility -- workflow agents handle known processes well but cannot improvise when the process itself is unknown.
-- **Frameworks like LangGraph** (Module 7) are built on this pattern, and workflow agents are the easiest architecture to deploy and monitor in production (Module 11).
+- **Frameworks like LangGraph** (Module 8) are built on this pattern, and workflow agents are the easiest architecture to deploy and monitor in production (Module 12).
 
 In the next lesson, we bring everything together. You have now studied five distinct architectures -- ReAct, Plan-and-Execute, Self-Reflection, Routing, and Workflow agents. The final lesson in this module provides a **decision framework for choosing the right architecture** based on your problem's characteristics.

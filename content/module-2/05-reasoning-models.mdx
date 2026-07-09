@@ -213,7 +213,7 @@ Reasoning models are not universally better. They are a tool with specific stren
 - **Latency matters more than depth** -- for real-time chat agents or high-throughput pipelines, standard models with CoT prompts are faster.
 - **The reasoning is simple** -- straightforward classification, summarization, or extraction tasks do not benefit from extended thinking. The overhead is wasted.
 - **You need fine-grained control over reasoning format** -- CoT prompts let you specify exactly how the model should structure its reasoning (numbered steps, pros/cons lists, specific frameworks). Reasoning models choose their own internal format.
-- **Cost is the primary constraint** -- thinking tokens add to your bill. For high-volume, low-complexity tasks, standard models are more economical. This tradeoff becomes critical at production scale, as we will discuss in Module 11.
+- **Cost is the primary constraint** -- thinking tokens add to your bill. For high-volume, low-complexity tasks, standard models are more economical. This tradeoff becomes critical at production scale, as we will discuss in Module 12.
 
 ### The cost and latency tradeoff
 
@@ -261,7 +261,7 @@ Consider an agent that processes customer support tickets:
 3. **Analyze the root cause of a complex technical issue** (reasoning model -- requires deep analysis)
 4. **Draft a response** (standard model -- templated communication)
 
-This hybrid approach gives you the quality benefits of reasoning models where they matter, without paying the cost and latency penalty on every step. Designing these mixed architectures is a key skill that we will develop in Module 4 (Architectures) and Module 5 (Design Patterns).
+This hybrid approach gives you the quality benefits of reasoning models where they matter, without paying the cost and latency penalty on every step. Designing these mixed architectures is a key skill that we will develop in Module 4 (Architectures) and Module 6 (Design Patterns).
 
 ## Summary
 

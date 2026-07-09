@@ -1,0 +1,566 @@
+---
+title: "Framework Lab"
+---
+
+## Overview
+
+Throughout Module 8, you explored the framework landscape from raw SDKs to high-level orchestrators. You studied each framework's philosophy, API surface, and sweet spots. Now it is time to put that knowledge to the test.
+
+In this lab, you will build the **same agent** -- a research assistant that searches the web, retrieves documents, and writes summaries -- in three different frameworks: the raw Anthropic SDK, LangGraph, and CrewAI. Same task, same tools, three very different implementations. By the end, you will have concrete intuition for when each framework earns its place in your stack and when it just adds weight.
+
+## The Research Assistant Spec
+
+Before writing any code, let's define exactly what the agent does. All three implementations will share the same behavior:
+
+1. Accept a **research question** from the user
+2. **Search** the web for relevant sources
+3. **Retrieve** the content of the most promising results
+4. **Write a summary** that synthesizes the findings with source citations
+
+The agent needs three tools: `web_search`, `retrieve_document`, and `write_summary`. In a production system these would call real APIs, but for this lab we will use stubs so you can focus on the framework wiring rather than API keys.
+
+<MermaidDiagram chart={`graph LR
+    Q["Research Question"] --> S["web_search"]
+    S --> R["retrieve_document"]
+    R --> R
+    R --> W["write_summary"]
+    W --> A["Final Report"]
+    style Q fill:#ebf8ff,stroke:#3182ce
+    style A fill:#c6f6d5,stroke:#38a169
+    style S fill:#fefcbf,stroke:#d69e2e
+    style R fill:#fefcbf,stroke:#d69e2e
+    style W fill:#fefcbf,stroke:#d69e2e
+`} />
+
+Notice the loop on `retrieve_document` -- the agent may fetch several pages before it has enough material to write. The LLM decides when it has gathered enough context, just like a human researcher scanning sources before sitting down to write.
+
+## Shared Tools
+
+All three implementations share the same tool functions. In a real project, you would swap these stubs for calls to a search API, a web scraper, and a text generation pipeline.
+
+<CodeBlock code={`import json
+from typing import Optional
+
+def web_search(query: str) -> str:
+    """Search the web and return a list of results."""
+    # Stub: returns fake search results
+    results = [
+        {
+            "title": f"Understanding {query}",
+            "url": f"https://example.com/article-1",
+            "snippet": f"A comprehensive guide to {query} covering fundamentals and recent advances."
+        },
+        {
+            "title": f"{query}: A Deep Dive",
+            "url": f"https://example.com/article-2",
+            "snippet": f"Expert analysis of {query} with benchmarks and case studies."
+        },
+        {
+            "title": f"Practical {query} in 2025",
+            "url": f"https://example.com/article-3",
+            "snippet": f"Hands-on tutorial for applying {query} in production systems."
+        },
+    ]
+    return json.dumps(results)
+
+
+def retrieve_document(url: str) -> str:
+    """Fetch and return the full text of a document at the given URL."""
+    # Stub: returns fake document content
+    fake_content = {
+        "https://example.com/article-1": (
+            "This guide covers the core principles and recent breakthroughs. "
+            "Key finding: modern approaches reduce latency by 40% compared to "
+            "traditional methods. The field has shifted toward modular architectures "
+            "that allow independent scaling of components."
+        ),
+        "https://example.com/article-2": (
+            "Our benchmarks show that the hybrid approach outperforms pure "
+            "rule-based systems by 3x on accuracy while maintaining comparable "
+            "throughput. Case study: Acme Corp reduced their processing pipeline "
+            "from 12 hours to 45 minutes using these techniques."
+        ),
+        "https://example.com/article-3": (
+            "Step 1: Start with a baseline model. Step 2: Add retrieval-augmented "
+            "generation for domain knowledge. Step 3: Implement feedback loops for "
+            "continuous improvement. Production tip: always monitor drift in your "
+            "input distribution."
+        ),
+    }
+    content = fake_content.get(url, "Document not found.")
+    return json.dumps({"url": url, "content": content})
+
+
+def write_summary(sources: str, question: str) -> str:
+    """Write a research summary from gathered sources."""
+    # Stub: in production, this might call another LLM or
+    # simply format the accumulated findings
+    return json.dumps({
+        "status": "summary_written",
+        "note": "Summary compiled from provided sources.",
+        "question": question,
+        "source_count": len(json.loads(sources)) if sources else 0
+    })
+`} language="python" filename="shared_tools.py" />
+
+With the tools defined, let's build the same agent three ways.
+
+## Implementation 1: Raw Anthropic SDK
+
+The **raw SDK approach** gives you complete control. You write the agent loop yourself, manage conversation history manually, and handle every tool call explicitly. This is the pattern you learned in Module 1, now applied to a more realistic task.
+
+<CodeBlock code={`import anthropic
+import json
+
+client = anthropic.Anthropic()
+MODEL = "claude-sonnet-4-6"
+
+# Tool definitions for the Anthropic API
+tools = [
+    {
+        "name": "web_search",
+        "description": "Search the web for information on a topic. Returns a list of results with titles, URLs, and snippets.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "The search query"
+                }
+            },
+            "required": ["query"]
+        }
+    },
+    {
+        "name": "retrieve_document",
+        "description": "Fetch the full content of a web page. Use this after web_search to read promising results.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "url": {
+                    "type": "string",
+                    "description": "The URL to fetch"
+                }
+            },
+            "required": ["url"]
+        }
+    },
+    {
+        "name": "write_summary",
+        "description": "Write a research summary synthesizing the gathered sources. Call this after retrieving enough documents.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "sources": {
+                    "type": "string",
+                    "description": "JSON string of gathered source content"
+                },
+                "question": {
+                    "type": "string",
+                    "description": "The original research question"
+                }
+            },
+            "required": ["sources", "question"]
+        }
+    }
+]
+
+# Map tool names to functions
+tool_functions = {
+    "web_search": web_search,
+    "retrieve_document": retrieve_document,
+    "write_summary": write_summary,
+}
+
+SYSTEM_PROMPT = """You are a research assistant. Given a question:
+1. Search the web for relevant sources
+2. Retrieve the most promising documents (at least 2)
+3. Write a summary that synthesizes findings with citations
+Be thorough but concise."""
+
+
+def research_agent_sdk(question: str) -> str:
+    """Run the research agent using the raw Anthropic SDK."""
+    messages = [{"role": "user", "content": question}]
+
+    while True:
+        response = client.messages.create(
+            model=MODEL,
+            max_tokens=4096,
+            system=SYSTEM_PROMPT,
+            tools=tools,
+            messages=messages,
+        )
+
+        # Done -- extract final text
+        if response.stop_reason == "end_turn":
+            for block in response.content:
+                if block.type == "text":
+                    return block.text
+            return "No response generated."
+
+        # Process tool calls
+        if response.stop_reason == "tool_use":
+            messages.append({
+                "role": "assistant",
+                "content": response.content,
+            })
+
+            tool_results = []
+            for block in response.content:
+                if block.type == "tool_use":
+                    fn = tool_functions.get(block.name)
+                    if fn:
+                        result = fn(**block.input)
+                    else:
+                        result = json.dumps({"error": f"Unknown tool: {block.name}"})
+
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": result,
+                    })
+
+            messages.append({"role": "user", "content": tool_results})
+
+
+# Run it
+if __name__ == "__main__":
+    answer = research_agent_sdk("What are the latest advances in LLM agents?")
+    print(answer)
+`} language="python" filename="01_raw_sdk.py" />
+
+The raw SDK version is roughly **80 lines** of core logic (excluding tool stubs and definitions). You own every line: the loop, the message history, the tool dispatch. There is no magic -- and no safety net.
+
+## Implementation 2: LangGraph
+
+**LangGraph** models the agent as a stateful graph. Each step -- searching, retrieving, summarizing -- becomes a **node**. The edges between nodes can be conditional, letting the graph decide at runtime which path to take. The framework manages state automatically, so you never manually append to a messages list.
+
+<MermaidDiagram chart={`graph TD
+    START["__start__"] --> AGENT["agent node<br/>(calls LLM)"]
+    AGENT -->|"tool calls"| TOOLS["tool node<br/>(executes tools)"]
+    TOOLS --> AGENT
+    AGENT -->|"no tool calls"| END["__end__"]
+    subgraph LangGraph["LangGraph manages this loop"]
+        AGENT
+        TOOLS
+    end
+    style LangGraph fill:#f0fff4,stroke:#38a169
+    style START fill:#ebf8ff,stroke:#3182ce
+    style END fill:#c6f6d5,stroke:#38a169
+`} />
+
+<CodeBlock code={`from langchain_anthropic import ChatAnthropic
+from langchain_core.tools import tool
+from langgraph.prebuilt import create_react_agent
+
+# Define tools using LangChain's @tool decorator
+@tool
+def web_search(query: str) -> str:
+    """Search the web for information on a topic.
+    Returns a list of results with titles, URLs, and snippets."""
+    results = [
+        {"title": f"Understanding {query}",
+         "url": "https://example.com/article-1",
+         "snippet": f"A comprehensive guide to {query}."},
+        {"title": f"{query}: A Deep Dive",
+         "url": "https://example.com/article-2",
+         "snippet": f"Expert analysis of {query}."},
+        {"title": f"Practical {query} in 2025",
+         "url": "https://example.com/article-3",
+         "snippet": f"Hands-on tutorial for {query}."},
+    ]
+    return json.dumps(results)
+
+
+@tool
+def retrieve_document(url: str) -> str:
+    """Fetch the full content of a web page at the given URL."""
+    fake_content = {
+        "https://example.com/article-1": "Core principles and 40% latency reduction with modular architectures.",
+        "https://example.com/article-2": "Hybrid approach outperforms rule-based by 3x. Acme Corp: 12h to 45min.",
+        "https://example.com/article-3": "Baseline model + RAG + feedback loops. Monitor input distribution drift.",
+    }
+    content = fake_content.get(url, "Document not found.")
+    return json.dumps({"url": url, "content": content})
+
+
+@tool
+def write_summary(sources: str, question: str) -> str:
+    """Write a research summary from gathered sources and the original question."""
+    return json.dumps({
+        "status": "summary_written",
+        "question": question,
+        "source_count": len(json.loads(sources)) if sources else 0,
+    })
+
+
+# Build the agent in three lines
+model = ChatAnthropic(model="claude-sonnet-4-6")
+agent = create_react_agent(model, [web_search, retrieve_document, write_summary])
+
+def research_agent_langgraph(question: str) -> str:
+    """Run the research agent using LangGraph."""
+    result = agent.invoke({
+        "messages": [
+            {"role": "system", "content": "You are a research assistant. Search, retrieve at least 2 documents, then write a summary with citations."},
+            {"role": "user", "content": question},
+        ]
+    })
+    # The last message contains the final response
+    return result["messages"][-1].content
+
+
+if __name__ == "__main__":
+    answer = research_agent_langgraph("What are the latest advances in LLM agents?")
+    print(answer)
+`} language="python" filename="02_langgraph.py" />
+
+The LangGraph version is roughly **45 lines** of core logic. The `create_react_agent` **prebuilt** handles the entire agent loop -- the while loop, tool dispatch, and message management all disappear. You define your tools with the `@tool` decorator, pass them to the builder, and invoke.
+
+What you gain: built-in streaming, checkpointing (pause and resume mid-run), and a graph structure you can visualize and debug. What you lose: fine-grained control over how tool results are formatted and how the loop terminates.
+
+## Implementation 3: CrewAI
+
+**CrewAI** takes a different philosophy entirely. Instead of thinking about loops or graphs, you think about **roles**. You define an agent with a backstory, assign it a task, and let the framework handle execution. The abstraction level is deliberately high -- CrewAI is designed for teams of agents, but it works for single-agent tasks too.
+
+<MermaidDiagram chart={`graph TD
+    CREW["Crew"] --> TASK["Task:<br/>Research and summarize"]
+    TASK --> AGENT["Agent:<br/>Research Analyst"]
+    AGENT --> T1["web_search"]
+    AGENT --> T2["retrieve_document"]
+    AGENT --> T3["write_summary"]
+    subgraph CrewAI["CrewAI manages execution"]
+        CREW
+        TASK
+        AGENT
+    end
+    style CrewAI fill:#faf5ff,stroke:#805ad5
+    style T1 fill:#fefcbf,stroke:#d69e2e
+    style T2 fill:#fefcbf,stroke:#d69e2e
+    style T3 fill:#fefcbf,stroke:#d69e2e
+`} />
+
+<CodeBlock code={`from crewai import Agent, Task, Crew
+from crewai.tools import tool
+
+@tool("web_search")
+def web_search_tool(query: str) -> str:
+    """Search the web for information on a topic.
+    Returns a list of results with titles, URLs, and snippets."""
+    results = [
+        {"title": f"Understanding {query}",
+         "url": "https://example.com/article-1",
+         "snippet": f"A comprehensive guide to {query}."},
+        {"title": f"{query}: A Deep Dive",
+         "url": "https://example.com/article-2",
+         "snippet": f"Expert analysis of {query}."},
+        {"title": f"Practical {query} in 2025",
+         "url": "https://example.com/article-3",
+         "snippet": f"Hands-on tutorial for {query}."},
+    ]
+    return json.dumps(results)
+
+
+@tool("retrieve_document")
+def retrieve_document_tool(url: str) -> str:
+    """Fetch the full content of a web page at the given URL."""
+    fake_content = {
+        "https://example.com/article-1": "Core principles and 40% latency reduction with modular architectures.",
+        "https://example.com/article-2": "Hybrid approach outperforms rule-based by 3x. Acme Corp: 12h to 45min.",
+        "https://example.com/article-3": "Baseline model + RAG + feedback loops. Monitor input distribution drift.",
+    }
+    return json.dumps({"url": url, "content": fake_content.get(url, "Not found.")})
+
+
+@tool("write_summary")
+def write_summary_tool(sources: str, question: str) -> str:
+    """Write a research summary from gathered sources and the original question."""
+    return json.dumps({
+        "status": "summary_written",
+        "question": question,
+        "source_count": len(json.loads(sources)) if sources else 0,
+    })
+
+
+# Define the agent with a role and backstory
+researcher = Agent(
+    role="Research Analyst",
+    goal="Find and synthesize information to answer research questions thoroughly",
+    backstory=(
+        "You are a senior research analyst with expertise in finding, "
+        "evaluating, and synthesizing information from multiple sources. "
+        "You always retrieve at least 2 full documents before writing."
+    ),
+    tools=[web_search_tool, retrieve_document_tool, write_summary_tool],
+    verbose=True,
+)
+
+# Define the task
+research_task = Task(
+    description=(
+        "Research the following question and provide a comprehensive summary "
+        "with citations: {question}"
+    ),
+    expected_output="A well-structured summary with key findings and source citations.",
+    agent=researcher,
+)
+
+# Assemble the crew
+crew = Crew(
+    agents=[researcher],
+    tasks=[research_task],
+    verbose=True,
+)
+
+
+def research_agent_crewai(question: str) -> str:
+    """Run the research agent using CrewAI."""
+    result = crew.kickoff(inputs={"question": question})
+    return str(result)
+
+
+if __name__ == "__main__":
+    answer = research_agent_crewai("What are the latest advances in LLM agents?")
+    print(answer)
+`} language="python" filename="03_crewai.py" />
+
+The CrewAI version is roughly **55 lines** of core logic. There is no loop, no graph, no message management. You describe *who* the agent is and *what* it should do. The framework figures out the *how*.
+
+What you gain: natural language task specification, built-in support for multi-agent collaboration (add more agents and tasks to scale), and structured output parsing. What you lose: precise control over tool invocation order, visibility into the execution trace, and the ability to customize the agent loop behavior.
+
+## Side-by-Side Architecture Comparison
+
+Now let's see all three architectures in a single diagram. Same task, same tools, radically different structures.
+
+<MermaidDiagram chart={`graph TD
+    subgraph SDK["Raw Anthropic SDK"]
+        direction TB
+        S1["You write the while loop"]
+        S2["You manage messages list"]
+        S3["You dispatch tool calls"]
+        S4["You check stop_reason"]
+        S1 --> S2 --> S3 --> S4
+    end
+
+    subgraph LG["LangGraph"]
+        direction TB
+        L1["Framework runs the loop"]
+        L2["State managed automatically"]
+        L3["Tools via @tool decorator"]
+        L4["Graph handles routing"]
+        L1 --> L2 --> L3 --> L4
+    end
+
+    subgraph CA["CrewAI"]
+        direction TB
+        C1["No explicit loop"]
+        C2["Role + backstory + goal"]
+        C3["Tools attached to agents"]
+        C4["Task describes what, not how"]
+        C1 --> C2 --> C3 --> C4
+    end
+
+    style SDK fill:#fff5f5,stroke:#e53e3e
+    style LG fill:#f0fff4,stroke:#38a169
+    style CA fill:#faf5ff,stroke:#805ad5
+`} />
+
+## Quantitative Comparison
+
+Here is what the numbers look like across the three implementations:
+
+| Dimension | Raw Anthropic SDK | LangGraph | CrewAI |
+|---|---|---|---|
+| **Core lines of code** | ~80 | ~45 | ~55 |
+| **Loop management** | Manual (you write it) | Automatic (prebuilt) | Automatic (hidden) |
+| **Tool definition** | JSON Schema dicts | `@tool` decorator | `@tool` decorator |
+| **State management** | Manual messages list | Built-in graph state | Fully abstracted |
+| **Streaming support** | Manual implementation | Built-in | Limited |
+| **Checkpointing** | Not included | Built-in | Not included |
+| **Multi-agent** | Build it yourself | Compose graphs | First-class Crews |
+| **Debugging** | Print statements | Graph visualization | Verbose logging |
+| **Learning curve** | Low (just Python) | Medium (graph concepts) | Medium (role concepts) |
+
+## Tradeoff Analysis
+
+Each framework sits at a different point on the **control-versus-convenience** spectrum. The right choice depends on what your project needs most.
+
+**Choose the Raw SDK when:**
+- You need maximum control over every API call
+- Your agent has unusual loop logic (custom retry strategies, parallel tool calls with dependencies, dynamic prompt construction)
+- You are building a framework or library yourself
+- You want zero dependencies beyond the provider SDK
+- Performance and token usage must be precisely optimized
+
+**Choose LangGraph when:**
+- Your agent has complex, branching workflows (not just a simple loop)
+- You need checkpointing -- the ability to pause, persist, and resume agent runs
+- Streaming partial results to users matters
+- You want graph-based visualization for debugging and monitoring
+- Your team already uses the LangChain ecosystem
+
+**Choose CrewAI when:**
+- You are building multi-agent systems where agents have distinct roles
+- The task decomposition is more natural in human terms (roles, goals, backstories) than in code terms (nodes, edges, state)
+- You want to prototype multi-agent collaboration quickly
+- Your team includes non-engineers who need to understand the agent design
+
+## What Each Framework Hides From You
+
+Understanding what a framework abstracts away is just as important as knowing what it provides. When things break, you debug at the layer below.
+
+<MermaidDiagram chart={`graph TB
+    subgraph Visible["What you see"]
+        direction LR
+        V1["CrewAI: roles & tasks"]
+        V2["LangGraph: nodes & edges"]
+        V3["SDK: messages & tools"]
+    end
+
+    subgraph Hidden["What is hidden"]
+        direction LR
+        H1["CrewAI hides:<br/>loop, prompt construction,<br/>tool dispatch, state"]
+        H2["LangGraph hides:<br/>loop, message management,<br/>tool dispatch"]
+        H3["SDK hides:<br/>HTTP calls,<br/>token counting,<br/>response parsing"]
+    end
+
+    V1 --> H1
+    V2 --> H2
+    V3 --> H3
+
+    style Visible fill:#ebf8ff,stroke:#3182ce
+    style Hidden fill:#fff5f5,stroke:#e53e3e
+`} />
+
+The more a framework hides, the faster you can build -- but the harder it is to debug when something goes wrong. This is not a flaw; it is a fundamental tradeoff in software engineering. The key insight from this lab is that **all three frameworks produce the same behavior**. They differ in how much of the plumbing they expose to you.
+
+## When to Mix Frameworks
+
+In practice, production systems often combine approaches. A common pattern:
+
+- **Raw SDK** for your most critical, performance-sensitive agent loop
+- **LangGraph** for complex orchestration workflows that need checkpointing
+- **CrewAI** for rapid prototyping of multi-agent interactions before reimplementing in a lower-level framework
+
+The frameworks are not mutually exclusive. You might prototype a multi-agent system in CrewAI, validate the workflow in LangGraph, and then rewrite the hot path in raw SDK calls for production. Each layer down gives you more control; each layer up gives you more speed.
+
+> Start at the highest abstraction that meets your requirements. Drop down a layer only when you hit a wall -- a missing feature, a performance bottleneck, or a behavior you cannot customize.
+
+## Bridge to Module 9
+
+You now have hands-on experience with the three major approaches to building LLM agents. You can write a raw agent loop, wire up a graph-based workflow, and configure a role-based crew. You know the tradeoffs, the line counts, and the hidden abstractions.
+
+But every agent we have built so far has one limitation: it only works with **text**. It reads text, processes text, and outputs text. Real-world tasks are richer than that. A customer support agent needs to look at screenshots. A medical assistant needs to read X-rays. A creative agent needs to generate images. A meeting agent needs to listen to audio.
+
+**Module 9: Multi-Modal Agents** breaks this boundary. You will build agents that **see** images and screenshots, **hear** audio input, and **generate** beyond text -- producing images, structured data, and rich media. The frameworks you learned here are the foundation; multi-modal capabilities are the next layer on top.
+
+## Summary
+
+In this lab, you built the same research assistant -- search, retrieve, summarize -- in three frameworks and compared them head-to-head:
+
+- The **Raw Anthropic SDK** gives you full control at the cost of writing every line of loop logic, message management, and tool dispatch yourself (~80 lines)
+- **LangGraph** reduces boilerplate by managing the agent loop as a graph with automatic state handling, and adds built-in streaming and checkpointing (~45 lines)
+- **CrewAI** shifts the abstraction to roles and tasks, hiding the loop entirely and making multi-agent collaboration a first-class concept (~55 lines)
+
+No framework is universally best. The right choice depends on your requirements for control, debugging, multi-agent support, and team familiarity. Start high, drop down when you must, and always understand the layer below the one you are working in.

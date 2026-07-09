@@ -1,0 +1,366 @@
+---
+title: "Idempotency and Checkpointing"
+quiz:
+  - question: "What does it mean for an agent action to be idempotent?"
+    options:
+      - "The action completes faster on the second execution"
+      - "The action cannot fail under any circumstances"
+      - "Executing the action multiple times produces the same result as executing it once"
+      - "The action is automatically retried by the framework until it succeeds"
+    correctIndex: 2
+  - question: "Why is checkpointing especially valuable for Plan-and-Execute agents?"
+    options:
+      - "Checkpointing makes the planner produce better plans"
+      - "Plan-and-Execute agents have ordered steps with accumulated results, so a crash without checkpointing loses all completed work and forces a full restart"
+      - "Checkpointing is only useful for ReAct agents, not Plan-and-Execute"
+      - "Plan-and-Execute agents cannot function without checkpointing enabled"
+    correctIndex: 1
+  - question: "Which of the following is NOT a valid checkpoint storage strategy?"
+    options:
+      - "Writing agent state to a JSON file after each step"
+      - "Saving state to a database with a unique run ID"
+      - "Storing the checkpoint only in the agent's local variables"
+      - "Using a key-value store like Redis with expiration for short-lived tasks"
+    correctIndex: 2
+  - question: "What is the relationship between idempotency and retries?"
+    options:
+      - "Idempotent actions do not need retries because they never fail"
+      - "Retries are only safe when the action being retried is idempotent — otherwise, retrying a partially completed action can cause duplicate side effects"
+      - "Retries automatically make any action idempotent"
+      - "Idempotency and retries are unrelated concepts that solve different problems"
+    correctIndex: 1
+---
+
+## Overview
+
+In the previous lesson, you learned how **fallback and escalation chains** handle failures gracefully by cascading through alternative strategies. But there is a class of failure that fallbacks alone cannot solve: the crash in the middle.
+
+Imagine a Plan-and-Execute agent that is six steps into an eight-step research task. It has spent two minutes and dozens of API calls gathering data, comparing options, and building a structured analysis. Then the process crashes -- a network timeout, a server restart, an out-of-memory error. When the agent restarts, what happens? Without any preparation, it starts over from step one. All that work is lost. All those API calls are repeated. All that time is wasted.
+
+Now imagine a worse scenario. The agent was in the middle of step five when it crashed -- a step that sends an email to a customer. Did the email go out? Maybe. If the agent retries step five, will it send a *second* email? Possibly. The customer gets a duplicate message. That is not just a waste of resources -- it is a user-facing bug.
+
+These two problems have names. **Idempotency** means that performing the same action twice produces the same result as performing it once -- making retries safe. **Checkpointing** means saving the agent's state at key points so it can resume from where it left off instead of starting over. Together, they make agent systems resilient to the failures that inevitably happen in distributed, long-running processes.
+
+## Why Agents Need Both
+
+Traditional software can often get away without these patterns. A web server handles a request in milliseconds -- if it crashes, the user just refreshes the page. But agents are different. Agent tasks run for seconds to hours, involve multiple LLM calls and tool invocations, accumulate state across steps, and interact with external systems that have real consequences.
+
+This combination makes agents uniquely vulnerable to partial failures. A crash does not just lose a computation -- it can leave the world in an inconsistent state. An agent that was halfway through creating a database table, sending a notification, and updating a record might have completed the first action but not the other two. Restarting from scratch might try to create the table again and fail because it already exists.
+
+Idempotency and checkpointing address the two sides of this problem:
+
+- **Idempotency** answers: "Is it safe to retry this action?" If yes, the agent can attempt it again without worrying about duplicate side effects.
+- **Checkpointing** answers: "Where was I?" It lets the agent skip actions that already completed successfully and resume from the point of failure.
+
+> **Connection to Module 4:** The **Plan-and-Execute** architecture benefits most from checkpointing. Its ordered step list with accumulated results is a natural fit -- each completed step is a checkpoint. Without checkpointing, a crash at step six of eight loses steps one through five. With it, the agent reloads the checkpoint and picks up at step six. ReAct agents also benefit, but their step-by-step nature means each checkpoint captures less accumulated work.
+
+## Idempotency: Making Actions Safe to Retry
+
+An action is **idempotent** if executing it once or executing it multiple times has the same effect on the system. This is not the same as returning the same value -- it means the *side effects* are identical.
+
+Some operations are naturally idempotent:
+
+- **Setting a value**: "Set the user's name to Alice" produces the same result whether you do it once or ten times.
+- **Reading data**: "Get the current temperature" has no side effects at all.
+- **Upserting a record**: "Insert this record if it does not exist; otherwise update it" converges to the same state.
+
+Other operations are **not** idempotent by default:
+
+- **Incrementing a counter**: "Add 1 to the total" produces different results each time.
+- **Sending a message**: "Email the user a confirmation" sends duplicates on retry.
+- **Appending to a list**: "Add this item to the log" creates duplicate entries.
+
+The key technique for making non-idempotent operations idempotent is the **idempotency key** -- a unique identifier for each intended action. Before performing the action, you check whether an action with that key has already been completed. If it has, you skip it and return the previous result.
+
+<MermaidDiagram chart={`flowchart TD
+    A["Agent wants to perform action"] --> B{"Generate idempotency key<br/>from action + inputs"}
+    B --> C{"Key exists in<br/>completed actions?"}
+    C -- "Yes" --> D["Return cached result<br/>Skip execution"]
+    C -- "No" --> E["Execute action"]
+    E --> F{"Action succeeded?"}
+    F -- "Yes" --> G["Store result with<br/>idempotency key"]
+    G --> H["Return result"]
+    F -- "No" --> I["Raise error<br/>Safe to retry later"]
+    style A fill:#ebf8ff,stroke:#3182ce
+    style C fill:#fefcbf,stroke:#d69e2e
+    style D fill:#f0fff4,stroke:#68d391
+    style E fill:#ebf8ff,stroke:#3182ce
+    style G fill:#f0fff4,stroke:#68d391
+    style I fill:#fed7d7,stroke:#fc8181
+`} />
+
+The flowchart shows the idempotency pattern. Every action starts by generating a unique key from the action type and its inputs. If that key already exists in the completed actions store, the action was already performed -- return the cached result without executing again. If the key does not exist, execute the action. On success, store the result keyed by the idempotency key. On failure, raise the error -- the action can be safely retried because no partial result was recorded.
+
+## Checkpointing: Saving State for Recovery
+
+While idempotency makes individual actions safe to retry, **checkpointing** makes entire agent runs safe to resume. A checkpoint is a snapshot of the agent's state at a specific point in execution -- enough information to reconstruct where the agent was and what it had accomplished.
+
+A good checkpoint captures:
+
+- **The current step** -- which step the agent is about to execute (or just completed)
+- **Accumulated results** -- the outputs of all completed steps
+- **The remaining plan** -- what steps are left (especially important after replanning)
+- **Metadata** -- timestamps, run ID, task description, retry counts
+
+The agent saves a checkpoint after each significant action. On restart, it checks for an existing checkpoint for the current task. If one exists, the agent loads it and resumes from the saved state instead of starting from scratch.
+
+<MermaidDiagram chart={`stateDiagram-v2
+    [*] --> Initializing: Start or restart
+    Initializing --> LoadingCheckpoint: Check for existing checkpoint
+    LoadingCheckpoint --> ResumingFromCheckpoint: Checkpoint found
+    LoadingCheckpoint --> Planning: No checkpoint found
+    Planning --> Executing: Plan created
+    ResumingFromCheckpoint --> Executing: State restored
+    Executing --> SavingCheckpoint: Step completed
+    SavingCheckpoint --> Executing: More steps remain
+    SavingCheckpoint --> Completed: All steps done
+    Executing --> Failed: Unrecoverable error
+    Failed --> [*]: Agent stops
+    Completed --> CleaningUp: Remove checkpoint
+    CleaningUp --> [*]: Done
+
+    note right of SavingCheckpoint: Checkpoint saved to disk<br/>after every completed step
+    note right of ResumingFromCheckpoint: Skip completed steps<br/>resume from last checkpoint
+    note right of CleaningUp: Successful completion<br/>removes the checkpoint file
+`} />
+
+The state diagram reveals the full lifecycle. Notice the two entry paths into `Executing`: fresh runs come through `Planning`, while restarts come through `ResumingFromCheckpoint`. Both converge on the same execution loop. The `SavingCheckpoint` state is the critical addition -- it sits between step completions, ensuring that progress is persisted before moving forward. When the agent finishes successfully, it cleans up the checkpoint file to avoid stale state on the next run.
+
+## Building a Checkpointed Agent
+
+Let's implement an agent that combines idempotency and checkpointing. The agent uses JSON files for checkpoint storage -- simple enough to understand, robust enough for single-machine use cases.
+
+<CodeBlock code={`import json
+import hashlib
+import time
+from pathlib import Path
+from anthropic import Anthropic
+
+client = Anthropic()
+
+CHECKPOINT_DIR = Path("./checkpoints")
+CHECKPOINT_DIR.mkdir(exist_ok=True)
+
+
+def make_idempotency_key(action: str, inputs: dict) -> str:
+    """Generate a deterministic key from action type and inputs."""
+    payload = json.dumps({"action": action, **inputs}, sort_keys=True)
+    return hashlib.sha256(payload.encode()).hexdigest()[:16]
+
+
+class CheckpointedAgent:
+    """An agent that persists state after each step and supports
+    idempotent actions for safe retries."""
+
+    def __init__(self, run_id: str):
+        self.run_id = run_id
+        self.checkpoint_path = CHECKPOINT_DIR / f"{run_id}.json"
+        self.state = self._load_or_init()
+
+    def _load_or_init(self) -> dict:
+        """Load existing checkpoint or initialize fresh state."""
+        if self.checkpoint_path.exists():
+            with open(self.checkpoint_path) as f:
+                state = json.load(f)
+            print(f"Resumed from checkpoint: {state['current_step_index']}"
+                  f"/{len(state['plan'])} steps completed")
+            return state
+        return {
+            "run_id": self.run_id,
+            "task": None,
+            "plan": [],
+            "current_step_index": 0,
+            "completed_results": [],
+            "completed_keys": {},  # idempotency key -> result
+            "status": "initialized",
+            "created_at": time.time(),
+            "updated_at": time.time(),
+        }
+
+    def _save_checkpoint(self):
+        """Persist current state to disk."""
+        self.state["updated_at"] = time.time()
+        with open(self.checkpoint_path, "w") as f:
+            json.dump(self.state, f, indent=2)
+
+    def _cleanup_checkpoint(self):
+        """Remove checkpoint after successful completion."""
+        if self.checkpoint_path.exists():
+            self.checkpoint_path.unlink()
+            print("Checkpoint cleaned up after successful completion.")
+
+    def execute_idempotent(self, action: str, inputs: dict,
+                           executor_fn) -> str:
+        """Run an action idempotently. If the same action+inputs
+        were already completed, return the cached result."""
+        key = make_idempotency_key(action, inputs)
+
+        # Check if this exact action was already completed
+        if key in self.state["completed_keys"]:
+            print(f"  Skipping (already completed): {action}")
+            return self.state["completed_keys"][key]
+
+        # Execute the action
+        result = executor_fn(action, inputs)
+
+        # Record completion with idempotency key
+        self.state["completed_keys"][key] = result
+        return result
+
+    def plan(self, task: str) -> list[str]:
+        """Create a plan, or reuse the existing plan from checkpoint."""
+        if self.state["plan"]:
+            print("Using plan from checkpoint.")
+            return self.state["plan"]
+
+        self.state["task"] = task
+        self.state["status"] = "planning"
+
+        response = client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=1024,
+            system=("Break this task into 3-8 concrete steps. "
+                    "Return a JSON array of step descriptions."),
+            messages=[{"role": "user", "content": task}],
+        )
+        plan = json.loads(response.content[0].text)
+        self.state["plan"] = plan
+        self._save_checkpoint()
+        return plan
+
+    def execute_step(self, step: str, context: list[dict]) -> str:
+        """Execute a single step using the LLM."""
+        context_text = "\\n".join(
+            f"- {c['step']}: {c['result']}" for c in context
+        )
+        prompt = (
+            f"Previous results:\\n{context_text}\\n\\n"
+            f"Execute this step: {step}"
+            if context else f"Execute this step: {step}"
+        )
+        response = client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=2048,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return response.content[0].text
+
+    def run(self, task: str) -> str:
+        """Full checkpointed Plan-and-Execute loop."""
+        plan = self.plan(task)
+        print(f"Plan ({len(plan)} steps):")
+        for i, step in enumerate(plan):
+            marker = "done" if i < self.state["current_step_index"] else "todo"
+            print(f"  [{marker}] {i + 1}. {step}")
+
+        self.state["status"] = "executing"
+
+        # Resume from where we left off
+        start = self.state["current_step_index"]
+        for i in range(start, len(plan)):
+            step = plan[i]
+            print(f"\\nStep {i + 1}/{len(plan)}: {step}")
+
+            # Execute with idempotency protection
+            result = self.execute_idempotent(
+                action=f"step_{i}",
+                inputs={"step": step, "index": i},
+                executor_fn=lambda a, inp: self.execute_step(
+                    inp["step"], self.state["completed_results"]
+                ),
+            )
+
+            self.state["completed_results"].append({
+                "step": step, "result": result
+            })
+            self.state["current_step_index"] = i + 1
+            self._save_checkpoint()
+            print(f"  Checkpoint saved at step {i + 1}.")
+
+        self.state["status"] = "completed"
+        self._save_checkpoint()
+        self._cleanup_checkpoint()
+
+        # Synthesize final answer from all results
+        return self._synthesize()
+
+    def _synthesize(self) -> str:
+        """Combine all step results into a final response."""
+        results_text = json.dumps(self.state["completed_results"], indent=2)
+        response = client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=4096,
+            messages=[{"role": "user", "content": (
+                f"Task: {self.state['task']}\\n\\n"
+                f"Step results:\\n{results_text}\\n\\n"
+                "Synthesize a comprehensive final response."
+            )}],
+        )
+        return response.content[0].text
+
+
+# --- Usage ---
+# First run: creates a checkpoint after each step
+agent = CheckpointedAgent(run_id="research-task-42")
+result = agent.run(
+    "Compare three Python web frameworks for building REST APIs"
+)
+print(result)
+
+# If the process crashes mid-run and restarts:
+# The same run_id loads the checkpoint and resumes automatically.
+# agent = CheckpointedAgent(run_id="research-task-42")
+# result = agent.run(...)  # picks up where it left off
+`} language="python" filename="checkpointed_agent.py" />
+
+Let's examine the key design decisions in this implementation:
+
+**Run ID as the checkpoint key.** Each task gets a unique `run_id` that maps to a checkpoint file. When the agent restarts with the same `run_id`, it finds the existing checkpoint and resumes. This is the link between "a task that crashed" and "the same task restarting." In production, you would generate the `run_id` from the task parameters or receive it from the orchestration layer.
+
+**Idempotency keys from action + inputs.** The `make_idempotency_key` function hashes the action type and input parameters into a deterministic key. If the same step with the same inputs is attempted twice -- whether from a retry or a resume -- the agent detects the duplicate and returns the cached result. This prevents double-executing steps that have external side effects.
+
+**Checkpoint after every step, not at the end.** The `_save_checkpoint()` call happens inside the loop, immediately after each step completes. This means the worst-case loss from a crash is a single step, not the entire run. The trade-off is disk I/O on every step, but for LLM-based agents where each step takes seconds, the checkpoint overhead is negligible.
+
+**Cleanup on success.** When the agent completes successfully, `_cleanup_checkpoint()` removes the checkpoint file. This prevents a stale checkpoint from confusing a future run. Only active, in-progress runs have checkpoint files on disk.
+
+## Checkpoint Storage Strategies
+
+The example above uses JSON files, but production systems need more robust storage. Here is how the options compare:
+
+| Strategy | Durability | Concurrency | Complexity | Best For |
+|----------|-----------|-------------|------------|----------|
+| JSON files | Medium -- survives process restart, not disk failure | Single agent only | Low | Prototypes, single-machine agents |
+| SQLite database | High -- ACID transactions, crash-safe | Limited -- file locking | Medium | Single-machine production agents |
+| PostgreSQL / Redis | High -- replicated, durable | Full concurrent access | Higher | Multi-agent systems, distributed deployments |
+| Cloud storage (S3) | Very high -- redundant, versioned | Concurrent with caveats | Medium | Serverless agents, cross-region recovery |
+
+The choice depends on your deployment model. For a single agent running on one machine, SQLite is the sweet spot -- it provides ACID guarantees with minimal setup. For distributed systems with multiple agents, a shared database or key-value store is necessary so that any worker can pick up where a crashed worker left off.
+
+> **Forward to Module 8:** When you reach Module 8 on LangGraph, you will discover that it has **built-in checkpointing** through its persistence layer. LangGraph saves the state of its graph execution after each node, using pluggable storage backends (SQLite, PostgreSQL, or custom). The concepts you learned here -- run IDs, state serialization, resume-from-checkpoint -- are exactly what LangGraph automates. Understanding the manual approach first makes LangGraph's checkpointing feel intuitive rather than magical.
+
+## Common Pitfalls
+
+Building checkpointed, idempotent agents is conceptually straightforward but has several traps that catch even experienced developers.
+
+**Non-serializable state.** Your checkpoint must be writable to disk (or a database), which means every piece of state must be serializable. Open file handles, database connections, live API clients, and in-memory caches cannot be checkpointed. The fix is to store only data -- strings, numbers, lists, dicts -- and reconstruct non-serializable objects when loading a checkpoint.
+
+**Checkpoint size bloat.** If your agent accumulates large intermediate results (full web pages, large API responses, generated documents), the checkpoint file can grow to megabytes. This slows down every save and load. The fix is to store references (URLs, IDs, file paths) instead of full content, and retrieve the content on demand after resume.
+
+**Stale checkpoints.** If the external world changes between the crash and the resume, the checkpoint's assumptions may be invalid. An agent that checkpointed after finding a stock price of $150 might resume into a world where the price is $175. The fix is to add timestamps to checkpoints and validate staleness on resume -- if too much time has passed, discard the checkpoint and start fresh.
+
+**Idempotency key collisions.** If your key generation is too coarse (for example, keying only on the step number without the inputs), different actions might collide. The agent would skip a step it never actually completed. The fix is to include enough information in the key to make collisions impossible -- action type, all inputs, and any relevant context.
+
+> **Forward to Module 12:** Checkpointing becomes critical for **long-running production agents** that operate over minutes or hours. Module 12 covers the operational infrastructure around checkpointing -- monitoring checkpoint health, alerting on stale checkpoints, cleaning up orphaned checkpoint files, and building dashboards that show agent progress across checkpoints. The pattern you learn here is the foundation; Module 12 shows how to operate it at scale.
+
+## Summary
+
+**Idempotency** and **checkpointing** are complementary patterns that make agent systems resilient to the failures that are inevitable in long-running, distributed processes. Here are the key ideas from this lesson:
+
+- **Idempotent actions** produce the same result whether executed once or multiple times, making retries safe -- the key technique is using an **idempotency key** derived from the action type and inputs to detect and skip duplicate executions
+- **Checkpointing** saves the agent's state (current step, accumulated results, remaining plan) after each significant action, enabling the agent to **resume from the point of failure** instead of restarting from scratch
+- The two patterns solve different sides of the same problem: idempotency asks "is it safe to retry this action?" while checkpointing asks "where was I when I stopped?"
+- **Plan-and-Execute agents** benefit most from checkpointing because their ordered step lists and accumulated results map naturally to checkpoint state -- a crash at step six preserves steps one through five
+- Checkpoint storage ranges from simple JSON files for prototypes to databases and cloud storage for production, with the choice depending on durability, concurrency, and deployment model
+- Common pitfalls include non-serializable state, checkpoint size bloat, stale checkpoints after long downtime, and idempotency key collisions from overly coarse key generation
+
+In the next lesson, the **Design Patterns Lab**, you will put all five patterns from this module into practice. You will refactor a naive agent to use the Tool Registry, Middleware, Context Management, Fallback Chains, and the Checkpointing pattern you just learned -- seeing how these patterns compose into a clean, production-ready system.

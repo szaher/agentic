@@ -1,0 +1,477 @@
+---
+title: "Anthropic Claude Agent SDK"
+quiz:
+  - question: "In Claude's Messages API, what content block type does the model return when it wants to call a tool?"
+    options:
+      - "A function_call block with the tool name and arguments"
+      - "A tool_use block containing an id, the tool name, and the input parameters"
+      - "A tool_result block with the tool invocation details"
+      - "A text block containing a JSON-formatted tool request"
+    correctIndex: 1
+  - question: "What is the recommended way to enable extended thinking on Claude Opus 4 and Sonnet 4.6?"
+    options:
+      - "Set thinking to {type: 'enabled', budget_tokens: 8000}"
+      - "Add the header 'anthropic-beta: extended-thinking-2025' to the request"
+      - "Set thinking to {type: 'adaptive'} and optionally control depth with the effort parameter"
+      - "Pass a reasoning_effort parameter set to 'high'"
+    correctIndex: 2
+  - question: "In the agentic loop pattern with Claude, what stop_reason value indicates that the model wants to call a tool?"
+    options:
+      - "end_turn"
+      - "tool_call"
+      - "tool_use"
+      - "pause_turn"
+    correctIndex: 2
+  - question: "When building a multi-turn conversation with Claude's Messages API, what must you do with the assistant's response before sending the next user message?"
+    options:
+      - "Extract only the text content and append it as a string"
+      - "Append the full response.content array as the assistant message to preserve all content blocks"
+      - "Send only the tool results without the assistant message"
+      - "Reset the messages array and include only the latest exchange"
+    correctIndex: 1
+---
+
+## Overview
+
+Throughout Modules 1-6, we built a deep understanding of what agents are, how they reason, how they use tools, and how they manage memory and state. Every concept -- the **ReAct loop**, **tool calling**, **chain-of-thought reasoning**, **structured outputs**, and **multi-turn conversation management** -- converges in this lesson. Here we put it all together using the Anthropic Python SDK and Claude, the core framework of this academy.
+
+Unlike higher-level orchestration frameworks that abstract away the agent loop, working directly with the Anthropic SDK gives you full control over every decision the agent makes. You define the tools, manage the conversation history, control when and how the model thinks, and decide how to process each response. This is the foundation that frameworks like LangGraph and CrewAI build upon -- and understanding it deeply will make you a better agent builder regardless of which framework you ultimately choose.
+
+This lesson covers the architecture of a Claude-powered agent, the mechanics of the **Messages API**, **tool_use** blocks, **adaptive thinking**, **streaming**, and the **agentic loop** pattern. By the end, you will build a complete research agent from scratch.
+
+## The Claude Agent Architecture
+
+A Claude-powered agent is built from five core components that work together in a cycle. The **Messages API** is the single endpoint through which all interaction flows. **System prompts** define the agent's persona and capabilities. **Tools** extend the model beyond text generation. **Adaptive thinking** gives the model space to reason deeply before acting. And the **agentic loop** ties everything together, cycling between the model's decisions and your code's execution of those decisions.
+
+<MermaidDiagram chart={`graph TD
+    subgraph Agent["Claude Agent Architecture"]
+        SP["System Prompt<br/>Agent persona & rules"] --> API["Messages API<br/>POST /v1/messages"]
+        TOOLS["Tool Definitions<br/>JSON Schema for each tool"] --> API
+        THINK["Adaptive Thinking<br/>Internal reasoning"] --> API
+        HISTORY["Conversation History<br/>Multi-turn messages array"] --> API
+        API --> RESPONSE["Response Content Blocks"]
+        RESPONSE --> TEXT["text block<br/>Final answer to user"]
+        RESPONSE --> TU["tool_use block<br/>Tool call request"]
+        RESPONSE --> TB["thinking block<br/>Reasoning trace"]
+    end
+
+    subgraph Loop["Agentic Loop (Your Code)"]
+        TU --> EXEC["Execute Tool<br/>Run function locally"]
+        EXEC --> TR["tool_result block<br/>Send result back"]
+        TR --> HISTORY
+    end
+
+    style Agent fill:#ebf8ff,stroke:#3182ce,stroke-width:2px
+    style Loop fill:#f0fff4,stroke:#276749,stroke-width:2px
+    style API fill:#bee3f8,stroke:#3182ce
+    style SP fill:#e2e8f0,stroke:#4a5568
+    style TOOLS fill:#e2e8f0,stroke:#4a5568
+    style THINK fill:#e2e8f0,stroke:#4a5568
+    style HISTORY fill:#e2e8f0,stroke:#4a5568
+    style RESPONSE fill:#bee3f8,stroke:#3182ce
+    style TEXT fill:#c6f6d5,stroke:#276749
+    style TU fill:#fed7d7,stroke:#c53030
+    style TB fill:#fefcbf,stroke:#d69e2e
+    style EXEC fill:#c6f6d5,stroke:#276749
+    style TR fill:#c6f6d5,stroke:#276749
+`} />
+
+This architecture should look familiar. The tool_use and tool_result blocks are the mechanism that implements the **tool calling** pattern from Module 3. The conversation history is the **state management** concept from Module 6. And adaptive thinking is the native implementation of the **extended reasoning** we explored in Module 2. The difference here is that we are working directly with the API primitives rather than through an abstraction layer.
+
+## The Anthropic Python SDK
+
+The Anthropic Python SDK is the primary interface for building agents with Claude. It wraps the Messages API with type-safe Python objects and handles authentication, retries, and streaming.
+
+<CodeBlock code={`import anthropic
+
+# Initialize the client
+# Reads ANTHROPIC_API_KEY from environment by default
+client = anthropic.Anthropic()
+
+# Basic message request
+response = client.messages.create(
+    model="claude-sonnet-4-6",
+    max_tokens=4096,
+    system="You are a helpful research assistant.",
+    messages=[
+        {"role": "user", "content": "What are the key principles of agent design?"}
+    ]
+)
+
+# The response contains content blocks
+for block in response.content:
+    if block.type == "text":
+        print(block.text)
+
+# Check why the model stopped
+print(f"Stop reason: {response.stop_reason}")
+print(f"Usage: {response.usage.input_tokens} in, {response.usage.output_tokens} out")
+`} language="python" filename="basic_message.py" />
+
+The `response.content` is a list of **content blocks** -- not a single string. This is a critical design decision. A single response can contain text blocks, thinking blocks, and tool_use blocks, all in one list. Your code must iterate through these blocks and handle each type appropriately. This is the foundation of everything that follows.
+
+## Tool Definitions and tool_use Blocks
+
+Tools are defined as JSON Schema objects and passed to the Messages API in the `tools` parameter. When Claude decides to use a tool, it returns a `tool_use` content block containing the tool name, a unique ID, and the parsed input parameters. Your code executes the tool and sends the result back as a `tool_result` block.
+
+<CodeBlock code={`import anthropic
+import json
+
+client = anthropic.Anthropic()
+
+# Define tools with JSON Schema
+tools = [
+    {
+        "name": "search_papers",
+        "description": "Search academic papers on a given topic. Returns titles, authors, and abstracts.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "The search query for finding papers"
+                },
+                "max_results": {
+                    "type": "integer",
+                    "description": "Maximum number of papers to return (default: 5)"
+                }
+            },
+            "required": ["query"]
+        }
+    },
+    {
+        "name": "get_paper_details",
+        "description": "Get full details of a specific paper including its citation count and references.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "paper_id": {
+                    "type": "string",
+                    "description": "The unique identifier of the paper"
+                }
+            },
+            "required": ["paper_id"]
+        }
+    }
+]
+
+# Send a request with tools
+response = client.messages.create(
+    model="claude-sonnet-4-6",
+    max_tokens=4096,
+    tools=tools,
+    messages=[
+        {"role": "user", "content": "Find recent papers on LLM agents and tool use."}
+    ]
+)
+
+# Process the response -- may contain text AND tool_use blocks
+for block in response.content:
+    if block.type == "text":
+        print(f"Claude says: {block.text}")
+    elif block.type == "tool_use":
+        print(f"Tool call: {block.name}")
+        print(f"Tool ID:   {block.id}")
+        print(f"Input:     {json.dumps(block.input, indent=2)}")
+`} language="python" filename="tool_definitions.py" />
+
+Notice that the tool definition's `description` field is not just documentation -- it is the primary signal Claude uses to decide **when** to call a tool. A prescriptive description like "Search academic papers on a given topic" works better than a vague one like "paper search function." This connects directly to the tool design principles we covered in Module 3.
+
+## Adaptive Thinking for Reasoning
+
+**Adaptive thinking** is Claude's native reasoning capability. When enabled, Claude generates internal **thinking blocks** where it works through complex problems before responding. Unlike Chain-of-Thought prompting from Module 2, this reasoning happens in a dedicated phase with the model dynamically controlling how much thought is needed per request.
+
+On Claude Opus 4 and Sonnet 4.6, the recommended approach is `thinking: {"type": "adaptive"}`, which lets Claude decide when and how deeply to think. You control the cost-quality tradeoff using the **effort** parameter rather than a fixed token budget.
+
+<CodeBlock code={`import anthropic
+
+client = anthropic.Anthropic()
+
+response = client.messages.create(
+    model="claude-sonnet-4-6",
+    max_tokens=16000,
+    thinking={"type": "adaptive"},
+    output_config={"effort": "high"},  # low | medium | high
+    messages=[
+        {
+            "role": "user",
+            "content": "Analyze the tradeoffs between ReAct and Plan-then-Execute agent architectures for a multi-step research task."
+        }
+    ]
+)
+
+# Response contains thinking blocks AND text blocks
+for block in response.content:
+    if block.type == "thinking":
+        print(f"[Thinking] {block.thinking[:200]}...")
+    elif block.type == "text":
+        print(f"[Response] {block.text}")
+`} language="python" filename="adaptive_thinking.py" />
+
+The **effort** parameter provides a practical way to balance cost and quality:
+
+- **low** -- minimal thinking, best for simple classification or short tasks
+- **medium** -- balanced thinking, good for most applications
+- **high** -- deep reasoning, ideal for complex analysis and agentic work
+
+This replaces the older `budget_tokens` approach. Instead of guessing how many tokens to allocate for reasoning, you describe the level of effort you want and let the model allocate accordingly. On Opus 4 models, you also have access to **max** effort for the most demanding tasks.
+
+## The Agentic Loop
+
+The **agentic loop** is the pattern that transforms a single API call into a persistent agent. It is the implementation of the **ReAct cycle** from Module 1: the model reasons, decides on an action (tool call), your code executes that action, and the result feeds back into the next iteration.
+
+The loop runs until Claude returns a `stop_reason` of `"end_turn"`, meaning it has finished its work and is ready to present a final answer.
+
+<MermaidDiagram chart={`sequenceDiagram
+    participant User
+    participant Loop as Agentic Loop<br/>(Your Code)
+    participant Claude as Claude API<br/>(Messages)
+    participant Tools as Tool Functions
+
+    User->>Loop: "Research LLM agent architectures"
+    
+    Loop->>Claude: messages.create(tools, messages)
+    Note over Claude: Adaptive Thinking...<br/>Reasons about the task
+    Claude-->>Loop: thinking + tool_use block<br/>(search_papers, stop_reason=tool_use)
+
+    Loop->>Tools: search_papers(query="LLM agent architectures")
+    Tools-->>Loop: [paper1, paper2, paper3, ...]
+
+    Note over Loop: Append assistant content +<br/>tool_result to messages
+
+    Loop->>Claude: messages.create(tools, updated messages)
+    Note over Claude: Adaptive Thinking...<br/>Analyzes search results
+    Claude-->>Loop: thinking + tool_use block<br/>(get_paper_details, stop_reason=tool_use)
+
+    Loop->>Tools: get_paper_details(paper_id="arxiv:2401.123")
+    Tools-->>Loop: {title, abstract, citations, ...}
+
+    Note over Loop: Append assistant content +<br/>tool_result to messages
+
+    Loop->>Claude: messages.create(tools, updated messages)
+    Note over Claude: Adaptive Thinking...<br/>Synthesizes findings
+    Claude-->>Loop: text block<br/>(final analysis, stop_reason=end_turn)
+
+    Loop->>User: "Here is my analysis of LLM agent architectures..."
+`} />
+
+Each iteration of the loop follows the same pattern:
+
+1. **Call the API** with the current messages array and tool definitions
+2. **Check stop_reason** -- if `"tool_use"`, the model wants to call a tool; if `"end_turn"`, the model is done
+3. **Append the full response.content** to messages as an assistant message (this preserves tool_use blocks, thinking blocks, and text blocks)
+4. **Execute each tool_use block** and collect the results
+5. **Append tool_result blocks** as a user message, each linked to its tool_use by `tool_use_id`
+6. **Repeat** from step 1
+
+The critical detail is step 3: you must append `response.content` as-is, not just the text. If you extract only the text and discard tool_use blocks, the conversation history breaks and Claude cannot match tool results to tool calls.
+
+## Building a Complete Research Agent
+
+Let us bring everything together into a working research agent. This agent uses adaptive thinking to plan its approach, multiple tools to gather information, and the agentic loop to iterate until it has a complete answer.
+
+<CodeBlock code={`import anthropic
+import json
+from datetime import datetime
+
+client = anthropic.Anthropic()
+
+# --- Tool Definitions ---
+tools = [
+    {
+        "name": "search_web",
+        "description": "Search the web for current information on a topic. Use this when the user asks about recent events, current data, or topics that require up-to-date information.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Search query"},
+                "num_results": {"type": "integer", "description": "Number of results (default: 5)"}
+            },
+            "required": ["query"]
+        }
+    },
+    {
+        "name": "read_url",
+        "description": "Fetch and read the content of a specific URL. Use this to get detailed information from a source found via search.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "url": {"type": "string", "description": "The URL to read"}
+            },
+            "required": ["url"]
+        }
+    },
+    {
+        "name": "save_note",
+        "description": "Save a research note to the scratchpad. Use this to record key findings, quotes, or data points as you research.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "title": {"type": "string", "description": "Brief title for this note"},
+                "content": {"type": "string", "description": "The note content"},
+                "source": {"type": "string", "description": "Source URL or reference"}
+            },
+            "required": ["title", "content"]
+        }
+    }
+]
+
+# --- Tool Implementations ---
+notes = []
+
+def execute_tool(name: str, input_data: dict) -> str:
+    """Execute a tool and return the result as a string."""
+    if name == "search_web":
+        # In production, call a real search API
+        return json.dumps({
+            "results": [
+                {"title": f"Result for: {input_data['query']}", "url": "https://example.com/1", "snippet": "Sample search result..."},
+                {"title": f"Related: {input_data['query']}", "url": "https://example.com/2", "snippet": "Another relevant result..."},
+            ]
+        })
+    elif name == "read_url":
+        # In production, fetch and parse the actual URL
+        return f"Content from {input_data['url']}: [Article content would appear here]"
+    elif name == "save_note":
+        note = {**input_data, "timestamp": datetime.now().isoformat()}
+        notes.append(note)
+        return f"Note saved: '{input_data['title']}' (total notes: {len(notes)})"
+    else:
+        return json.dumps({"error": f"Unknown tool: {name}"})
+
+# --- Agentic Loop ---
+def run_research_agent(query: str) -> str:
+    """Run the research agent with the full agentic loop."""
+    messages = [{"role": "user", "content": query}]
+    system_prompt = (
+        "You are a thorough research assistant. When given a research question:\\n"
+        "1. Search for relevant information using available tools\\n"
+        "2. Read promising sources for detailed information\\n"
+        "3. Save key findings as notes\\n"
+        "4. Synthesize your findings into a comprehensive answer\\n\\n"
+        "Always cite your sources. Be thorough but focused."
+    )
+
+    max_iterations = 10  # Safety limit to prevent infinite loops
+    iteration = 0
+
+    while iteration < max_iterations:
+        iteration += 1
+        print(f"\\n--- Iteration {iteration} ---")
+
+        # Call the API
+        response = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=16000,
+            system=system_prompt,
+            tools=tools,
+            thinking={"type": "adaptive"},
+            output_config={"effort": "high"},
+            messages=messages,
+        )
+
+        print(f"Stop reason: {response.stop_reason}")
+
+        # If the model is done, extract the final text
+        if response.stop_reason == "end_turn":
+            final_text = ""
+            for block in response.content:
+                if block.type == "text":
+                    final_text += block.text
+            return final_text
+
+        # Append the FULL assistant response to preserve all blocks
+        messages.append({"role": "assistant", "content": response.content})
+
+        # Process any tool_use blocks
+        tool_results = []
+        for block in response.content:
+            if block.type == "thinking":
+                print(f"  [Thinking] {block.thinking[:100]}...")
+            elif block.type == "text":
+                print(f"  [Text] {block.text[:100]}...")
+            elif block.type == "tool_use":
+                print(f"  [Tool] {block.name}({json.dumps(block.input)[:80]}...)")
+                result = execute_tool(block.name, block.input)
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": block.id,  # Must match the tool_use block's id
+                    "content": result,
+                })
+
+        # Append tool results as a user message
+        if tool_results:
+            messages.append({"role": "user", "content": tool_results})
+
+    return "Research agent reached maximum iterations without completing."
+
+# --- Run the Agent ---
+answer = run_research_agent(
+    "What are the latest advances in LLM agent architectures? "
+    "Compare ReAct, Plan-and-Execute, and reflection-based approaches."
+)
+print("\\n=== FINAL ANSWER ===")
+print(answer)
+`} language="python" filename="research_agent.py" />
+
+This code implements everything we have discussed throughout the academy. The system prompt defines the agent's strategy (Module 2). The tools extend its capabilities (Module 3). The messages array manages state across turns (Module 6). Adaptive thinking enables deep reasoning (Module 2). And the agentic loop orchestrates the entire cycle (Module 1).
+
+## Streaming Responses
+
+For real-time applications, Claude supports **streaming** responses. Instead of waiting for the entire response, you receive content as it is generated. This is essential for agents that interact with users in real time and for long-running tasks where you want to show progress.
+
+<CodeBlock code={`import anthropic
+
+client = anthropic.Anthropic()
+
+# Use the streaming context manager
+with client.messages.stream(
+    model="claude-sonnet-4-6",
+    max_tokens=4096,
+    thinking={"type": "adaptive"},
+    messages=[{"role": "user", "content": "Explain the ReAct agent pattern."}]
+) as stream:
+    for event in stream:
+        if event.type == "content_block_start":
+            if event.content_block.type == "thinking":
+                print("\\n[Thinking...]")
+            elif event.content_block.type == "text":
+                print("\\n[Response:]")
+        elif event.type == "content_block_delta":
+            if event.delta.type == "thinking_delta":
+                print(event.delta.thinking, end="", flush=True)
+            elif event.delta.type == "text_delta":
+                print(event.delta.text, end="", flush=True)
+
+    # After streaming, get the complete message for usage info
+    final_message = stream.get_final_message()
+    print(f"\\n\\nTokens: {final_message.usage.input_tokens} in, "
+          f"{final_message.usage.output_tokens} out")
+`} language="python" filename="streaming.py" />
+
+Streaming is also recommended when setting `max_tokens` above approximately 16,000 -- non-streaming requests with high token limits can hit HTTP timeouts. For agentic loops with streaming, use `client.messages.stream()` inside the loop and call `stream.get_final_message()` to get the complete message object for processing tool_use blocks and checking `stop_reason`.
+
+## Claude Compared to Other Agent SDKs
+
+Understanding where Claude's SDK sits relative to the frameworks we cover in this module helps you choose the right tool for each situation.
+
+| Aspect | Anthropic SDK (Claude) | OpenAI Agents SDK | LangGraph |
+|--------|----------------------|-------------------|-----------|
+| **Abstraction level** | Low-level API primitives | Mid-level with Runner | High-level graph framework |
+| **Loop control** | You write the loop | SDK manages the Runner loop | Framework manages the graph |
+| **Thinking** | Adaptive thinking (native) | No equivalent | Not built-in |
+| **Tool execution** | You implement tool functions | Decorated Python functions | Tool nodes in graph |
+| **Multi-agent** | Manual orchestration or Managed Agents | Built-in handoffs | Graph-based routing |
+| **State management** | Manual messages array | Automatic context | Typed state objects |
+
+The Anthropic SDK gives you the most control and transparency. You see every thinking block, every tool call, and every decision the model makes. This is ideal when you need fine-grained control, want to implement custom routing logic, or are building the foundation for a larger system. The tradeoff is that you must manage the conversation state and the agentic loop yourself.
+
+For teams that want Anthropic to manage the loop and provide a hosted execution environment, **Managed Agents** provides a server-managed alternative where you create a persistent agent configuration, start sessions, and stream events -- but the orchestration runs on Anthropic's infrastructure.
+
+## Summary
+
+This lesson covered the complete architecture of building agents with the Anthropic SDK and Claude. You learned how the **Messages API** returns structured content blocks (text, thinking, and tool_use), how **tool definitions** use JSON Schema to extend Claude's capabilities, how **adaptive thinking** provides native reasoning without manual token budgets, and how the **agentic loop** ties these together into a persistent agent that can reason, act, and iterate.
+
+The research agent we built demonstrates how every concept from Modules 1-6 converges in practice: the ReAct pattern drives the loop, tool calling extends capabilities, conversation history manages state, and extended thinking enables deep reasoning.
+
+In the next lesson, we will see how **LangGraph** takes these same primitives and wraps them in a graph-based abstraction, trading low-level control for a declarative way to define complex agent workflows.

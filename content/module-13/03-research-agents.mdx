@@ -1,0 +1,574 @@
+---
+title: "Research and Deep Dive Agents"
+quiz:
+  - question: "Why does a research agent decompose a complex question into sub-questions before searching?"
+    options:
+      - "To reduce the number of API calls to the search engine"
+      - "Because each sub-question targets a specific facet of the topic, producing more focused and relevant search results"
+      - "Because LLMs cannot process questions longer than 50 words"
+      - "To ensure the final report has enough sections to look comprehensive"
+    correctIndex: 1
+  - question: "In a deep research system, what is the role of the fact-checker component?"
+    options:
+      - "It runs the synthesized report through a grammar checker"
+      - "It counts the number of citations to ensure a minimum threshold is met"
+      - "It removes all subjective statements from the report"
+      - "It verifies claims by cross-referencing them against independent sources and flags unsupported assertions"
+    correctIndex: 3
+  - question: "What does iterative deepening mean in the context of a research agent?"
+    options:
+      - "The agent increases the font size of its report with each iteration"
+      - "The agent runs the same query repeatedly until it gets different results"
+      - "The agent generates follow-up questions from initial findings and searches again to fill knowledge gaps"
+      - "The agent searches deeper pages of a single search engine result"
+    correctIndex: 2
+  - question: "How does RAG (Module 7) relate to the retrieval backbone of a research agent?"
+    options:
+      - "RAG and research agents are completely independent systems with no overlap"
+      - "RAG is only useful for chatbots and has no application in research workflows"
+      - "RAG replaces the need for research agents entirely"
+      - "RAG provides the embedding, indexing, and retrieval pipeline that research agents use to search internal document collections"
+    correctIndex: 3
+---
+
+## Overview
+
+In the previous lesson, you built **coding agents** that write, test, and debug software through iterative feedback loops. Now we turn to a different kind of knowledge work: research. While coding agents iterate against test suites, **research agents** iterate against information gaps -- searching, reading, evaluating, and synthesizing knowledge from multiple sources until a question is thoroughly answered.
+
+**Research agents** are systems that go beyond a single search query. Given a complex question, they decompose it into sub-questions, search across multiple sources -- the web, academic databases, internal documentation -- evaluate the credibility of what they find, synthesize findings into a coherent narrative, and then fact-check their own output by cross-referencing claims against independent sources. The result is not a list of links but a structured, cited report.
+
+This pattern matters because real research questions are almost never answered by a single source. "How does the European AI Act affect open-source model deployment?" requires understanding the regulation itself, legal interpretations, industry responses, technical compliance measures, and enforcement timelines. A single web search returns fragments. A research agent assembles the full picture.
+
+> Research agents do not just search -- they **investigate**. They formulate hypotheses, gather evidence, evaluate credibility, identify contradictions, and synthesize conclusions.
+
+If you completed the research assistant exercise in the Tool Use Lab (Module 3, Lesson 7), you have already built a basic version of this pattern. This lesson takes that foundation and scales it into a full deep research system with query decomposition, parallel search, credibility evaluation, and adversarial fact-checking.
+
+## The Research Agent Pipeline
+
+Every research agent follows a pipeline that mirrors how a skilled human researcher works: understand the question, break it down, search systematically, evaluate what you find, synthesize an answer, and verify it.
+
+<MermaidDiagram chart={`graph TD
+    Q["Research Question<br/><i>Complex, multi-faceted query</i>"] --> D["Query Decomposition<br/><i>Break into 3-7<br/>focused sub-questions</i>"]
+    D --> S1["Search Source A<br/><i>Web search</i>"]
+    D --> S2["Search Source B<br/><i>Academic papers</i>"]
+    D --> S3["Search Source C<br/><i>Internal docs</i>"]
+    S1 --> E["Credibility Evaluation<br/><i>Score source reliability,<br/>recency, and authority</i>"]
+    S2 --> E
+    S3 --> E
+    E --> SY["Synthesis<br/><i>Combine findings into<br/>coherent narrative</i>"]
+    SY --> G{"Knowledge<br/>Gaps?"}
+    G -- "Yes" --> FU["Follow-up Questions<br/><i>Iterative deepening</i>"]
+    FU --> S1
+    FU --> S2
+    G -- "No" --> FC["Fact-Check<br/><i>Cross-reference claims<br/>against independent sources</i>"]
+    FC --> V{"Claims<br/>Verified?"}
+    V -- "Unverified claims found" --> R["Revise<br/><i>Weaken or remove<br/>unsupported claims</i>"]
+    R --> FC
+    V -- "All claims supported" --> RE["Final Report<br/><i>Structured, cited,<br/>fact-checked output</i>"]
+    style Q fill:#ebf8ff,stroke:#3182ce
+    style RE fill:#c6f6d5,stroke:#38a169
+    style R fill:#fed7d7,stroke:#e53e3e
+    style G fill:#fefcbf,stroke:#d69e2e
+    style V fill:#fefcbf,stroke:#d69e2e
+    style E fill:#e9d8fd,stroke:#805ad5
+`} />
+
+The pipeline has two feedback loops, and both are essential:
+
+- **Iterative deepening** -- After initial synthesis, the agent identifies knowledge gaps and generates follow-up questions. These targeted searches fill in missing details, resolve ambiguities, and explore angles the original sub-questions missed. This loop typically runs 1-3 times before the agent has sufficient coverage.
+
+- **Fact-check revision** -- After synthesis is complete, a separate fact-checking pass cross-references each major claim against independent sources. Claims that cannot be verified are weakened ("some researchers suggest..." instead of "it is established that...") or removed. This loop catches hallucinations, outdated information, and over-generalizations.
+
+## Deep Research System Architecture
+
+A production deep research system separates concerns into specialized components that can operate in parallel. This architecture allows the system to search multiple sources simultaneously and scale to complex, multi-faceted research tasks.
+
+<MermaidDiagram chart={`graph TD
+    subgraph Orchestrator["Research Orchestrator"]
+        QP["Query Planner<br/><i>Decomposes question,<br/>manages research state</i>"]
+        SM["State Manager<br/><i>Tracks findings, gaps,<br/>and iteration count</i>"]
+    end
+
+    subgraph Searchers["Parallel Search Workers"]
+        WS["Web Searcher<br/><i>General web search<br/>via search APIs</i>"]
+        AS["Academic Searcher<br/><i>arXiv, Semantic Scholar,<br/>PubMed</i>"]
+        DS["Document Searcher<br/><i>Internal knowledge base<br/>via RAG pipeline</i>"]
+        NS["News Searcher<br/><i>Recent articles and<br/>press releases</i>"]
+    end
+
+    subgraph Analysis["Analysis Layer"]
+        CE["Credibility Evaluator<br/><i>Scores source authority,<br/>recency, bias</i>"]
+        SYN["Synthesizer<br/><i>Merges findings into<br/>structured narrative</i>"]
+        FCK["Fact-Checker<br/><i>Adversarial verification<br/>against independent sources</i>"]
+    end
+
+    subgraph Output["Output Layer"]
+        CG["Citation Generator<br/><i>Formats references,<br/>links claims to sources</i>"]
+        RF["Report Formatter<br/><i>Structures final output<br/>with sections and summary</i>"]
+    end
+
+    QP --> WS
+    QP --> AS
+    QP --> DS
+    QP --> NS
+    SM --> QP
+
+    WS --> CE
+    AS --> CE
+    DS --> CE
+    NS --> CE
+
+    CE --> SYN
+    SYN --> SM
+    SYN --> FCK
+    FCK --> SYN
+
+    SYN --> CG
+    CG --> RF
+
+    style Orchestrator fill:#ebf8ff,stroke:#3182ce,stroke-width:2px
+    style Searchers fill:#c6f6d5,stroke:#38a169,stroke-width:2px
+    style Analysis fill:#e9d8fd,stroke:#805ad5,stroke-width:2px
+    style Output fill:#fefcbf,stroke:#d69e2e,stroke-width:2px
+`} />
+
+Each component has a distinct role:
+
+- **Query Planner** -- Receives the original question and decomposes it into sub-questions. It also generates follow-up questions during iterative deepening. This is the "brain" of the system -- it decides what to search for and when the research is complete.
+
+- **Parallel Search Workers** -- Each worker specializes in a different source type. Web searchers use APIs like Google or Bing. Academic searchers query arXiv, Semantic Scholar, or PubMed. Document searchers use the **RAG pipeline** from Module 7 to search internal knowledge bases. Running these in parallel dramatically reduces research time.
+
+- **Credibility Evaluator** -- Scores each source on authority (is this a peer-reviewed paper or a blog post?), recency (is this from 2024 or 2018?), and potential bias (is this from a vendor marketing page or an independent review?). Low-credibility sources are deprioritized or flagged.
+
+- **Synthesizer** -- Combines findings from multiple sources into a coherent narrative, resolving contradictions and noting disagreements. This is where the LLM's language capabilities shine -- it must integrate diverse information into a clear, well-structured answer.
+
+- **Fact-Checker** -- Operates adversarially against the synthesizer's output. For each major claim, it searches for confirming or contradicting evidence from sources not already used. This component catches hallucinations that slip through synthesis.
+
+- **Citation Generator** -- Maps every claim in the final report to its supporting sources, producing inline citations and a reference list. This is critical for trust -- a research report without citations is just an opinion.
+
+## Query Decomposition
+
+The first and arguably most important step is breaking a complex question into focused sub-questions. Poor decomposition leads to irrelevant searches and shallow results. Good decomposition targets specific, answerable facets of the original question.
+
+Consider the question: "What are the security implications of deploying LLM agents in enterprise environments?"
+
+A naive approach searches for this exact string. A decomposition approach generates sub-questions like:
+
+- What attack vectors are unique to LLM agents (prompt injection, tool misuse)?
+- How do current enterprise security frameworks address autonomous AI systems?
+- What data exfiltration risks arise from agents with tool access?
+- What incident case studies exist of LLM agent security failures?
+- What are recommended security architectures for agent deployment?
+
+Each sub-question is specific enough to produce targeted search results. Together, they cover the breadth of the original question.
+
+The decomposition should also classify each sub-question by the best source type: factual questions benefit from academic papers, current-state questions benefit from recent web articles, and organizational questions benefit from internal documentation.
+
+## Multi-Source Search
+
+Research agents search across multiple source types because different sources have different strengths:
+
+- **Web search** provides the broadest coverage and the most current information, but quality varies enormously. Blog posts, vendor marketing, and Reddit threads mix with authoritative articles and official documentation.
+
+- **Academic search** (arXiv, Semantic Scholar, PubMed) provides peer-reviewed and pre-print research with rigorous methodology, but coverage is limited to topics with academic interest and results may lag behind industry practice.
+
+- **Internal document search** uses the RAG architecture from Module 7 -- embeddings, vector stores, and retrieval -- to search an organization's own knowledge base. This is essential for questions that involve proprietary information, internal policies, or domain-specific context that public sources do not cover.
+
+- **News search** captures recent developments, announcements, and industry trends. This is particularly valuable for fast-moving fields where academic papers and documentation lag behind practice.
+
+The connection to Module 7 is direct: the **Document Searcher** component is a RAG pipeline. It embeds the query, searches a vector store of internal documents, retrieves relevant chunks, and passes them to the synthesizer alongside results from other sources. Everything you learned about chunking strategies, embedding models, and retrieval optimization applies here.
+
+## Source Credibility Evaluation
+
+Not all sources are equal. A research agent must evaluate the credibility of each source before incorporating its claims into the synthesis. The credibility evaluation considers multiple dimensions:
+
+- **Authority** -- Is the source a peer-reviewed journal, a recognized expert, an official documentation page, or an anonymous blog post? Higher authority means higher weight in synthesis.
+
+- **Recency** -- When was the source published or last updated? For rapidly evolving topics, a 2024 source may be significantly more accurate than a 2022 source. For stable topics, recency matters less.
+
+- **Corroboration** -- Does the claim appear in multiple independent sources? Claims supported by several authoritative sources receive higher confidence than claims from a single source.
+
+- **Bias indicators** -- Is the source a vendor promoting their own product? Is there a clear financial or political incentive to present information in a particular way? Biased sources can still be useful, but their claims should be cross-referenced more carefully.
+
+- **Specificity** -- Does the source provide concrete evidence, data, examples, or citations? Or does it make vague, unsupported assertions? Specific, evidence-backed sources are more reliable.
+
+The credibility evaluation is itself an LLM task -- the agent reads the source content and metadata, then assigns scores on each dimension. These scores feed into the synthesis step, where higher-credibility sources receive more weight.
+
+## Iterative Deepening
+
+After the initial round of search and synthesis, the agent examines its draft for **knowledge gaps** -- areas where the answer is thin, uncertain, or missing entirely. It then generates targeted follow-up questions to fill those gaps.
+
+This iterative deepening process mimics how a human researcher works. You read initial sources, realize you need to understand a specific sub-topic better, and do a more targeted search. The key is knowing when to stop: each iteration adds latency and cost, and there are diminishing returns after 2-3 rounds.
+
+The stopping criteria for iterative deepening include:
+
+- **Coverage threshold** -- All sub-questions from the decomposition have at least two supporting sources
+- **Confidence threshold** -- The agent's self-assessed confidence in each section exceeds a minimum level
+- **Iteration budget** -- A hard cap (typically 2-3 rounds) prevents infinite loops
+- **Diminishing returns** -- If a follow-up search returns sources already seen, the topic is likely saturated
+
+## Fact-Checking with Cross-Referencing
+
+The fact-checking component is what separates a research agent from a fancy search wrapper. After synthesis, the fact-checker extracts individual claims from the report and attempts to verify each one against independent sources -- sources not already used in the synthesis.
+
+This adversarial verification catches several common failure modes:
+
+- **Hallucinated statistics** -- The LLM invents a plausible-sounding number ("73% of enterprises report...") that has no basis in any source. The fact-checker searches for this specific claim and flags it when no corroboration is found.
+
+- **Outdated information** -- The synthesis includes a claim that was true in 2022 but has since been superseded. The fact-checker finds more recent sources that contradict the claim.
+
+- **Over-generalization** -- The synthesis states something as universal ("all major cloud providers support...") when the source only mentioned two providers. The fact-checker identifies the scope mismatch.
+
+- **Source misattribution** -- The synthesis attributes a claim to the wrong source or misrepresents what a source actually says. The fact-checker re-reads the original source to verify.
+
+When the fact-checker identifies an unverified claim, it does not simply delete it. Instead, it adjusts the confidence language: "Research shows X" becomes "Some evidence suggests X, though this has not been independently verified." This preserves potentially useful information while clearly communicating its epistemic status.
+
+## Building a Research Agent
+
+Let us build a research agent that demonstrates the full pipeline: query decomposition, multi-source search, credibility evaluation, synthesis, and fact-checking. This implementation uses iterative deepening to fill knowledge gaps across search rounds.
+
+<CodeBlock code={`import anthropic
+import json
+from dataclasses import dataclass, field
+
+client = anthropic.Anthropic()
+MODEL = "claude-sonnet-4-20250514"
+
+
+@dataclass
+class Source:
+    """A single source retrieved during research."""
+    title: str
+    url: str
+    content: str
+    source_type: str  # "web", "academic", "internal", "news"
+    credibility_score: float = 0.0  # 0.0 to 1.0
+    credibility_reasoning: str = ""
+
+
+@dataclass
+class ResearchState:
+    """Tracks the evolving state of a research task."""
+    original_question: str
+    sub_questions: list[str] = field(default_factory=list)
+    sources: list[Source] = field(default_factory=list)
+    findings: dict[str, str] = field(default_factory=dict)
+    knowledge_gaps: list[str] = field(default_factory=list)
+    iteration: int = 0
+    max_iterations: int = 3
+
+
+def decompose_query(question: str) -> list[str]:
+    """Break a complex question into focused sub-questions."""
+    response = client.messages.create(
+        model=MODEL,
+        max_tokens=1024,
+        system=(
+            "You are a research planner. Given a complex question, "
+            "decompose it into 3-6 focused sub-questions that together "
+            "cover the full scope of the original question. Each sub-question "
+            "should be specific enough to produce targeted search results. "
+            "Return a JSON array of strings."
+        ),
+        messages=[{"role": "user", "content": question}],
+    )
+    return json.loads(response.content[0].text)
+
+
+def search_sources(sub_question: str, source_type: str) -> list[Source]:
+    """Search for sources relevant to a sub-question.
+
+    In production, this calls real search APIs (Google, Semantic Scholar,
+    your RAG pipeline). Here we simulate with an LLM call that represents
+    the search-and-retrieve step.
+    """
+    response = client.messages.create(
+        model=MODEL,
+        max_tokens=2048,
+        system=(
+            f"You are simulating a {source_type} search engine. Given a query, "
+            f"return 2-3 realistic search results as a JSON array. Each result "
+            f"has: title, url, content (a 2-3 sentence summary of what the "
+            f"source says), source_type ('{source_type}'). "
+            f"Make the results realistic and relevant."
+        ),
+        messages=[{"role": "user", "content": sub_question}],
+    )
+    results = json.loads(response.content[0].text)
+    return [Source(**r) for r in results]
+
+
+def evaluate_credibility(sources: list[Source]) -> list[Source]:
+    """Score each source on credibility dimensions."""
+    source_descriptions = json.dumps(
+        [{"title": s.title, "url": s.url, "content": s.content,
+          "source_type": s.source_type} for s in sources],
+        indent=2,
+    )
+    response = client.messages.create(
+        model=MODEL,
+        max_tokens=2048,
+        system=(
+            "You are a source credibility evaluator. For each source, assess: "
+            "authority (0-1), recency (0-1), bias risk (0-1, lower is better), "
+            "and specificity (0-1). Return a JSON array of objects with "
+            "'index' (int), 'score' (float, overall 0-1), and 'reasoning' (str)."
+        ),
+        messages=[{"role": "user", "content": source_descriptions}],
+    )
+    evaluations = json.loads(response.content[0].text)
+    for eval_item in evaluations:
+        idx = eval_item["index"]
+        if idx < len(sources):
+            sources[idx].credibility_score = eval_item["score"]
+            sources[idx].credibility_reasoning = eval_item["reasoning"]
+    return sources
+
+
+def synthesize(state: ResearchState) -> str:
+    """Combine findings from multiple sources into a coherent narrative."""
+    # Sort sources by credibility, prioritize high-quality sources
+    ranked_sources = sorted(
+        state.sources, key=lambda s: s.credibility_score, reverse=True
+    )
+
+    source_context = "\n\n".join(
+        f"[Source {i+1}] ({s.source_type}, credibility: {s.credibility_score:.1f}) "
+        f"{s.title}\n{s.content}"
+        for i, s in enumerate(ranked_sources[:20])  # Top 20 sources
+    )
+
+    response = client.messages.create(
+        model=MODEL,
+        max_tokens=4096,
+        system=(
+            "You are a research synthesizer. Given a question and ranked "
+            "sources, produce a structured research report. Use [Source N] "
+            "citations for every factual claim. Organize by theme, not by "
+            "source. Note any contradictions between sources. End with a "
+            "confidence assessment for each major finding."
+        ),
+        messages=[{
+            "role": "user",
+            "content": (
+                f"Question: {state.original_question}\n\n"
+                f"Sub-questions investigated: "
+                f"{json.dumps(state.sub_questions)}\n\n"
+                f"Sources:\n{source_context}"
+            ),
+        }],
+    )
+    return response.content[0].text
+
+
+def identify_gaps(state: ResearchState, synthesis: str) -> list[str]:
+    """Identify knowledge gaps in the current synthesis."""
+    response = client.messages.create(
+        model=MODEL,
+        max_tokens=1024,
+        system=(
+            "You are a research gap analyst. Given an original question and "
+            "a draft synthesis, identify 0-3 specific knowledge gaps -- areas "
+            "where the synthesis is thin, uncertain, or missing important "
+            "aspects. For each gap, formulate a targeted follow-up question. "
+            "If the synthesis is comprehensive, return an empty array. "
+            "Return a JSON array of follow-up question strings."
+        ),
+        messages=[{
+            "role": "user",
+            "content": (
+                f"Original question: {state.original_question}\n\n"
+                f"Current synthesis:\n{synthesis}"
+            ),
+        }],
+    )
+    return json.loads(response.content[0].text)
+
+
+def fact_check(synthesis: str, sources: list[Source]) -> dict:
+    """Adversarially verify claims in the synthesis."""
+    response = client.messages.create(
+        model=MODEL,
+        max_tokens=2048,
+        system=(
+            "You are an adversarial fact-checker. Given a research synthesis, "
+            "extract each major factual claim and assess whether the provided "
+            "sources actually support it. Return a JSON object with: "
+            "'verified_claims' (list of supported claims), "
+            "'unverified_claims' (list of claims lacking source support), "
+            "'contradictions' (list of claims where sources disagree), "
+            "'suggested_revisions' (list of specific text changes to improve "
+            "accuracy). Be strict -- if a source does not explicitly support "
+            "a claim, mark it as unverified."
+        ),
+        messages=[{
+            "role": "user",
+            "content": (
+                f"Synthesis to verify:\n{synthesis}\n\n"
+                f"Available sources:\n"
+                + "\n".join(
+                    f"- {s.title}: {s.content}" for s in sources
+                )
+            ),
+        }],
+    )
+    return json.loads(response.content[0].text)
+
+
+def research_agent(question: str, max_iterations: int = 3) -> str:
+    """
+    Full research agent pipeline: decompose, search, evaluate,
+    synthesize, identify gaps, deepen, and fact-check.
+    """
+    state = ResearchState(
+        original_question=question,
+        max_iterations=max_iterations,
+    )
+
+    # Step 1: Decompose the question
+    print(f"Decomposing question...")
+    state.sub_questions = decompose_query(question)
+    print(f"Sub-questions: {json.dumps(state.sub_questions, indent=2)}")
+
+    # Step 2: Iterative search and synthesis loop
+    while state.iteration < state.max_iterations:
+        state.iteration += 1
+        print(f"\n--- Research iteration {state.iteration} ---")
+
+        # Search multiple source types for each sub-question
+        questions_to_search = (
+            state.sub_questions if state.iteration == 1
+            else state.knowledge_gaps
+        )
+
+        for sq in questions_to_search:
+            for source_type in ["web", "academic", "news"]:
+                new_sources = search_sources(sq, source_type)
+                state.sources.extend(new_sources)
+                print(f"  Found {len(new_sources)} {source_type} "
+                      f"sources for: {sq[:60]}...")
+
+        # Evaluate credibility of all sources
+        print(f"Evaluating {len(state.sources)} sources...")
+        state.sources = evaluate_credibility(state.sources)
+
+        # Synthesize findings
+        print("Synthesizing findings...")
+        synthesis = synthesize(state)
+
+        # Check for knowledge gaps
+        gaps = identify_gaps(state, synthesis)
+        if not gaps:
+            print("No knowledge gaps identified. Research complete.")
+            break
+
+        print(f"Knowledge gaps found: {json.dumps(gaps, indent=2)}")
+        state.knowledge_gaps = gaps
+
+    # Step 3: Fact-check the final synthesis
+    print("\nFact-checking final synthesis...")
+    fact_check_results = fact_check(synthesis, state.sources)
+
+    verified = len(fact_check_results.get("verified_claims", []))
+    unverified = len(fact_check_results.get("unverified_claims", []))
+    contradictions = len(fact_check_results.get("contradictions", []))
+    print(f"Fact-check: {verified} verified, {unverified} unverified, "
+          f"{contradictions} contradictions")
+
+    # Step 4: Generate final report with citations
+    print("\nGenerating final report...")
+    final_report = (
+        f"# Research Report\n\n"
+        f"**Question:** {question}\n\n"
+        f"**Sources consulted:** {len(state.sources)}\n"
+        f"**Research iterations:** {state.iteration}\n"
+        f"**Verified claims:** {verified} | "
+        f"**Unverified:** {unverified}\n\n"
+        f"---\n\n{synthesis}\n\n"
+        f"---\n\n## Fact-Check Notes\n\n"
+    )
+
+    if fact_check_results.get("unverified_claims"):
+        final_report += "**Unverified claims (treat with caution):**\n"
+        for claim in fact_check_results["unverified_claims"]:
+            final_report += f"- {claim}\n"
+
+    if fact_check_results.get("contradictions"):
+        final_report += "\n**Contradictions between sources:**\n"
+        for c in fact_check_results["contradictions"]:
+            final_report += f"- {c}\n"
+
+    return final_report
+
+
+# --- Example usage ---
+report = research_agent(
+    "What are the security implications of deploying LLM agents "
+    "with tool access in enterprise environments?"
+)
+print(report)
+`} language="python" filename="research_agent.py" />
+
+This implementation demonstrates the complete research pipeline. In production, you would replace the simulated `search_sources` function with real API integrations:
+
+- **Web search** via Google Custom Search, Bing Web Search, or Brave Search APIs
+- **Academic search** via the Semantic Scholar API, arXiv API, or CrossRef
+- **Internal document search** via a RAG pipeline built with the patterns from Module 7 -- embed the query, retrieve from a vector store, return relevant document chunks
+- **News search** via NewsAPI, Google News, or similar services
+
+The simulated version is structured identically to a production system -- the only difference is where the source content comes from. This is a deliberate design choice: by abstracting the search behind a simple function interface, you can swap in real search providers without changing the agent's core logic.
+
+## Citation Generation and Traceability
+
+A research report without citations is just a sophisticated hallucination. Citation generation is not an afterthought -- it is a core component that makes the entire system trustworthy.
+
+The citation pipeline works as follows:
+
+- During synthesis, the LLM is instructed to use inline citations like `[Source 3]` whenever it states a factual claim
+- After synthesis, a citation linker maps each `[Source N]` reference back to the actual source URL, title, and relevant passage
+- The final report includes both inline citations and a reference list at the bottom, so readers can verify any claim by following the link
+
+Good citation practices for research agents include:
+
+- **Every factual claim must cite at least one source.** If a claim cannot be attributed to any retrieved source, it is either a hallucination or common knowledge. Common knowledge does not need citation; everything else does.
+- **Cite the most authoritative source.** When multiple sources support the same claim, cite the peer-reviewed paper over the blog post, the primary source over the secondary summary.
+- **Cite specific passages, not entire documents.** When possible, include the relevant quote or section from the source so readers can verify quickly.
+- **Flag synthesized conclusions.** When the agent draws a conclusion by combining information from multiple sources, it should state this explicitly: "Combining findings from [Source 2] and [Source 5], we can infer that..."
+
+## Design Patterns and Practical Considerations
+
+Several patterns emerge from building research agents at scale:
+
+**Parallel search with fan-out** -- Send all sub-questions to all source types simultaneously. This reduces wall-clock time from sequential search (N sub-questions times M source types) to a single parallel batch. The tradeoff is higher concurrent API usage and cost.
+
+**Progressive summarization** -- Do not send full source documents to the synthesizer. Instead, summarize each source into 2-3 key findings first, then synthesize from summaries. This keeps the synthesis context window manageable and focuses the LLM on the most important information. This connects directly to the **map-reduce** pattern -- summarize individual sources (map), then combine summaries (reduce).
+
+**Disagreement surfacing** -- When sources contradict each other, do not silently pick one. Surface the disagreement explicitly: "Source A claims X, while Source B argues Y. The disagreement may stem from..." This gives readers the information they need to form their own judgment.
+
+**Confidence calibration** -- Assign confidence levels to each finding based on the number, quality, and agreement of supporting sources. A finding supported by three peer-reviewed papers gets "high confidence." A finding from a single blog post gets "low confidence." This calibration is a form of epistemic honesty that makes the report more useful.
+
+**Budget management** -- Research agents can be expensive. Each iteration involves multiple LLM calls for search, evaluation, synthesis, and gap analysis. Set clear budgets for maximum iterations, maximum sources per sub-question, and maximum total token spend. Without budgets, a research agent on a broad topic can consume thousands of API calls.
+
+## Limitations and Failure Modes
+
+Research agents have characteristic weaknesses that practitioners must understand:
+
+- **Source availability bias** -- The agent can only find what is publicly searchable or in its internal knowledge base. Important information in paywalled journals, private Slack channels, or experts' heads will be missed. The research is only as good as the sources accessible to the agent.
+
+- **Recency-accuracy tradeoff** -- Web sources are current but often unverified. Academic sources are rigorous but often outdated. The agent must balance these tensions, and users must understand that "current" does not mean "accurate."
+
+- **Synthesis hallucination** -- Even with good sources, the LLM can hallucinate connections, statistics, or conclusions during synthesis. The fact-checking step catches some of these, but not all. Human review of the final report remains essential for high-stakes decisions.
+
+- **Echo chamber risk** -- If multiple sources repeat the same incorrect claim (a common phenomenon on the web), the agent will treat repetition as corroboration. Cross-referencing against diverse source types (academic vs. web vs. internal) helps mitigate this.
+
+- **Question scope creep** -- Broad questions like "explain artificial intelligence" can lead to infinite deepening. The iteration budget is a hard constraint, but the query decomposition step should also reject or narrow questions that are too broad to research meaningfully.
+
+## Summary
+
+Research agents extend the iterative agent pattern from code (generate-test-fix) to knowledge work (search-synthesize-verify). The core pipeline -- query decomposition, multi-source search, credibility evaluation, synthesis, iterative deepening, and adversarial fact-checking -- transforms a single complex question into a structured, cited, and verified report.
+
+The architecture separates concerns into a query planner, parallel search workers, a credibility evaluator, a synthesizer, and a fact-checker. The RAG pipeline from Module 7 serves as the retrieval backbone for internal document search, while web and academic search APIs cover public information. Two feedback loops -- iterative deepening for coverage and fact-checking for accuracy -- give the system self-correcting behavior analogous to the test-driven loops in coding agents.
+
+Citation generation and confidence calibration are not optional additions -- they are what make a research agent's output trustworthy. Without citations, the report is indistinguishable from a hallucination. Without confidence levels, the reader cannot assess which findings to rely on.
+
+In the next lesson, we will explore **domain-specific agents** -- systems tailored for customer support, data analysis, DevOps, and enterprise workflows, where the general patterns you have learned are customized for specific operational contexts.

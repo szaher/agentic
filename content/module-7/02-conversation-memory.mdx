@@ -1,0 +1,476 @@
+---
+title: "Conversation and Short-Term Memory"
+quiz:
+  - question: "A customer support agent uses a buffer memory that stores the full conversation. After 80 turns, the context window is nearly full. What is the most appropriate next step?"
+    options:
+      - "Restart the conversation and ask the user to repeat their issue"
+      - "Switch to a model with a larger context window"
+      - "Transition to a sliding window or summarization strategy to compress older turns while preserving the most important context"
+      - "Stop using memory entirely and only process the latest message"
+    correctIndex: 2
+  - question: "Why is a summarization memory strategy more expensive than a sliding window?"
+    options:
+      - "Summarization requires a vector database, which has hosting costs"
+      - "Summaries consume more tokens than the original messages"
+      - "Each summarization step requires an additional LLM call to generate the compressed summary, adding latency and API costs"
+      - "Sliding windows cannot be used with chat-based models"
+    correctIndex: 2
+  - question: "An agent uses a sliding window of 20 messages. In message 3, the user said 'Always respond in French.' At message 25, the agent starts responding in English. What went wrong?"
+    options:
+      - "The LLM forgot the instruction due to attention limitations"
+      - "The sliding window evicted message 3 when the window advanced past it, so the instruction is no longer in the context"
+      - "The summarization step failed to include the language preference"
+      - "The system prompt overrode the user's language preference"
+    correctIndex: 1
+  - question: "When injecting a conversation summary into the context, where should it be placed relative to other messages?"
+    options:
+      - "At the very end, after the latest user message"
+      - "Randomly inserted among recent messages to simulate natural recall"
+      - "Immediately after the system prompt and before the recent message window, so the LLM has background context before processing current turns"
+      - "In a separate API call before the main conversation request"
+    correctIndex: 2
+---
+
+## Overview
+
+In the previous lesson, you learned *why* memory matters -- the context window is finite, and agents that run for more than a handful of turns will inevitably run out of room. You also saw the taxonomy of memory types: sensory, short-term, and long-term.
+
+This lesson zooms into **short-term memory** -- specifically, how agents manage conversation history within a session. Every time you chat with an LLM, the entire conversation must be re-sent with each request. The model does not "remember" what you said three messages ago unless you explicitly include those messages in the next API call. This is the fundamental mechanic that conversation memory must solve.
+
+Think of it like a whiteboard in a meeting room. The whiteboard has limited space (the context window). As the meeting progresses and you fill the board, you need a strategy: do you erase the oldest notes? Do you photograph them and summarize the key points? Do you keep a separate notebook and only write the most important items on the board? Each choice has trade-offs, and the right answer depends on how long the meeting runs and what kind of information matters most.
+
+By the end of this lesson, you will understand three core strategies for managing conversation memory -- buffer, sliding window, and summarization -- know when to use each one, and have a working implementation you can adapt for your own agents.
+
+## How Conversation Memory Actually Works
+
+Before diving into strategies, let's make sure the underlying mechanic is crystal clear. LLMs are **stateless**. Every API call is independent. The model receives a list of messages, generates a response, and immediately forgets everything. There is no server-side session, no hidden state, no implicit memory.
+
+**Conversation memory** is an application-level construct. Your code is responsible for storing messages, deciding which ones to include in the next request, and assembling them into the messages array that gets sent to the API. The LLM sees only what you put in that array.
+
+<MermaidDiagram chart={`sequenceDiagram
+    participant User
+    participant App as Agent App
+    participant Mem as Conversation<br/>Memory
+    participant LLM
+
+    User->>App: "What is Kubernetes?"
+    App->>Mem: store(user, "What is Kubernetes?")
+    App->>Mem: get_messages()
+    Mem-->>App: [sys_prompt, user_msg_1]
+    App->>LLM: messages=[sys_prompt, user_msg_1]
+    LLM-->>App: "Kubernetes is a container orchestration..."
+    App->>Mem: store(assistant, "Kubernetes is a container...")
+
+    User->>App: "How does it compare to Docker Swarm?"
+    App->>Mem: store(user, "How does it compare...")
+    App->>Mem: get_messages()
+    Mem-->>App: [sys_prompt, user_msg_1, asst_msg_1, user_msg_2]
+    App->>LLM: messages=[sys_prompt, user_msg_1, asst_msg_1, user_msg_2]
+    LLM-->>App: "While Kubernetes and Docker Swarm both..."
+    App->>Mem: store(assistant, "While Kubernetes and Docker Swarm...")
+
+    User->>App: "Which should I use for a small team?"
+    App->>Mem: store(user, "Which should I use...")
+    App->>Mem: get_messages()
+    Mem-->>App: [sys_prompt, msg_1...msg_5]
+    App->>LLM: messages=[sys_prompt, msg_1...msg_5]
+    LLM-->>App: "For a small team, I'd recommend..."
+    App->>Mem: store(assistant, "For a small team...")
+`} />
+
+Notice the pattern: every turn, the full conversation is re-sent. Turn 1 sends 2 messages. Turn 2 sends 4. Turn 3 sends 6. By turn 50, you are sending 102 messages -- and every single one counts against your token budget. This is why conversation memory is not optional; it is inevitable. The only question is *which strategy* you use to manage the growth.
+
+## The Three Core Strategies
+
+There are three fundamental strategies for managing conversation history: **buffer memory**, **sliding window memory**, and **summarization memory**. Every production memory system is built from one or a combination of these primitives.
+
+<MermaidDiagram chart={`flowchart TD
+    START{"How many turns will<br/>this conversation run?"} -->|"< 10 turns"| BUFFER["Buffer Memory<br/>────────────────<br/>Store everything verbatim<br/>No compression needed"]
+    START -->|"10-50 turns"| WINDOW["Sliding Window Memory<br/>────────────────<br/>Keep last K messages<br/>Drop oldest turns"]
+    START -->|"50+ turns"| CHECK{"Does the agent need<br/>facts from early turns?"}
+    CHECK -->|"No"| WINDOW2["Sliding Window<br/>────────────────<br/>Large window size<br/>Acceptable information loss"]
+    CHECK -->|"Yes"| SUMMARIZE["Summarization Memory<br/>────────────────<br/>Compress old turns to summary<br/>Keep recent turns verbatim"]
+
+    BUFFER -.->|"If turns grow<br/>unexpectedly"| WINDOW
+    WINDOW -.->|"If critical context<br/>is being lost"| SUMMARIZE
+
+    style START fill:#ebf8ff,stroke:#3182ce,stroke-width:2px
+    style BUFFER fill:#c6f6d5,stroke:#38a169
+    style WINDOW fill:#fefcbf,stroke:#d69e2e
+    style WINDOW2 fill:#fefcbf,stroke:#d69e2e
+    style CHECK fill:#f7fafc,stroke:#4a5568
+    style SUMMARIZE fill:#fed7d7,stroke:#fc8181
+`} />
+
+Let's examine each strategy in detail.
+
+### Buffer Memory
+
+**Buffer memory** is the simplest approach: store every message and include all of them in every LLM request. No truncation, no compression, no information loss.
+
+This is what you are probably doing already if you have built a basic chatbot. You append each message to a list and pass the full list to the API every turn.
+
+**When it works:** Short conversations (under 10 turns), prototyping, demos, and any scenario where you are confident the total token count will stay well within the context window.
+
+**When it breaks:** The moment the conversation exceeds the context window. A 128k token window sounds generous, but a multi-step agent with tool calls can fill it in 20-30 turns. A verbose user explaining a complex problem can fill it in 10. Buffer memory gives you zero protection against overflow -- it works perfectly until it suddenly does not.
+
+### Sliding Window Memory
+
+**Sliding window memory** keeps only the most recent K messages (or K tokens) and drops everything older. It is the buffer's natural evolution -- you still store everything verbatim, but only the tail of the conversation enters the context window.
+
+**When it works:** Conversations where recency is the strongest signal of relevance. A coding assistant working through a file edit-by-edit rarely needs to recall what happened 30 turns ago. A customer service agent handling sequential, independent questions can safely drop earlier exchanges.
+
+**When it breaks:** When early messages contain information that stays relevant throughout the conversation. If the user states "I'm running macOS on an M2 chip" in message 2 and the window only holds the last 20 messages, that constraint vanishes at message 22. The agent might start suggesting Windows-specific solutions without realizing it lost critical context.
+
+### Summarization Memory
+
+**Summarization memory** compresses older messages into a condensed summary and keeps recent messages verbatim. The LLM sees the summary (capturing what happened before) followed by the full recent conversation (capturing what is happening now).
+
+**When it works:** Long conversations where early context matters. A project planning agent that discussed requirements 40 turns ago needs those requirements to persist even as the conversation shifts to implementation details. Summarization preserves the *essence* of those early turns without paying the full token cost.
+
+**When it breaks:** When exact details matter. Summaries are lossy by nature -- they preserve themes and decisions but may drop specific numbers, exact error messages, or verbatim code snippets. If your agent needs to recall the precise content of an earlier message, summarization alone is not enough (you need retrieval, which we cover in lesson 04).
+
+## Building a ConversationMemory Class
+
+Let's implement all three strategies in a single, configurable class. This design lets you switch strategies without changing the rest of your agent code.
+
+<CodeBlock code={`from dataclasses import dataclass, field
+from enum import Enum
+from typing import Optional, Callable
+
+
+class MemoryStrategy(Enum):
+    """Available conversation memory strategies."""
+    BUFFER = "buffer"
+    SLIDING_WINDOW = "sliding_window"
+    SUMMARIZATION = "summarization"
+
+
+@dataclass
+class Message:
+    """A single conversation message."""
+    role: str       # "system", "user", "assistant", "tool"
+    content: str
+    token_count: int = 0
+    turn_number: int = 0
+
+    def to_dict(self) -> dict:
+        return {"role": self.role, "content": self.content}
+
+
+class ConversationMemory:
+    """Manages conversation history with configurable strategies.
+
+    Supports three modes:
+    - buffer: keeps all messages (simplest, no compression)
+    - sliding_window: keeps the last 'window_size' messages
+    - summarization: summarizes older messages, keeps recent ones verbatim
+    """
+
+    def __init__(
+        self,
+        strategy: MemoryStrategy = MemoryStrategy.BUFFER,
+        window_size: int = 20,
+        token_limit: int = 80_000,
+        summarize_fn: Optional[Callable[[str], str]] = None,
+        count_tokens_fn: Optional[Callable[[str], int]] = None,
+    ):
+        self.strategy = strategy
+        self.window_size = window_size
+        self.token_limit = token_limit
+        self.summarize_fn = summarize_fn
+        self._count_tokens = count_tokens_fn or self._simple_token_count
+
+        self._messages: list[Message] = []
+        self._summary: Optional[str] = None
+        self._summary_token_count: int = 0
+        self._turn_counter: int = 0
+
+    # ── Public API ──────────────────────────────────────────────
+
+    def add_message(self, role: str, content: str) -> None:
+        """Store a new message in memory."""
+        msg = Message(
+            role=role,
+            content=content,
+            token_count=self._count_tokens(content),
+            turn_number=self._turn_counter,
+        )
+        self._messages.append(msg)
+        self._turn_counter += 1
+
+    def get_messages(self, system_prompt: Optional[str] = None) -> list[dict]:
+        """Retrieve messages formatted for an LLM API call.
+
+        Applies the configured strategy to select which messages
+        to include. Optionally prepends a system prompt.
+        """
+        if self.strategy == MemoryStrategy.BUFFER:
+            selected = self._apply_buffer()
+        elif self.strategy == MemoryStrategy.SLIDING_WINDOW:
+            selected = self._apply_sliding_window()
+        elif self.strategy == MemoryStrategy.SUMMARIZATION:
+            selected = self._apply_summarization()
+        else:
+            raise ValueError(f"Unknown strategy: {self.strategy}")
+
+        messages = [m.to_dict() for m in selected]
+
+        if system_prompt:
+            messages.insert(0, {"role": "system", "content": system_prompt})
+
+        return messages
+
+    def get_stats(self) -> dict:
+        """Return memory statistics for monitoring."""
+        total_tokens = sum(m.token_count for m in self._messages)
+        return {
+            "strategy": self.strategy.value,
+            "total_messages": len(self._messages),
+            "total_tokens": total_tokens,
+            "has_summary": self._summary is not None,
+            "summary_tokens": self._summary_token_count,
+            "token_limit": self.token_limit,
+            "utilization_pct": round(total_tokens / self.token_limit * 100, 1)
+                if self.token_limit > 0 else 0,
+        }
+
+    # ── Strategy implementations ────────────────────────────────
+
+    def _apply_buffer(self) -> list[Message]:
+        """Buffer strategy: return all messages."""
+        return list(self._messages)
+
+    def _apply_sliding_window(self) -> list[Message]:
+        """Sliding window: return the last 'window_size' messages."""
+        if len(self._messages) <= self.window_size:
+            return list(self._messages)
+        return list(self._messages[-self.window_size :])
+
+    def _apply_summarization(self) -> list[Message]:
+        """Summarization: compress old messages, keep recent ones."""
+        if len(self._messages) <= self.window_size:
+            # Not enough messages to justify summarization
+            return list(self._messages)
+
+        # Split into old (to summarize) and recent (to keep verbatim)
+        split_point = len(self._messages) - self.window_size
+        old_messages = self._messages[:split_point]
+        recent_messages = self._messages[split_point:]
+
+        # Build or update the summary of old messages
+        self._update_summary(old_messages)
+
+        # Return: summary (as a system message) + recent messages
+        result = []
+        if self._summary:
+            result.append(Message(
+                role="system",
+                content=f"[Conversation summary so far]\n{self._summary}",
+                token_count=self._summary_token_count,
+            ))
+        result.extend(recent_messages)
+        return result
+
+    def _update_summary(self, old_messages: list[Message]) -> None:
+        """Generate or refresh the summary of older messages."""
+        if not self.summarize_fn:
+            # No summarizer provided -- fall back to sliding window
+            return
+
+        # Format the messages for the summarizer
+        conversation_text = "\n".join(
+            f"[{m.role}]: {m.content}" for m in old_messages
+        )
+
+        # If we already have a summary, include it for continuity
+        if self._summary:
+            prompt = (
+                f"Previous summary:\n{self._summary}\n\n"
+                f"New messages to incorporate:\n{conversation_text}"
+            )
+        else:
+            prompt = conversation_text
+
+        self._summary = self.summarize_fn(prompt)
+        self._summary_token_count = self._count_tokens(self._summary)
+
+    # ── Helpers ─────────────────────────────────────────────────
+
+    @staticmethod
+    def _simple_token_count(text: str) -> int:
+        """Rough token estimate (4 chars per token). Use tiktoken in production."""
+        return len(text) // 4
+`} language="python" filename="conversation_memory.py" />
+
+Let's walk through the key design decisions:
+
+- **Strategy as a parameter, not a subclass.** You can change the strategy at runtime -- start with buffer mode during the first 10 turns, then switch to sliding window as the conversation grows. This flexibility matters in production.
+- **`summarize_fn` is injected.** The class does not know or care how summarization works. You can pass a function that calls Claude, GPT-4, or even a local model. This keeps the memory class focused on *when* to summarize, not *how*.
+- **`get_messages()` assembles the output fresh each call.** The raw messages are always preserved in `_messages`. The strategy only affects what `get_messages()` returns, not what is stored. You can switch strategies mid-conversation without losing data.
+- **The summary is injected as a system message.** Placing it with the `system` role ensures the LLM treats it as authoritative context rather than something a user or assistant said. The `[Conversation summary so far]` prefix makes its nature explicit.
+
+## Wiring the Memory into an Agent
+
+Here is how you use the `ConversationMemory` class in an agent loop, including a practical summarization function.
+
+<CodeBlock code={`from conversation_memory import ConversationMemory, MemoryStrategy
+
+
+def make_summarizer(llm_client):
+    """Create a summarization function using an LLM."""
+    def summarize(conversation_text: str) -> str:
+        response = llm_client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=500,
+            system=(
+                "Summarize this conversation. Preserve: key decisions, "
+                "stated requirements, important facts, and open questions. "
+                "Be concise but do not drop critical details."
+            ),
+            messages=[{"role": "user", "content": conversation_text}],
+        )
+        return response.content[0].text
+    return summarize
+
+
+def run_agent(llm_client) -> None:
+    """An agent loop with conversation memory."""
+
+    # Configure memory with summarization strategy
+    memory = ConversationMemory(
+        strategy=MemoryStrategy.SUMMARIZATION,
+        window_size=15,           # keep last 15 messages verbatim
+        token_limit=80_000,
+        summarize_fn=make_summarizer(llm_client),
+    )
+
+    system_prompt = (
+        "You are a helpful project planning assistant. "
+        "Help the user define requirements and create a plan."
+    )
+
+    print("Agent ready. Type 'quit' to exit, 'stats' for memory info.\n")
+
+    while True:
+        user_input = input("You: ").strip()
+        if user_input.lower() == "quit":
+            break
+        if user_input.lower() == "stats":
+            for key, val in memory.get_stats().items():
+                print(f"  {key}: {val}")
+            continue
+
+        # Store user message and build context
+        memory.add_message("user", user_input)
+        messages = memory.get_messages(system_prompt=system_prompt)
+
+        # Call the LLM with managed conversation history
+        response = llm_client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=2048,
+            messages=messages,
+        )
+        assistant_reply = response.content[0].text
+
+        # Store assistant response
+        memory.add_message("assistant", assistant_reply)
+        print(f"Agent: {assistant_reply}\n")
+
+
+# Example usage:
+# from anthropic import Anthropic
+# client = Anthropic()
+# run_agent(client)
+`} language="python" filename="agent_with_memory.py" />
+
+Notice how the agent loop itself is clean -- it calls `memory.add_message()` to store and `memory.get_messages()` to retrieve. The compression strategy is completely invisible to the loop. If you later decide to switch from summarization to sliding window, you change one parameter at initialization and nothing else.
+
+## How Summarization Flows Through the Conversation
+
+To understand what the LLM actually *sees* at each turn, let's trace through a multi-turn conversation using summarization memory with a window size of 4.
+
+<MermaidDiagram chart={`sequenceDiagram
+    participant Mem as Memory Store
+    participant CTX as Context Builder
+    participant LLM
+
+    Note over Mem: Turn 1-4: Buffer mode (under window_size)
+    Mem->>CTX: [msg1, msg2, msg3, msg4]
+    CTX->>LLM: system + msg1..msg4
+
+    Note over Mem: Turn 5: Summarization triggers
+    Mem->>Mem: Summarize msg1 into summary_v1
+    Mem->>CTX: [summary_v1, msg2, msg3, msg4, msg5]
+    CTX->>LLM: system + summary_v1 + msg2..msg5
+
+    Note over Mem: Turn 8: Summary grows
+    Mem->>Mem: Summarize msg1..msg4 into summary_v2
+    Mem->>CTX: [summary_v2, msg5, msg6, msg7, msg8]
+    CTX->>LLM: system + summary_v2 + msg5..msg8
+
+    Note over Mem: Turn 20: Summary covers turns 1-16
+    Mem->>Mem: summary_v2 + msg5..msg16 → summary_v5
+    Mem->>CTX: [summary_v5, msg17, msg18, msg19, msg20]
+    CTX->>LLM: system + summary_v5 + msg17..msg20
+`} />
+
+At turn 20, the LLM sees three things in this order:
+
+1. **System prompt** -- who the agent is and what it can do
+2. **Summary** -- a compressed account of turns 1 through 16, covering key decisions, requirements, and facts from those earlier turns
+3. **Recent messages** -- the verbatim last 4 messages, giving the LLM full detail on the current thread of conversation
+
+This layered structure is powerful. The summary provides *breadth* (the agent knows what happened earlier), while the recent window provides *depth* (the agent sees exact wording, code snippets, and nuances of the current exchange). Together, they give the LLM the illusion of a much longer memory than the context window would otherwise allow.
+
+## Connecting to Context Management
+
+If you completed Module 6, lesson 04 on context window management, you may notice a strong connection. The `ConversationMemory` class handles *what messages to include*, while the `ContextManager` from that lesson handles *how to allocate token budgets* across system prompts, history, tool results, and generation space.
+
+In a production agent, these two systems work together:
+
+- The **ConversationMemory** decides which messages represent the conversation history -- applying buffer, window, or summarization as appropriate
+- The **ContextManager** takes that history and fits it alongside tool results, system prompts, and generation reserves into the overall token budget
+
+Think of conversation memory as the *content curator* and context management as the *space allocator*. The curator selects what is worth showing. The allocator ensures it all fits.
+
+> **Key insight:** Conversation memory and context management are complementary, not competing. Memory strategies decide *which* information to keep. Context budgets decide *how much room* that information gets. A well-designed agent uses both.
+
+## Trade-Off Comparison
+
+Each strategy has distinct characteristics that matter for different use cases.
+
+| Characteristic | Buffer | Sliding Window | Summarization |
+|---|---|---|---|
+| **Implementation complexity** | Trivial | Simple | Moderate |
+| **Information loss** | None | Abrupt (old messages vanish) | Gradual (details compressed) |
+| **Token cost per turn** | Grows linearly | Constant (capped at window) | Moderate (summary + window) |
+| **Extra LLM calls** | None | None | One per summarization cycle |
+| **Latency impact** | Grows with history | Constant | Spikes during summarization |
+| **Best for** | Short conversations, prototypes | Recency-focused tasks | Long conversations needing context |
+
+In practice, many production agents use a **hybrid approach**: start with buffer mode, switch to sliding window when a soft threshold is crossed, and upgrade to summarization if the agent detects that it is losing critical context (for example, if a user references something that is no longer in the window).
+
+## Common Pitfalls
+
+**Pitfall 1: Forgetting that memory is re-sent every turn.** New developers sometimes assume the LLM "remembers" the previous call. It does not. If you forget to include conversation history in the messages array, the agent has complete amnesia every turn.
+
+**Pitfall 2: Summarizing too frequently.** If you summarize after every single new message, you are making an LLM call per turn just for memory management. This doubles your latency and cost. Summarize in batches -- when the old-message block grows by 10-20 messages, not every time it grows by 1.
+
+**Pitfall 3: Losing the system prompt in the summary.** If your system prompt is stored as the first message and your sliding window drops it, the agent loses its instructions and persona. Always treat the system prompt separately -- pass it through `get_messages(system_prompt=...)` rather than storing it as a regular message.
+
+**Pitfall 4: Not monitoring memory health.** Without visibility into memory stats, you will not know that your agent is silently losing context until users report inconsistent behavior. Always expose metrics like total tokens used, summarization frequency, and utilization percentage. The `get_stats()` method exists for exactly this reason.
+
+## Summary
+
+Conversation memory is the mechanism that gives stateless LLMs the appearance of continuity. Because every API call is independent, your application must explicitly manage which messages to re-send, how many to keep, and what to do when the conversation outgrows the context window.
+
+- **Buffer memory** stores everything and works perfectly for short conversations, but offers no protection against context overflow
+- **Sliding window memory** caps the context at the most recent K messages, providing predictable token usage at the cost of abrupt information loss for older turns
+- **Summarization memory** compresses older turns into a condensed summary, preserving semantic content at reduced token cost -- but adds latency, API expense, and lossy compression
+- The **ConversationMemory** class encapsulates all three strategies behind a common interface: `add_message()` to store, `get_messages()` to retrieve with the active strategy applied
+- In production, conversation memory works alongside the **context manager** (Module 6, lesson 04) -- memory selects *which* messages to keep, the context manager allocates *how much space* they get
+- **Monitor memory health** with utilization metrics to catch context overflow before it causes inconsistent agent behavior
+- Most production agents use a **hybrid approach**, starting with buffer mode and escalating to summarization as conversations grow
+
+Everything we have covered in this lesson happens *within a single session*. When the user closes the chat and comes back tomorrow, the conversation memory is gone. What about remembering across sessions? What about learning facts that persist indefinitely -- a user's preferences, past decisions, or domain knowledge accumulated over weeks of interaction? That is the domain of **long-term memory**, which we explore in the next lesson.
