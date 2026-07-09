@@ -13,7 +13,7 @@
 - Do NOT modify any `src/`, `__tests__/`, or root config files (except `academy.config.ts` for the color array).
 - Use `##` headings only inside lesson bodies — never `#`.
 - Every `<MermaidDiagram>` must have a `chart` prop with valid Mermaid syntax.
-- Every `<CodeBlock>` must have `code`, `language`, and `filename` props.
+- Every `<CodeBlock>` must have `code`, `language`, and `filename` props. Use the existing project's `<CodeBlock>` prop style exactly: `<CodeBlock code={...} language="python" filename="example.py" />`. Do not use children-based code blocks — the component expects code passed via the `code` prop as a template literal.
 - Cross-references use prose form: `Module N (Title)` or `Module N, Lesson N`.
 - Frontmatter quizzes have exactly 4 options per question, 0-based `correctIndex`.
 - Lab lessons (09, 10) omit frontmatter quizzes.
@@ -162,7 +162,7 @@ grep -rn "Module 5" content/module-{1,2,3,4,6,7,8,9,10,11,12,13}/ --include="*.m
 # Should return 0 results
 ```
 
-- [ ] **Step 5: Add 13th entry to academy.config.ts moduleColors**
+- [ ] **Step 6: Add 13th entry to academy.config.ts moduleColors**
 
 The existing array has 12 entries. Add a 13th using `#ed8936` (continuing the repeating color cycle). Open `academy.config.ts` and extend the `moduleColors` array:
 
@@ -174,7 +174,7 @@ moduleColors: ["#68d391", "#4fd1c5", "#63b3ed", "#b794f4", "#ed8936", "#fc8181",
 moduleColors: ["#68d391", "#4fd1c5", "#63b3ed", "#b794f4", "#9f7aea", "#ed8936", "#fc8181", "#ecc94b", "#68d391", "#4fd1c5", "#63b3ed", "#b794f4", "#ed8936"]
 ```
 
-- [ ] **Step 6: Verify renumbering is correct**
+- [ ] **Step 7: Verify renumbering is correct**
 
 ```bash
 cd /Users/szaher/go/src/github.com/szaher/saad/learn/agents
@@ -190,7 +190,7 @@ done
 # Should have no output (all match). Module 5 dir doesn't exist yet — that's expected.
 ```
 
-- [ ] **Step 7: Commit the renumbering**
+- [ ] **Step 8: Commit the renumbering**
 
 ```bash
 cd /Users/szaher/go/src/github.com/szaher/saad/learn/agents
@@ -1013,7 +1013,9 @@ This is the first build lab. Students incrementally construct a working harness.
 ```
 ## Overview
 - You've learned the eight concerns conceptually. Now build.
-- Design constraints: no persistence, no tracing, no frameworks. Raw API calls.
+- Design constraints: no persistence, no tracing, no frameworks.
+- Use a **fake deterministic model client** (`FakeModelClient`) for all stages: a class that returns scripted tool-call sequences based on keyword matching in input. This keeps stages reproducible and runnable without API credentials.
+- Include a short "Swap in a real provider" note at the end showing how to replace `FakeModelClient` with `anthropic.Anthropic()` or `openai.OpenAI()`.
 
 ## Stage 1: The Bare Loop (20 lines)
 - <CodeBlock language="python" filename="harness_v1.py">
@@ -1061,7 +1063,7 @@ This is the first build lab. Students incrementally construct a working harness.
 - Connect to Lesson 10: extend with state, checkpoints, tracing, and an approval gate.
 ```
 
-Each stage is a progressive snippet showing only the new/changed code. The final `harness.py` `<CodeBlock>` is the complete, self-contained, copy-paste-runnable version (with an API key). Avoid duplicating full code across stages — use progressive diffs with clear annotations of what changed. The key requirement: **each stage is understandable; the final code block is complete and runnable.**
+Each stage is a progressive snippet showing only the new/changed code. The final `harness.py` `<CodeBlock>` is the complete, self-contained, copy-paste-runnable version using the `FakeModelClient` (no API key needed). Avoid duplicating full code across stages — use progressive diffs with clear annotations of what changed. The key requirement: **each stage is understandable; the final code block is complete and runnable.**
 
 - [ ] **Step 2: Verify all code examples are syntactically valid**
 
