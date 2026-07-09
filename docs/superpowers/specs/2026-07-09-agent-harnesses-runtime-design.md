@@ -337,7 +337,7 @@ This vocabulary is used consistently throughout the module and maps directly to 
 **Framework comparison (guardrails vs HITL, carefully distinguished):**
 
 - **LangGraph / LangChain:** Interrupts, breakpoints, and HITL middleware for pausing execution and waiting for a decision. The middleware checks a proposed tool call against a configurable policy, pauses execution, and waits for a human decision when review is required.
-- **OpenAI Agents SDK:** Guardrails (runtime checks around inputs/outputs/tools — automated safety, not human approval) and handoffs (agent-to-agent, which can include human-agent handoff). Resumable approval flows are application-level, built on top of sessions and run management.
+- **OpenAI Agents SDK:** Guardrails are automated runtime checks around inputs/outputs/tools. HITL approvals are a distinct built-in flow for sensitive tool calls: runs pause with interruptions, surface pending approvals, serialize `RunState`, and resume after approval or rejection. Review UI, notification, policy design, and approval queues remain application responsibilities.
 - **Custom harnesses:** Policy checks, approval queues, saved run state, and resume commands.
 
 Guardrails and human-in-the-loop are related but distinct mechanisms. Guardrails are automated runtime checks; HITL is a pause-for-human-decision pattern. A harness may use both.
@@ -493,12 +493,15 @@ The approval gate is conceptually: **pause → checkpoint → emit approval requ
 
 **Harness categories:**
 
-**Lightweight SDKs** — Thin wrappers around the model API that manage the loop, tool dispatch, and basic guardrails. Minimal opinions about state, persistence, or control flow.
+**Agent SDKs / Model-adjacent runtimes** — Runtimes that sit close to the model API, ranging from lower-level tool-calling interfaces to fully managed agent loops with built-in tools, hooks, and observability.
 
-- **OpenAI Agents SDK:** Managed agent loop via Runner, tool execution, handoffs, guardrails, tracing, sessions.
-- **Anthropic Messages API + tool_use:** Lower-level conversation-based loop. The developer manages the loop, context, and tool dispatch; the API provides structured tool calling.
-- **Claude Agent SDK:** Higher-level agent runtime with managed agent loop, tool execution, context management, permissions, hooks, checkpointing, cost tracking, and OpenTelemetry observability. Distinct from the raw Messages API.
-- **Vercel AI SDK:** Streaming-first, multi-provider, tool calling, structured outputs.
+- **Lower-level model APIs:**
+  - **Anthropic Messages API + tool_use:** The developer manages the loop, context, and tool dispatch; the API provides structured tool calling via tool_use/tool_result blocks.
+- **Managed agent SDKs:**
+  - **OpenAI Agents SDK:** Managed agent loop via Runner, tool execution, handoffs, guardrails, tracing, sessions.
+  - **Claude Agent SDK:** Full agent runtime providing the same tools, agent loop, and context management that power Claude Code — including built-in tools, hooks, subagents, MCP, permissions, sessions, cost tracking, and OpenTelemetry observability. Distinct from the raw Messages API.
+- **UI/app agent SDKs:**
+  - **Vercel AI SDK:** Streaming-first, multi-provider, tool calling, structured outputs.
 
 **Graph runtimes** — Agents modeled as directed graphs with explicit nodes, edges, and state. The harness walks the graph, managing state transitions, persistence, and human intervention.
 
@@ -524,14 +527,16 @@ The approval gate is conceptually: **pause → checkpoint → emit approval requ
 | Tool dispatch | Built-in | tool_use API blocks | Built-in + MCP | Node-based | Tool delegation | Function map | Your code |
 | Context/state | RunContext + sessions | Messages array | Managed context | State channels | Shared memory | Chat history | Your code |
 | Control flow | Linear + handoffs | Developer-managed | Linear + hooks | Graph edges | Sequential/hierarchical | Conversation turns | Your code |
-| Persistence | Sessions | External | Checkpointing | Checkpointers + stores | External | External | Your code |
-| Human intervention | Guardrails + approval flows | External | Permissions + hooks | Interrupts + breakpoints | External | Human proxy agent | Your code |
+| Persistence | Sessions | External | File checkpointing + session continuity; external for full run-state durability | Checkpointers + stores | External | External | Your code |
+| Human intervention | Guardrails + built-in HITL approvals | External | Permissions + hooks | Interrupts + breakpoints | External | Human proxy agent | Your code |
 | Observability | Built-in tracing | External | OpenTelemetry + cost tracking | LangSmith | External | External | Your code |
 | Multi-agent | Handoffs | External | External | Subgraphs | Native crews | Native groups | Your code |
 | Deployment model | Local process / hosted | Any (API client) | Local process / CLI | Local / LangGraph Platform | Local process | Local process | Any |
 | Protocol support | Native tools | tool_use protocol | MCP native | MCP adapters | MCP adapters | Custom tool APIs | Any |
 
 **Key insight:** "Custom" appears in every row because every harness is ultimately custom code making decisions about these eight concerns. Frameworks shift where the customization happens — from "you write the loop" to "you configure the graph" — but the concerns don't disappear.
+
+**Ecosystem snapshot:** This comparison reflects the framework landscape as of the module review date. Agent SDK capabilities change quickly; verify persistence, HITL, tracing, MCP, and deployment support against current docs before making production decisions. MCP and A2A are both evolving open standards — protocol-native runtime claims should be treated as time-sensitive.
 
 **Diagrams:**
 
