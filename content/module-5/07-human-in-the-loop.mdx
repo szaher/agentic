@@ -1,0 +1,502 @@
+---
+title: "Human-in-the-Loop and Intervention Points"
+quiz:
+  - question: "What is the critical distinction between guardrails and HITL?"
+    options:
+      - "Guardrails are for safety, HITL is for efficiency"
+      - "Guardrails are automated runtime checks, HITL pauses for human decisions"
+      - "Guardrails run before actions, HITL runs after"
+      - "Guardrails and HITL are interchangeable terms"
+    correctIndex: 1
+    explanation: "Guardrails are automated checks (input validation, content safety) that run without human involvement. HITL is a pause-for-human-decision pattern requiring persistence to checkpoint and resume. They are complementary, not interchangeable."
+  - question: "Why does HITL intervention require persistence?"
+    options:
+      - "To log human decisions for compliance"
+      - "To checkpoint run state before pausing and resume after approval"
+      - "To cache expensive API calls"
+      - "To reduce memory usage during pauses"
+    correctIndex: 1
+    explanation: "HITL requires checkpointing the agent's state before pausing execution and the ability to resume from that checkpoint after receiving the human decision. This is why Lesson 6 called intervention and persistence 'the production triad.'"
+  - question: "Which intervention point applies when an agent's cost exceeds budget?"
+    options:
+      - "Pre-action approval"
+      - "Post-action review"
+      - "Goal modification"
+      - "Escalation on uncertainty"
+    correctIndex: 3
+    explanation: "Cost exceeding budget is an escalation trigger. The harness detects the anomaly and escalates to a human for decision on whether to continue, modify the goal, or abort."
+  - question: "What is the main tradeoff between synchronous and asynchronous intervention?"
+    options:
+      - "Sync is more secure, async is faster"
+      - "Sync blocks until human responds, async pauses the agent but doesn't block the system"
+      - "Sync costs more API tokens, async uses less memory"
+      - "Sync supports more intervention points than async"
+    correctIndex: 1
+    explanation: "Synchronous intervention blocks execution until the human responds (human is waiting), while asynchronous intervention pauses the agent but allows the system to continue processing other tasks (human reviews later when available)."
+---
+
+## Overview
+
+**Intervention is the eighth first-class harness concern** — not an afterthought, but a deliberate architectural choice. In Lesson 6 (Persistence), we introduced the production triad: *persistence enables recovery, recovery enables intervention*. Without persistence to checkpoint state, HITL patterns cannot pause and resume safely.
+
+This lesson focuses on **when and how humans intervene in agent execution**. We'll cover five intervention points, the approval gate pattern, the autonomy-oversight spectrum, guardrails vs HITL distinction, and how production harnesses implement intervention policies.
+
+**Why intervention matters:**
+- Agents make mistakes. Humans correct course before damage occurs.
+- High-stakes actions (delete production database, send legal notice) demand approval.
+- Uncertainty signals (low confidence, unfamiliar domains) trigger escalation.
+- Regulations and organizational policy require human oversight for certain decisions.
+
+Intervention is not a sign of failure — it's a deliberate control mechanism.
+
+## Five Intervention Points
+
+A harness provides multiple **intervention points** where humans can influence agent behavior:
+
+### 1. Pre-Action Approval
+
+The harness **pauses before executing a high-risk action** and requests human approval.
+
+**Example:** Before the agent runs `DROP TABLE users`, the harness checkpoints state, presents the proposed SQL, and waits for approval.
+
+**Use cases:**
+- Destructive actions (delete files, revoke permissions)
+- External communications (send email, post to Slack, create PR)
+- Financial transactions (charge credit card, transfer funds)
+
+### 2. Post-Action Review
+
+The harness **executes the action but logs it for human review**. The human can approve or roll back.
+
+**Example:** The agent commits code to a branch. A human reviews the diff before merging to main.
+
+**Use cases:**
+- Low-risk actions where rollback is possible
+- Batch operations where pre-approval is impractical (100 file edits)
+- Audit trails for compliance
+
+### 3. Goal Modification
+
+The human **changes the agent's goal mid-execution**.
+
+**Example:** The agent is searching for "best cloud provider." The human narrows the goal to "cheapest cloud provider for batch workloads under $500/month."
+
+**Use cases:**
+- The original goal was underspecified
+- New information changes priorities
+- The agent is stuck in an unproductive loop
+
+### 4. Escalation on Uncertainty
+
+The agent **detects its own uncertainty** and asks for help.
+
+**Example:** A code-review agent encounters unfamiliar syntax. Instead of guessing, it escalates: "I don't recognize this pattern. Should I flag it as risky or skip?"
+
+**Use cases:**
+- Low confidence scores from model outputs
+- Out-of-distribution inputs
+- Contradictory information in retrieved context
+
+### 5. Emergency Stop
+
+The human or system **halts execution immediately**.
+
+**Example:** The agent begins deleting files outside the project directory. A filesystem monitor triggers an emergency stop.
+
+**Use cases:**
+- Runaway loops (agent calls the same API 1000 times)
+- Unexpected behavior (agent starts reading sensitive files)
+- Resource exhaustion (agent spawns 50 subprocesses)
+
+## The Approval Gate Pattern
+
+The **approval gate** is the most common HITL pattern. It follows this sequence:
+
+1. **Policy check:** The harness evaluates whether the proposed action requires approval.
+2. **Pause execution:** The agent's loop is suspended.
+3. **Checkpoint state:** The run state (messages, tool calls, context) is serialized to durable storage.
+4. **Present to human:** The harness sends the proposed action to a review queue or UI.
+5. **Receive decision:** The human approves, rejects, or modifies the action.
+6. **Resume or abort:** The harness restores the checkpoint and continues (if approved) or terminates (if rejected).
+
+<MermaidDiagram
+  chart={`sequenceDiagram
+    participant Agent
+    participant Harness
+    participant Storage
+    participant Human
+
+    Agent->>Harness: Propose action (send_email)
+    Harness->>Harness: Policy check: requires approval
+    Harness->>Storage: Checkpoint run state
+    Harness->>Human: Present action + context
+    Note over Harness: Execution paused
+    Human->>Harness: Decision (approve/reject)
+    alt Approved
+        Harness->>Storage: Load checkpoint
+        Harness->>Agent: Resume execution
+        Agent->>Agent: Execute send_email
+    else Rejected
+        Harness->>Agent: Abort with reason
+    end`}
+  fallback="Sequence: Agent proposes action → Harness checks policy → Checkpoint state → Present to human → Receive decision → Resume (approved) or Abort (rejected)."
+  caption="The approval gate pattern: checkpoint before pause, resume after decision."
+/>
+
+**Key insight:** Without Step 3 (checkpoint), the harness cannot resume. This is why Lesson 6 called persistence a prerequisite for intervention.
+
+## The Autonomy-Oversight Spectrum
+
+Not all agents need the same level of human involvement. The **autonomy-oversight spectrum** ranges from fully autonomous to fully human-directed:
+
+<MermaidDiagram
+  chart={`graph LR
+    A[Autonomous] --> B[Approval Gates]
+    B --> C[Supervised]
+    C --> D[Human-Directed]
+
+    style A fill:#e8f5e9
+    style B fill:#fff9c4
+    style C fill:#ffe0b2
+    style D fill:#ffcdd2
+
+    A:::desc
+    B:::desc
+    C:::desc
+    D:::desc
+
+    classDef desc font-size:11px
+
+    A -.->|"No human in loop.<br/>Agent decides and acts."| A
+    B -.->|"Human approves<br/>high-risk actions."| B
+    C -.->|"Human observes logs,<br/>intervenes on anomalies."| C
+    D -.->|"Human issues commands,<br/>agent executes steps."| D`}
+  fallback="Spectrum: Autonomous (no human) → Approval Gates (human approves risky actions) → Supervised (human monitors logs) → Human-Directed (human commands each step)."
+  caption="The autonomy-oversight spectrum: agents can operate at different levels of independence."
+/>
+
+**Where to place your agent:**
+- **Autonomous:** Low-risk, well-defined domains (data formatting, test generation).
+- **Approval gates:** High-stakes but predictable actions (deploy to production, send customer emails).
+- **Supervised:** Exploratory tasks where humans watch for drift (research assistants, code refactoring).
+- **Human-directed:** Novel domains or strict compliance environments (legal review, medical diagnosis).
+
+Most production agents operate in the **approval gates** or **supervised** zones.
+
+## Escalation Triggers
+
+How does the harness decide when to escalate? Common **escalation triggers** include:
+
+1. **Confidence thresholds:** The model's logprobs or a classifier's score falls below a threshold.
+2. **Action risk classification:** The action is tagged as high-risk in the harness policy.
+3. **Cost limits:** The agent has consumed more tokens, API credits, or wall-clock time than budgeted.
+4. **Anomaly detection:** The agent's behavior deviates from expected patterns (infinite loop, unexpected file access).
+
+The harness maps **action risk** and **reversibility** to an intervention level:
+
+<MermaidDiagram
+  chart={`graph TD
+    Start[Proposed Action] --> Risk{Action Risk}
+    Risk -->|Low| Reversible1{Reversible?}
+    Risk -->|Medium| Reversible2{Reversible?}
+    Risk -->|High| Reversible3{Reversible?}
+
+    Reversible1 -->|Yes| Auto1[Execute without approval]
+    Reversible1 -->|No| Log1[Execute + log for review]
+
+    Reversible2 -->|Yes| Log2[Execute + log for review]
+    Reversible2 -->|No| Approve2[Require pre-action approval]
+
+    Reversible3 -->|Yes| Approve3[Require pre-action approval]
+    Reversible3 -->|No| Block[Block + require explicit policy change]
+
+    style Auto1 fill:#c8e6c9
+    style Log1 fill:#fff9c4
+    style Log2 fill:#fff9c4
+    style Approve2 fill:#ffcc80
+    style Approve3 fill:#ffcc80
+    style Block fill:#ef9a9a`}
+  fallback="Decision matrix: Low risk + reversible → auto-execute. Medium risk + irreversible → require approval. High risk + irreversible → block unless policy explicitly allows."
+  caption="Escalation decision matrix: risk level and reversibility determine intervention level."
+/>
+
+**Example policy:**
+- `git commit` → low risk, reversible → execute without approval.
+- `git push --force` → medium risk, irreversible → require approval.
+- `rm -rf /` → high risk, irreversible → block (should never be allowed).
+
+## Synchronous vs Asynchronous Intervention
+
+Intervention can be **synchronous** (blocking) or **asynchronous** (non-blocking):
+
+### Synchronous (Blocking)
+
+The agent **waits for the human to respond** before continuing. The human is actively engaged and the system is blocked.
+
+**Example:** A CLI agent pauses and prompts: `Send this email? [y/n]`. The user types `y`, and execution resumes immediately.
+
+**Pros:**
+- Low latency (user is present and responds quickly).
+- Simple implementation (no checkpoint persistence needed if the process stays alive).
+
+**Cons:**
+- Human must be available and waiting.
+- Not suitable for long-running agents or batch processing.
+
+### Asynchronous (Non-Blocking)
+
+The agent **pauses and checkpoints its state**. The human reviews the approval request later (minutes, hours, or days). The system processes other tasks in the meantime.
+
+**Example:** A research assistant agent wants to send an email summary. The harness checkpoints state, adds the request to an approval queue, and moves to the next agent run. When the human approves (via web UI), the harness restores the checkpoint and resumes.
+
+**Pros:**
+- Humans review on their own schedule.
+- Scales to many agents (one human can manage an approval queue).
+
+**Cons:**
+- Requires durable persistence (Lesson 6).
+- Higher latency (agent may wait hours for approval).
+
+**Choosing between sync and async:**
+- **Sync:** Interactive CLI tools, short-lived scripts, human is present.
+- **Async:** Long-running agents, batch jobs, agents running overnight or on servers.
+
+## Guardrails vs HITL: A Critical Distinction
+
+**Guardrails** and **HITL** are often confused, but they serve different purposes:
+
+| Aspect | Guardrails | HITL |
+|--------|-----------|------|
+| **Definition** | Automated runtime checks (input validation, output filtering, content safety) | Pause-for-human-decision pattern |
+| **Human involvement** | None — runs automatically | Requires human to approve/reject |
+| **Examples** | Block SQL injection in user input, filter toxic content from model output, enforce rate limits | Approve email before sending, review code before deploying, modify search goal mid-execution |
+| **Persistence required?** | No (stateless checks) | Yes (checkpoint before pause, resume after decision) |
+| **When to use** | Enforce invariants, prevent known bad patterns | Handle uncertainty, high-stakes decisions, human judgment calls |
+
+**A harness may use both.** They are **complementary, not interchangeable.**
+
+**Example:** An agent that generates and sends emails might have:
+- **Guardrails:** Block emails containing PII (automated check), enforce subject line length limits (automated).
+- **HITL:** Human approves the email content before sending (requires pause and resume).
+
+**Anti-pattern:** Using HITL where guardrails suffice. If the rule is deterministic (e.g., "never send emails to competitors"), encode it as a guardrail. Reserve HITL for cases requiring human judgment.
+
+## How Harnesses Expose Intervention
+
+Different harness frameworks provide different intervention primitives:
+
+### LangGraph
+
+LangGraph supports **interrupts** and **breakpoints**:
+
+```python
+from langgraph.graph import StateGraph
+from langgraph.checkpoint.memory import MemorySaver
+
+workflow = StateGraph(state_schema=AgentState)
+workflow.add_node("send_email", send_email_node)
+workflow.add_node("human_approval", interrupt("approve_email"))
+
+# Checkpoint state before human_approval node
+checkpointer = MemorySaver()
+app = workflow.compile(checkpointer=checkpointer, interrupt_before=["human_approval"])
+
+# Execution pauses before human_approval
+response = app.invoke({"recipient": "user@example.com", "body": "Hello"})
+
+# Human reviews and approves
+app.update_state(response["thread_id"], {"approved": True})
+
+# Resume from checkpoint
+app.invoke(None, thread_id=response["thread_id"])
+```
+
+**Key features:**
+- `interrupt_before` pauses execution before a node.
+- Checkpointer saves state automatically.
+- `update_state` injects the human decision.
+
+### OpenAI Agents SDK
+
+The OpenAI Agents SDK separates **guardrails** (automated) from **HITL approvals** (human-in-the-loop):
+
+```python
+from openai import Client
+from openai.agents import Agent, RunState
+
+client = Client()
+agent = Agent(
+    model="gpt-4",
+    tools=["send_email"],
+    # Guardrails: automated checks
+    guardrails={
+        "input_validation": lambda x: validate_input(x),
+        "output_filtering": lambda x: filter_toxic_content(x),
+    },
+    # HITL: approval required before send_email
+    approval_policy={"send_email": "pre_action"}
+)
+
+run = agent.run("Send summary to team")
+
+if run.status == "waiting_for_approval":
+    # Checkpoint state (RunState is serializable)
+    saved_state = run.serialize()
+    
+    # Present to human (application responsibility)
+    approval = present_to_human(run.pending_action)
+    
+    if approval:
+        # Resume from checkpoint
+        run = agent.resume(saved_state)
+```
+
+**Key features:**
+- **Guardrails** are automated checks registered in the agent config.
+- **HITL approval policy** specifies which tools require pre-action approval.
+- The SDK handles checkpointing via `RunState.serialize()` and `agent.resume()`.
+- **The application is responsible for the review UI and approval queue.**
+
+### Custom Harnesses
+
+Custom harnesses typically implement intervention through:
+
+1. **Policy checks:** A configuration file or function that maps actions to intervention levels.
+2. **Approval queues:** A database table or message queue where pending actions are stored.
+3. **Saved run state:** Serialized agent state (messages, context, tool calls) in durable storage.
+4. **Resume commands:** A CLI, API, or UI action that loads the checkpoint and resumes execution.
+
+**Example policy config (YAML):**
+
+```yaml
+intervention_policy:
+  send_email:
+    level: pre_action_approval
+    reason: "External communication requires human review"
+  git_commit:
+    level: post_action_review
+    reason: "Low risk, but log for audit"
+  delete_file:
+    level: pre_action_approval
+    condition: "path outside project directory"
+  DROP_TABLE:
+    level: block
+    reason: "Never allow in production"
+```
+
+## Designing Intervention Policies
+
+A good intervention policy balances **safety** and **efficiency**. Too much intervention creates fatigue; too little creates risk.
+
+**Principles for designing policies:**
+
+1. **Start strict, relax over time.** Begin with pre-approval for all medium-risk actions. As the agent proves reliable, move some actions to post-review or autonomous.
+
+2. **Use risk and reversibility.** High-risk or irreversible actions require pre-approval. Low-risk, reversible actions can run autonomously.
+
+3. **Prevent intervention fatigue.** If humans approve the same action 50 times without rejecting, consider moving it to autonomous with logging.
+
+4. **Provide context.** When presenting an action for approval, include: the agent's goal, the proposed action, why the action was chosen, and the potential impact.
+
+5. **Support batch approval.** For bulk operations (edit 100 files), group similar actions and allow humans to approve the pattern, not each instance.
+
+6. **Monitor approval rates.** If humans reject >20% of requests, the agent's judgment is miscalibrated. Retrain or adjust the policy.
+
+**Example context for approval UI:**
+
+```
+Agent Goal: Research cloud providers and send summary to team
+Proposed Action: send_email(to="team@example.com", subject="Cloud Provider Summary")
+Reasoning: Goal complete. Summary ready. No errors detected.
+Risk: Medium (external communication)
+Reversibility: Low (email cannot be unsent)
+
+Email Preview:
+  Subject: Cloud Provider Summary
+  Body: [first 200 chars]...
+
+[Approve] [Reject] [Modify Goal]
+```
+
+## Case Study: Email Approval Gate in a Research Assistant
+
+**Scenario:** A research assistant agent gathers information on cloud providers and sends a summary email to the team.
+
+**Harness design:**
+- The `send_email` tool is tagged as requiring **pre-action approval**.
+- When the agent calls `send_email`, the harness:
+  1. Runs policy check → approval required.
+  2. Pauses execution (agent loop stops).
+  3. Checkpoints run state (messages, tool calls, email content) to PostgreSQL.
+  4. Adds an entry to the `approval_queue` table with the email preview.
+  5. Returns `status: waiting_for_approval` to the caller.
+
+**Human review:**
+- A web UI polls the `approval_queue` and displays pending approvals.
+- The human reads the email preview, verifies the recipient list, and clicks **Approve**.
+
+**Resume:**
+- The web UI calls `POST /api/approve_action` with the approval decision.
+- The harness:
+  1. Loads the checkpoint from PostgreSQL.
+  2. Restores agent state (messages, context).
+  3. Executes `send_email` with the approved parameters.
+  4. Marks the run as complete.
+
+**Why this works:**
+- **Persistence** (Lesson 6) enables checkpoint and resume.
+- **Intervention** (this lesson) ensures humans approve high-risk actions.
+- The harness enforces the policy automatically — the agent doesn't need special code for approval.
+
+**Implementation sketch (pseudocode):**
+
+```python
+class ResearchAssistantHarness:
+    def run(self, goal):
+        state = AgentState(goal=goal)
+        
+        while not state.complete:
+            action = self.agent.next_action(state)
+            
+            if self.requires_approval(action):
+                # Checkpoint and pause
+                checkpoint_id = self.checkpoint(state)
+                self.enqueue_approval(checkpoint_id, action)
+                return {"status": "waiting_for_approval", "checkpoint_id": checkpoint_id}
+            
+            result = self.execute(action)
+            state.update(result)
+        
+        return {"status": "complete", "result": state.result}
+    
+    def resume(self, checkpoint_id, decision):
+        state = self.load_checkpoint(checkpoint_id)
+        
+        if decision == "approved":
+            action = self.get_pending_action(checkpoint_id)
+            result = self.execute(action)
+            state.update(result)
+            
+            # Continue loop
+            return self.run_from_state(state)
+        else:
+            return {"status": "aborted", "reason": decision.get("reason")}
+```
+
+## Summary
+
+**Human-in-the-loop intervention is a first-class harness concern.** We covered:
+
+- **Five intervention points:** pre-action approval, post-action review, goal modification, escalation, emergency stop.
+- **The approval gate pattern:** policy check → pause → checkpoint → present → decide → resume/abort.
+- **Autonomy-oversight spectrum:** from fully autonomous to human-directed.
+- **Escalation triggers:** confidence, risk, cost, anomalies.
+- **Sync vs async:** blocking (human waits) vs non-blocking (agent pauses, human reviews later).
+- **Guardrails vs HITL:** Guardrails are automated checks (no human). HITL pauses for human decisions (requires persistence). They are complementary.
+- **How harnesses expose intervention:** LangGraph interrupts, OpenAI SDK guardrails + HITL approvals, custom policy configs and approval queues.
+- **Designing policies:** balance safety and efficiency, provide context, prevent fatigue.
+- **Case study:** Email approval gate with checkpoint, approval queue, and resume.
+
+**Key takeaway:** HITL is not a sign of failure. It's a deliberate mechanism to blend agent autonomy with human judgment.
+
+**Next:** Lesson 8 (Observability and Debugging) explains how intervention creates events — and how harnesses make those events visible for debugging and monitoring.
