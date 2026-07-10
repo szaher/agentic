@@ -1,0 +1,263 @@
+---
+title: "What Is an Agent Harness?"
+quiz:
+  - question: "What distinguishes the harness layer from the model API layer?"
+    options:
+      - "The harness generates text, while the model API manages the loop"
+      - "The harness controls the agent lifecycle — loop execution, tool dispatch, state management, and observability — while the model API produces outputs and tool-call requests"
+      - "The harness is a cloud service, while the model API runs locally"
+      - "There is no distinction — harness and model API are the same layer"
+    correctIndex: 1
+  - question: "Which of the eight harness concerns is most directly responsible for preventing a 20-step agent run from restarting at step 1 after a crash?"
+    options:
+      - "Tool dispatch"
+      - "Context management"
+      - "Persistence"
+      - "Loop execution"
+    correctIndex: 2
+  - question: "A raw while-loop agent fails to catch a tool timeout, retries the same tool call infinitely, and burns through the token budget. Which harness concerns are missing?"
+    options:
+      - "Only observability — the agent cannot see the timeout"
+      - "Loop execution (no termination controls) and tool dispatch (no error handling) and observability (no cost tracking)"
+      - "Only tool dispatch — the tool should handle its own timeouts"
+      - "Only human intervention — a human should stop the agent"
+    correctIndex: 1
+  - question: "Why is human intervention listed as its own harness concern rather than part of control flow?"
+    options:
+      - "Because human intervention requires its own UI framework"
+      - "Because intervention requires coupling persistence (to checkpoint state), control flow (to pause execution), and observability (to present context) — it is a cross-cutting concern important enough for its own treatment"
+      - "Because human intervention only happens in multi-agent systems"
+      - "Because control flow is only about routing, not about pausing"
+    correctIndex: 1
+---
+
+## Overview
+
+The harness is invisible when things work and the first thing you debug when they don't. It is the runtime layer between agent architectures and execution — the operational machinery that turns a clever design into a running system. When a production agent crashes halfway through a 30-step research task, when it calls the same failing API in an infinite loop, or when you cannot trace why it chose tool X over tool Y, you are debugging the harness, not the model.
+
+This lesson defines the harness as a distinct layer in the agent stack, introduces the eight concerns every harness must solve, and walks through what breaks when you skip the harness and run agents as raw API loops.
+
+> By the end of this lesson, you will understand where the harness fits, what it is responsible for, and why evaluating agent frameworks requires evaluating their harness capabilities first.
+
+We will introduce a simple "research assistant" as a case study that threads through this module. In this lesson, we will see it built naively as a raw API loop. In later lessons, we will progressively add harness concerns until it becomes production-ready.
+
+## The Harness Layer
+
+When you build an agent, you are working with at least five distinct layers of abstraction:
+
+1. **Application Layer** — your product's UX, business logic, and workflow
+2. **Orchestration Layer** — coordination across agents, services, deployment
+3. **Harness / Runtime Layer** — the execution environment for a single agent
+4. **Model API** — the LLM service that produces outputs and tool-call requests
+5. **Tool Layer** — the actual capabilities, functions, and APIs the agent invokes
+
+The **harness** sits between orchestration and the model API. It is responsible for running the agent — managing the loop, validating and dispatching tool calls, assembling context each turn, persisting state, tracing execution, and gating human intervention.
+
+<MermaidDiagram chart={`graph TB
+    APP["Application Layer<br/>(UX, business logic, product workflow)"]
+    ORCH["Orchestration Layer<br/>(multi-agent coordination, deployment)"]
+    HARNESS["Harness / Runtime Layer<br/>(loop, tools, state, control flow,<br/>persistence, observability, HITL)"]
+    MODEL["Model API<br/>(LLM calls, tool-call requests)"]
+    TOOLS["Tool Layer<br/>(functions, APIs, external services)"]
+    MEM["Memory / Knowledge<br/>(vector stores, databases)"]
+    ENV["Environment<br/>(file system, network, user)"]
+
+    APP --> ORCH
+    ORCH --> HARNESS
+    HARNESS --> MODEL
+    HARNESS --> TOOLS
+    HARNESS --> MEM
+    HARNESS --> ENV
+
+    style HARNESS fill:#9f7aea,stroke:#6b46c1,color:#fff
+`} />
+
+Think of the harness like an operating system for a single agent. An OS manages process lifecycle, memory allocation, I/O, error handling, and scheduling. A harness manages agent lifecycle, context assembly, tool dispatch, error recovery, and termination. Just as you would not write a web server by manually managing memory and syscalls, you should not write production agents as raw API loops.
+
+## The Five Adjacent Layers
+
+Before we dive into the harness itself, it helps to clarify what the harness is **not** responsible for:
+
+**Model API** — This is the LLM service (Anthropic, OpenAI, Google, etc.). It receives messages and tools, produces text outputs or structured tool-call requests, and returns a stop reason. The model API does not run the agent — it processes individual turns. The harness calls the model API, not the other way around.
+
+**Tool Layer** — These are your agent's capabilities: `search_web`, `read_file`, `send_email`, etc. Tools are functions or API wrappers that take arguments and return results. The harness validates tool-call requests, dispatches them to the correct implementation, handles errors, and formats results. But the tools themselves are standalone.
+
+**Harness / Runtime** — This is what we are studying. It controls:
+- **Loop execution** — when to call the model, when to terminate, how many steps to allow
+- **Tool dispatch** — validating tool-call requests, invoking tools, wrapping results
+- **Context management** — assembling the message history, system prompt, and tool schemas each turn
+- **State and goals** — tracking agent objectives, progress, and working memory
+- **Control flow** — routing between agents or tools, handling conditional logic
+- **Persistence** — checkpointing state so runs can resume after crashes or pauses
+- **Observability** — tracing, logging, cost tracking, replay
+- **Human intervention** — approval gates, escalation, manual overrides
+
+**Application Layer** — This is your product. The UI that users interact with, the business logic that defines the workflow, the integration with your backend services. The application calls the harness to run an agent, but it does not implement the agent loop.
+
+**Orchestration Layer** — When you have multiple agents working together, or agents deployed across services, you need orchestration: workflow management, inter-agent communication, deployment infrastructure. This sits above the harness. The harness runs one agent; orchestration coordinates many.
+
+## The Eight Harness Concerns
+
+Every production agent harness must solve eight operational concerns. These are not optional features — they are the difference between an agent that runs and an agent that ships.
+
+1. **Loop Execution** — Who controls the agent's execution cycle? The harness decides when to call the model, when to stop (max steps, goal reached, error), and how to handle termination. Without this, agents run forever or stop arbitrarily.
+
+2. **Tool Dispatch** — How do tool-call requests become actual function invocations? The harness validates the request (is the tool registered? are the arguments valid?), routes to the correct implementation, executes it, handles errors, and packages the result back to the model. Without this, you have no boundary between the model's intent and system execution.
+
+3. **Context Management** — What does the model see each turn? The harness assembles the message history, system prompt, tool schemas, and any injected context (knowledge, state, user input). It enforces token limits, prunes history when needed, and manages conversational continuity. Without this, the agent forgets what it was doing or exceeds context windows.
+
+4. **State and Goals** — What is the agent trying to do, and how much progress has it made? The harness tracks the agent's objective, working memory (variables, intermediate results), and progress indicators. This is separate from conversational context — it is the agent's internal state. Without this, you cannot resume interrupted runs or debug why an agent diverged from its goal.
+
+5. **Control Flow** — What happens after a tool call completes? Does the agent continue in a loop, hand off to another agent, wait for human input, or branch based on conditions? The harness implements the control flow model — whether that is a simple loop, a state machine, a directed graph, or a workflow definition. Without this, you are stuck with one fixed execution pattern.
+
+6. **Persistence** — Can the agent survive a crash, a deploy, or a pause? The harness checkpoints state to durable storage so runs can resume from the last known step, not the beginning. This is critical for long-running agents and human-in-the-loop workflows. Without this, every failure is catastrophic.
+
+7. **Observability** — Can you see what the agent did and why? The harness emits traces (structured logs of every turn, tool call, and decision), tracks cost and latency, supports replay (re-running a trace to debug), and integrates with monitoring systems. Without this, debugging is guesswork.
+
+8. **Human Intervention** — When should a human approve, reject, or redirect the agent? The harness defines intervention points: approval gates before risky actions, escalation triggers when confidence is low, and manual override mechanisms. This couples persistence (to pause execution), control flow (to resume or redirect), and observability (to show the human what is happening). Without this, you cannot safely deploy agents that take consequential actions.
+
+<MermaidDiagram chart={`graph TB
+    subgraph HARNESS["Harness / Runtime Layer"]
+        direction TB
+        LOOP["1. Loop Execution<br/><i>when to run, when to stop</i>"]
+        DISPATCH["2. Tool Dispatch<br/><i>request → execution</i>"]
+        CONTEXT["3. Context Management<br/><i>what the model sees</i>"]
+        STATE["4. State and Goals<br/><i>progress, variables, objectives</i>"]
+        CONTROL["5. Control Flow<br/><i>loops, graphs, handoffs</i>"]
+        PERSIST["6. Persistence<br/><i>checkpoints, resumability</i>"]
+        OBS["7. Observability<br/><i>traces, logs, cost, replay</i>"]
+        HITL["8. Human Intervention<br/><i>approval, escalation, override</i>"]
+    end
+
+    LOOP -.-> DISPATCH
+    DISPATCH -.-> CONTEXT
+    CONTEXT -.-> STATE
+    STATE -.-> CONTROL
+    CONTROL -.-> PERSIST
+    PERSIST -.-> OBS
+    OBS -.-> HITL
+
+    style HARNESS fill:#9f7aea,stroke:#6b46c1,color:#fff
+`} />
+
+These concerns are deeply interconnected. Persistence requires state to checkpoint. Human intervention requires persistence to pause and observability to surface context. Control flow determines when dispatch happens. A production harness must address all eight, not just the ones that feel urgent.
+
+## The Harness Spectrum
+
+Not every agent needs the same level of harness sophistication. The spectrum runs from "no harness" (raw API calls) to "full runtime" (managed execution with durable state). Understanding where an approach falls on this spectrum helps you choose the right tool for the job.
+
+**No Harness — Raw API Loop**  
+You write a `while True` loop, call the model API directly, manually parse tool calls, invoke functions yourself, and manage state in local variables. This works for prototypes and simple scripts. It breaks the moment you need error recovery, persistence, tracing, or human oversight.
+
+**Thin SDK — Helper Functions**  
+You use a client library (Anthropic SDK, OpenAI SDK) that wraps the API and provides utilities for tool-call parsing and message formatting. This eliminates boilerplate but does not manage the loop, state, or lifecycle. You still own execution control.
+
+**Agent Loop SDK — Managed Loop**  
+The SDK provides a `run_agent()` function that manages the loop, dispatches tools, and handles basic termination. You define tools and a goal; the SDK executes until done. This covers concerns 1-2, sometimes 3. State, control flow, persistence, and observability are still on you.
+
+**Graph Runtime — Declarative Control Flow**  
+You define the agent as a graph of nodes (LLM calls, tool executions, conditional branches) and edges (transitions). The runtime executes the graph, manages state transitions, and supports cyclic workflows. This handles concerns 1-5 well. Persistence and observability may be partial. LangGraph and Burr are examples.
+
+**Workflow Runtime — Durable Execution**  
+You define the agent as a workflow with explicit checkpoints, retries, and compensation logic. The runtime persists state at every step, supports long-running tasks, and survives crashes. This handles concerns 1-7 comprehensively. Temporal, Replit Agent, and Inngest are examples. Human intervention is often manual.
+
+**Full Agent Platform — Production Harness**  
+The platform manages everything: loop, tools, state, control flow, persistence, tracing, cost tracking, approval gates, and deployment. You define the agent's behavior; the platform runs it safely. Examples include Claude Code, Devin, and enterprise agent platforms. These address all eight concerns but at the cost of flexibility.
+
+Where you land on this spectrum depends on your constraints: How critical is reliability? How long do runs take? Do you need human oversight? Can you afford to debug opaque failures?
+
+## Case Study: The Missing Concerns
+
+Let us make this concrete. Here is a "research assistant" implemented as a raw API loop using the Anthropic SDK:
+
+<CodeBlock code={`import anthropic
+
+client = anthropic.Anthropic()
+
+def research(question: str) -> str:
+    messages = [{"role": "user", "content": question}]
+    while True:
+        response = client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=1024,
+            tools=[{"name": "web_search", ...}, {"name": "calculator", ...}],
+            messages=messages,
+        )
+        if response.stop_reason == "end_turn":
+            return response.content[0].text
+        for block in response.content:
+            if block.type == "tool_use":
+                result = call_tool(block.name, block.input)  # no validation
+                messages.append({"role": "assistant", "content": response.content})
+                messages.append({"role": "user", "content": [
+                    {"type": "tool_result", "tool_use_id": block.id, "content": result}
+                ]})
+`} language="python" filename="naive_research_agent.py" />
+
+This is 20 lines and it works — for the happy path. Now let us audit it against the eight harness concerns:
+
+**1. Loop Execution** — The `while True` loop runs forever until `stop_reason == "end_turn"`. What if the model never returns `end_turn`? What if the API call times out? There is no step limit, no max duration, no way to interrupt.
+
+**2. Tool Dispatch** — `call_tool()` is a placeholder. What if `block.name` is not a registered tool? What if `block.input` is malformed? What if the tool raises an exception? The loop crashes.
+
+**3. Context Management** — The `messages` list grows unbounded. If the agent takes 50 tool calls, you will exceed the context window and the API will reject the request. There is no history pruning.
+
+**4. State and Goals** — There is no state. If you wanted to track progress ("how many sources have I checked?") or save intermediate results, where would you put them? Local variables are lost on restart.
+
+**5. Control Flow** — The flow is hardcoded: loop until done. What if you wanted to pause for human approval before calling a destructive API? What if you wanted to hand off to a specialized summarization agent? No mechanism.
+
+**6. Persistence** — None. If the process crashes at step 15 of 20, you restart from step 1. If you need to resume later, you cannot.
+
+**7. Observability** — You have no trace of what the agent did. No structured logs, no cost tracking, no replay. Debugging requires adding print statements and re-running.
+
+**8. Human Intervention** — None. The agent runs autonomously until it finishes or crashes. If it is about to call an expensive API or take a risky action, you have no way to intervene.
+
+**What breaks first in production?**  
+Context overflow. The agent will run for a few dozen turns, exceed the token limit, and fail. You will patch it by truncating messages. Then tool dispatch will fail when a tool times out. You will add exception handling. Then you will realize you cannot resume interrupted runs. You will add manual checkpointing. You will repeat this for every missing concern until you have rebuilt a harness from scratch.
+
+This is the cycle every team goes through when they deploy raw-loop agents. The harness is not optional — you either choose one or build one yourself.
+
+## Exercise: Classify Agent Failures
+
+For each scenario below, identify whether the failure is a **harness-layer**, **model-layer**, or **tool-layer** problem.
+
+> **Scenario 1:** An agent searches the web for "top competitors in market X." The search API returns a 500 error. The agent retries the same query infinitely until it exhausts the API rate limit.
+
+> **Scenario 2:** An agent is tasked with summarizing a 100-page PDF. Midway through, the process is killed due to a deploy. When restarted, the agent begins summarizing from page 1 again, re-reading pages it already processed.
+
+> **Scenario 3:** An agent is instructed to "write a comprehensive report on climate change." It produces a 50-page document citing 200 sources. When you review it, 40% of the citations are hallucinated — the papers do not exist.
+
+> **Scenario 4:** An agent is integrated into a customer support workflow. It correctly identifies that a user's account needs a refund, but instead of escalating to a human for approval, it issues the refund immediately and the user exploits this by requesting refunds repeatedly.
+
+> **Scenario 5:** An agent is instructed to "analyze sales data for Q4." It queries the database, processes the results, and generates a chart. When you ask it to refine the chart based on feedback, it has forgotten what data it queried and starts over from scratch.
+
+**Answers:**
+
+> **Scenario 1: Harness-layer (Tool Dispatch + Loop Execution).** The tool layer returned an error correctly. The harness failed to handle it — no retry backoff, no circuit breaking, no step limit. This is a dispatch and termination failure.
+
+> **Scenario 2: Harness-layer (Persistence).** The agent had no checkpoint mechanism. A production harness checkpoints state so runs can resume from the last step, not the beginning.
+
+> **Scenario 3: Model-layer.** The model hallucinated citations. This is a model capability issue. A harness concern would be observability (to detect hallucinations through citation checks) or human intervention (to require approval for high-stakes claims), but the root cause is model behavior.
+
+> **Scenario 4: Harness-layer (Human Intervention).** The agent had no approval gate for risky actions. A production harness defines intervention points and enforces them before execution.
+
+> **Scenario 5: Harness-layer (State and Context Management).** The agent did not persist intermediate state (the queried data) or manage conversational continuity. A harness would checkpoint the data and maintain it across turns.
+
+Notice how most failures are harness failures, not model or tool failures. The model reasoned correctly. The tools executed correctly. But the runtime layer failed to manage execution safely.
+
+## Summary
+
+The harness is the runtime layer between agent architectures and execution. It is responsible for eight critical concerns:
+
+1. Loop execution — controlling when the agent runs and stops
+2. Tool dispatch — validating and executing tool calls
+3. Context management — assembling what the model sees each turn
+4. State and goals — tracking progress and objectives
+5. Control flow — routing through loops, branches, or handoffs
+6. Persistence — checkpointing state for resumability
+7. Observability — tracing, cost tracking, replay
+8. Human intervention — approval gates, escalation, overrides
+
+Raw API loops skip all eight. Thin SDKs solve one or two. Graph runtimes handle five. Full platforms address all eight. Choosing a harness means evaluating how well it solves these concerns for your use case.
+
+In the next lesson, **The Agent Loop Internals**, we will open the loop and trace a single turn through all decision points: when does the harness call the model? How does it decide what to do next? Where do errors surface? You will see runs, turns, steps, and the control flow decisions that determine agent behavior.

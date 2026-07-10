@@ -1,0 +1,116 @@
+{
+  "id": 5,
+  "title": "Agent Harnesses and Runtime Systems",
+  "description": "The runtime layer that turns agent architectures into executable systems — managing the agent loop, tool dispatch, context and state flow, persistence, observability, error recovery, and human intervention across real production harnesses.",
+  "color": "#9f7aea",
+  "lessons": [
+    {
+      "slug": "01-what-is-an-agent-harness",
+      "title": "What Is an Agent Harness?",
+      "description": "Defining the harness as a runtime layer and the eight concerns every harness must solve",
+      "estimatedMinutes": 40,
+      "diagramTypes": ["architecture", "concept"],
+      "hasCode": false,
+      "hasQuiz": true
+    },
+    {
+      "slug": "02-agent-loop-internals",
+      "title": "The Agent Loop Internals",
+      "description": "Runs, turns, steps, and the decision points where the harness controls agent behavior",
+      "estimatedMinutes": 50,
+      "diagramTypes": ["flowchart"],
+      "hasCode": true,
+      "hasQuiz": true
+    },
+    {
+      "slug": "03-tool-dispatch",
+      "title": "Tool Dispatch and Action Validation",
+      "description": "From tool-call request to function execution: dispatch pipelines, MCP discovery, and permission boundaries",
+      "estimatedMinutes": 45,
+      "diagramTypes": ["flowchart"],
+      "hasCode": true,
+      "hasQuiz": true
+    },
+    {
+      "slug": "04-context-goals-state",
+      "title": "Context, Goals, Memory, and State",
+      "description": "The four state domains a harness manages and how context is assembled each turn",
+      "estimatedMinutes": 50,
+      "diagramTypes": ["architecture", "concept"],
+      "hasCode": true,
+      "hasQuiz": true
+    },
+    {
+      "slug": "05-control-flow",
+      "title": "Control Flow: Loops, Routers, Graphs, and Workflows",
+      "description": "Four control flow models, the autonomy spectrum, and handoffs as runtime events",
+      "estimatedMinutes": 50,
+      "diagramTypes": ["flowchart", "architecture"],
+      "hasCode": true,
+      "hasQuiz": true
+    },
+    {
+      "slug": "06-persistence-checkpointing",
+      "title": "Persistence, Checkpointing, and Resumability",
+      "description": "Why runs need durability and how checkpointing enables recovery, inspection, time travel, and human intervention",
+      "estimatedMinutes": 45,
+      "diagramTypes": ["flowchart", "concept"],
+      "hasCode": true,
+      "hasQuiz": true
+    },
+    {
+      "slug": "07-human-in-the-loop",
+      "title": "Human-in-the-Loop and Intervention Points",
+      "description": "Approval gates, escalation triggers, the autonomy-oversight spectrum, and the production triad",
+      "estimatedMinutes": 45,
+      "diagramTypes": ["flowchart", "concept"],
+      "hasCode": true,
+      "hasQuiz": true
+    },
+    {
+      "slug": "08-observability",
+      "title": "Observability: Traces, Logs, Evals, and Replay",
+      "description": "Five observability pillars, trace anatomy, cost/latency tracking, and realistic replay levels",
+      "estimatedMinutes": 50,
+      "diagramTypes": ["architecture", "flowchart"],
+      "hasCode": true,
+      "hasQuiz": true
+    },
+    {
+      "slug": "09-build-minimal-harness",
+      "title": "Build a Minimal Harness from Scratch",
+      "description": "Hands-on: implement the canonical loop, tool registry, context assembly, and termination controls",
+      "estimatedMinutes": 60,
+      "diagramTypes": [],
+      "hasCode": true,
+      "hasQuiz": false
+    },
+    {
+      "slug": "10-extend-harness",
+      "title": "Extend the Harness: State, Checkpoints, Tracing, and Intervention",
+      "description": "Hands-on: add structured state, checkpoint/resume with idempotency, tracing, and an approval gate",
+      "estimatedMinutes": 60,
+      "diagramTypes": [],
+      "hasCode": true,
+      "hasQuiz": false
+    },
+    {
+      "slug": "11-ecosystem-map",
+      "title": "Ecosystem Map: SDKs, Graph Runtimes, Workflow Runtimes, Multi-Agent Runtimes",
+      "description": "Classify and compare production harnesses across the eight concerns",
+      "estimatedMinutes": 50,
+      "diagramTypes": ["concept"],
+      "hasCode": false,
+      "hasQuiz": true
+    },
+    {
+      "slug": "12-choosing-and-frontier",
+      "title": "Choosing a Harness + Frontier Appendix",
+      "description": "Decision framework for harness selection plus emerging runtime directions",
+      "estimatedMinutes": 45,
+      "diagramTypes": ["flowchart", "concept"],
+      "hasCode": false,
+      "hasQuiz": true
+    }
+  ]
+}
