@@ -1,0 +1,772 @@
+---
+title: "Tool Dispatch and Action Validation"
+quiz:
+  - question: "What is the correct order of stages in the tool dispatch pipeline?"
+    options:
+      - "validate → parse → execute → permissions → capture → format"
+      - "parse → validate → permissions → execute → capture → format"
+      - "permissions → parse → validate → execute → format → capture"
+      - "parse → execute → validate → capture → permissions → format"
+    correctIndex: 1
+    explanation: "The dispatch pipeline flows from parsing the tool call, validating parameters, checking permissions, executing the tool, capturing results, and formatting them for the model."
+  - question: "When should you prefer MCP dynamic discovery over a static tool registry?"
+    options:
+      - "When you need faster tool execution and lower latency"
+      - "When tools are simple, local functions with no external dependencies"
+      - "When integrating external systems with evolving APIs or when tools vary per user/session"
+      - "When you want to avoid JSON Schema validation overhead"
+    correctIndex: 2
+    explanation: "MCP dynamic discovery is valuable when connecting to external systems with changing capabilities, or when different users need different tool sets. Static registries work well for stable, local tools."
+  - question: "What happens when parameter validation fails during tool dispatch?"
+    options:
+      - "The harness silently skips the tool and continues to the next one"
+      - "The harness executes the tool with default values for missing parameters"
+      - "The harness returns a structured error to the model, which can retry with corrected parameters"
+      - "The harness terminates the entire agent loop immediately"
+    correctIndex: 2
+    explanation: "Parameter validation failures are captured as structured errors and returned to the model as observations, allowing the model to understand what went wrong and retry with corrected inputs."
+  - question: "What is the main tradeoff when dispatching tools in parallel versus sequentially?"
+    options:
+      - "Parallel dispatch always produces faster results than sequential dispatch"
+      - "Sequential dispatch guarantees consistent ordering but may be slower; parallel dispatch is faster but requires independent tools"
+      - "Parallel dispatch uses less memory than sequential dispatch"
+      - "Sequential dispatch is only necessary when tools write to files"
+    correctIndex: 1
+    explanation: "Parallel dispatch can improve performance when tools are independent, but it requires that tools don't depend on each other's outputs. Sequential dispatch is simpler and maintains strict ordering, at the cost of potential latency."
+---
+
+<LearningObjectives items={[
+  "Trace the complete tool dispatch pipeline from parsing through execution to result formatting",
+  "Distinguish between static tool registries and MCP-based dynamic capability discovery",
+  "Explain how parameter validation and permission boundaries protect execution safety",
+  "Compare parallel and sequential tool execution strategies and their tradeoffs",
+  "Analyze how error capture and result formatting enable model recovery from failures"
+]} />
+
+<Prerequisites items={[
+  "Module 3 (Tool Use & Function Calling) — tool calling semantics from the model's perspective",
+  "Module 5, Lesson 2 (Agent Loops) — turn lifecycle and control flow"
+]} />
+
+## Overview
+
+In Module 3 (Tool Use & Function Calling), we examined tool use from the model's perspective: how the model generates structured tool calls, how tools are described through schemas, and how results flow back as observations. But that module treated tool execution as a black box — the model requests a tool, and somehow, a result appears.
+
+This lesson opens that black box. We're now inside the agent harness, where **tool dispatch** is the critical bridge between what the model *requests* and what the environment *provides*. The harness is responsible for:
+
+- Parsing tool calls from model output
+- Validating parameters against schemas
+- Enforcing permission boundaries
+- Executing tools safely and capturing results
+- Formatting results for the model's next turn
+
+Tool dispatch is not a single function call. It's a **pipeline** with distinct stages, each of which can succeed or fail, and each of which contributes to the safety, reliability, and observability of agent execution.
+
+We'll also explore two fundamentally different approaches to tool availability: **static registries** (where tools are hardcoded into the harness) and **MCP-based dynamic discovery** (where tools are discovered at runtime from external systems).
+
+## The Dispatch Pipeline
+
+When the model generates a tool call, the harness processes it through a multi-stage pipeline:
+
+<MermaidDiagram
+  chart={`graph LR
+    A[Parse Tool Call] --> B[Validate Parameters]
+    B --> C[Check Permissions]
+    C --> D[Execute Tool]
+    D --> E[Capture Result/Error]
+    E --> F[Format for Model]
+    F --> G[Append to Context]
+    
+    style A fill:#e3f2fd
+    style B fill:#fff3e0
+    style C fill:#fce4ec
+    style D fill:#e8f5e9
+    style E fill:#fff9c4
+    style F fill:#f3e5f5
+    style G fill:#e0f2f1`}
+  fallback="The dispatch pipeline: parse → validate → permissions → execute → capture → format → append to context."
+  caption="Each stage in the dispatch pipeline has a distinct responsibility and failure mode."
+/>
+
+Let's walk through each stage:
+
+### 1. Parse Tool Call
+
+The model's output includes a structured representation of the tool call. The harness parses this to extract:
+
+- **Tool name** (e.g., `web_search`, `calculator`, `read_file`)
+- **Parameters** (e.g., `{"query": "MCP protocol", "max_results": 5}`)
+- **Tool call ID** (for tracking multiple concurrent calls)
+
+Modern APIs (like Claude's tool use API) return tool calls as JSON objects, so parsing is straightforward. Older systems that relied on text parsing (e.g., "Action: search\nAction Input: MCP protocol") required fragile regex-based extraction.
+
+### 2. Validate Parameters
+
+Before executing a tool, the harness validates the parameters against the tool's **JSON Schema**:
+
+- Are all required parameters present?
+- Do parameter types match (string, integer, array, etc.)?
+- Do values satisfy constraints (min/max, enum values, regex patterns)?
+
+If validation fails, the harness does **not** execute the tool. Instead, it returns a structured error to the model, which can retry with corrected parameters.
+
+### 3. Check Permissions
+
+Not every tool should be available in every context. The harness enforces **permission boundaries**:
+
+- Is this tool allowed in the current session?
+- Does the user or policy permit this tool?
+- Are there runtime constraints (e.g., rate limits, quota)?
+
+Permission checks can be:
+
+- **Static** (e.g., "this agent can only read files, not write them")
+- **Dynamic** (e.g., "web search is allowed until the daily quota is exhausted")
+- **Policy-driven** (e.g., "file writes require user confirmation")
+
+### 4. Execute Tool
+
+If validation and permissions pass, the harness executes the tool. Execution can involve:
+
+- Calling a local function (e.g., a Python function in the harness)
+- Invoking an external API (e.g., a web search service)
+- Running a subprocess (e.g., executing a shell command)
+- Dispatching to an MCP server (more on this below)
+
+The harness sets **timeouts** to prevent tools from hanging indefinitely.
+
+### 5. Capture Result/Error
+
+Tools can succeed, fail, or timeout. The harness captures:
+
+- **Success**: The tool's return value (structured data, text, or binary)
+- **Failure**: Exception details, error messages, stack traces
+- **Timeout**: A special error indicating the tool exceeded its time budget
+
+The harness does **not** crash when a tool fails. Instead, it treats failures as observations — data the model can reason about.
+
+### 6. Format for Model
+
+The raw result or error is formatted into a **tool result** message:
+
+```json
+{
+  "type": "tool_result",
+  "tool_use_id": "toolu_abc123",
+  "content": "Search results: ..."
+}
+```
+
+Or, for errors:
+
+```json
+{
+  "type": "tool_result",
+  "tool_use_id": "toolu_abc123",
+  "is_error": true,
+  "content": "Error: InvalidParameterException - 'max_results' must be between 1 and 100"
+}
+```
+
+This structured format allows the model to distinguish success from failure and to correlate results with specific tool calls.
+
+### 7. Append to Context
+
+The formatted result is appended to the conversation context as a `tool_result` message, which becomes part of the input to the next model turn.
+
+## The Dispatch Table
+
+How does the harness know which code to execute when the model calls a tool? The simplest approach is a **dispatch table** — a mapping from tool names to implementations.
+
+Here's a minimal example in Python:
+
+```python
+import jsonschema
+from typing import Callable, Dict, Any
+
+class ToolRegistry:
+    def __init__(self):
+        self.tools: Dict[str, Dict[str, Any]] = {}
+    
+    def register(self, name: str, fn: Callable, schema: Dict[str, Any]):
+        """Register a tool with its implementation and parameter schema."""
+        self.tools[name] = {
+            "fn": fn,
+            "schema": schema
+        }
+    
+    def dispatch(self, tool_name: str, params: Dict[str, Any]) -> Any:
+        """Validate and execute a tool."""
+        if tool_name not in self.tools:
+            raise ValueError(f"Unknown tool: {tool_name}")
+        
+        tool = self.tools[tool_name]
+        
+        # Validate parameters against schema
+        try:
+            jsonschema.validate(params, tool["schema"])
+        except jsonschema.ValidationError as e:
+            raise ValueError(f"Parameter validation failed: {e.message}")
+        
+        # Execute the tool
+        return tool["fn"](\*\*params)
+
+# Example usage
+registry = ToolRegistry()
+
+# Register a calculator tool
+def calculator(expression: str) -> float:
+    # Safely evaluate math expressions
+    return eval(expression, {"__builtins__": {}}, {})
+
+calculator_schema = {
+    "type": "object",
+    "properties": {
+        "expression": {"type": "string"}
+    },
+    "required": ["expression"]
+}
+
+registry.register("calculator", calculator, calculator_schema)
+
+# Dispatch a tool call
+result = registry.dispatch("calculator", {"expression": "2 + 2"})
+# result: 4
+```
+
+This pattern scales well for small, stable tool sets. However, it has limitations:
+
+- Tools must be known at harness compile time
+- Adding tools requires code changes
+- Different users or sessions can't have different tool sets without complex branching logic
+
+## Parameter Validation
+
+Parameter validation is the harness's first line of defense against malformed tool calls. JSON Schema provides a declarative way to specify:
+
+- **Types**: `string`, `number`, `integer`, `boolean`, `array`, `object`
+- **Constraints**: `minimum`, `maximum`, `minLength`, `maxLength`, `pattern`, `enum`
+- **Composition**: `anyOf`, `oneOf`, `allOf`, `not`
+
+Example: A `web_search` tool might require:
+
+```python
+web_search_schema = {
+    "type": "object",
+    "properties": {
+        "query": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+        },
+        "max_results": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100,
+            "default": 10
+        },
+        "language": {
+            "type": "string",
+            "enum": ["en", "es", "fr", "de", "ja"],
+            "default": "en"
+        }
+    },
+    "required": ["query"]
+}
+```
+
+When the model calls `web_search` with `{"query": "MCP", "max_results": 500}`, validation fails because `max_results` exceeds 100. The harness returns:
+
+```json
+{
+  "type": "tool_result",
+  "tool_use_id": "toolu_abc123",
+  "is_error": true,
+  "content": "ValidationError: 500 is greater than the maximum of 100 (path: max_results)"
+}
+```
+
+The model sees this error in the next turn and can retry with `{"query": "MCP", "max_results": 10}`.
+
+<Callout>
+**Why validate when the model knows the schema?** Models are stochastic and can produce malformed outputs, especially under token pressure or with complex schemas. Validation ensures that only well-formed tool calls reach execution.
+</Callout>
+
+## Permission Boundaries
+
+Permission boundaries determine **which tools** an agent can use and **under what conditions**. This is distinct from parameter validation — a tool call can be well-formed but still forbidden.
+
+### Static Permissions
+
+A static permission list hardcodes allowed tools:
+
+```python
+class PermissionedDispatcher:
+    def __init__(self, registry: ToolRegistry, allowed_tools: set[str]):
+        self.registry = registry
+        self.allowed_tools = allowed_tools
+    
+    def dispatch(self, tool_name: str, params: Dict[str, Any]) -> Any:
+        if tool_name not in self.allowed_tools:
+            raise PermissionError(f"Tool '{tool_name}' is not permitted")
+        return self.registry.dispatch(tool_name, params)
+
+# Example: a read-only agent
+readonly_dispatcher = PermissionedDispatcher(
+    registry=registry,
+    allowed_tools={"read_file", "list_directory", "web_search"}
+)
+```
+
+### Dynamic Policy Evaluation
+
+More sophisticated harnesses evaluate permissions based on:
+
+- **User identity**: Different users have different tool sets
+- **Session context**: Tools may be enabled only during specific workflows
+- **Resource quotas**: Tools may be rate-limited or have daily caps
+- **User confirmation**: High-risk tools require explicit user approval before execution
+
+Example: A tool that deletes files might require user confirmation:
+
+```python
+def dispatch_with_confirmation(tool_name: str, params: Dict[str, Any]) -> Any:
+    if tool_name in HIGH_RISK_TOOLS:
+        confirmation = request_user_confirmation(
+            f"Allow {tool_name} with params {params}?"
+        )
+        if not confirmation:
+            raise PermissionError("User denied tool execution")
+    return registry.dispatch(tool_name, params)
+```
+
+<Warning>
+**Security principle**: Permission checks must happen **before** execution, not after. A tool that checks permissions inside its implementation can be bypassed by direct invocation.
+</Warning>
+
+## Parallel vs Sequential Tool Execution
+
+When the model generates multiple tool calls in a single turn, the harness must decide: execute them **in parallel** or **sequentially**?
+
+### Sequential Execution
+
+Sequential execution processes tool calls one at a time, in the order they appear:
+
+```python
+def execute_sequential(tool_calls: list[ToolCall]) -> list[ToolResult]:
+    results = []
+    for call in tool_calls:
+        result = dispatch(call.tool_name, call.params)
+        results.append(result)
+    return results
+```
+
+**Advantages:**
+
+- Simple to implement and reason about
+- Guarantees ordering (tool 2 sees the effects of tool 1)
+- Easier to debug (clear cause-and-effect)
+
+**Disadvantages:**
+
+- Slower when tools have high latency (e.g., API calls)
+- Underutilizes resources when tools are I/O-bound
+
+### Parallel Execution
+
+Parallel execution runs independent tool calls concurrently:
+
+```python
+import concurrent.futures
+
+def execute_parallel(tool_calls: list[ToolCall]) -> list[ToolResult]:
+    with concurrent.futures.ThreadPoolExecutor() as executor:
+        futures = [
+            executor.submit(dispatch, call.tool_name, call.params)
+            for call in tool_calls
+        ]
+        results = [f.result() for f in futures]
+    return results
+```
+
+**Advantages:**
+
+- Faster when tools are I/O-bound or have high latency
+- Better resource utilization
+
+**Disadvantages:**
+
+- Tools must be **independent** (no shared state, no ordering dependencies)
+- Harder to debug (non-deterministic execution order)
+- Requires careful handling of shared resources (e.g., file writes)
+
+### Hybrid Approach
+
+Production harnesses often use a hybrid strategy:
+
+- Tools marked as **independent** (e.g., `web_search` and `calculator`) run in parallel
+- Tools with **dependencies** (e.g., `read_file` followed by `write_file`) run sequentially
+- The harness analyzes tool call patterns to detect dependencies (e.g., if tool 2's parameters reference tool 1's result)
+
+<Callout>
+**Design principle**: Default to sequential execution for correctness, and only parallelize when you can prove independence.
+</Callout>
+
+## Error Capture and Result Formatting
+
+When a tool fails, the harness must decide: should the agent loop terminate, or should the error become an observation?
+
+Production harnesses treat errors as **data**, not crashes. This enables **model-driven error recovery**:
+
+```python
+def safe_dispatch(tool_name: str, params: Dict[str, Any]) -> ToolResult:
+    try:
+        result = dispatch(tool_name, params)
+        return ToolResult(
+            tool_use_id=params["tool_use_id"],
+            is_error=False,
+            content=result
+        )
+    except ValidationError as e:
+        return ToolResult(
+            tool_use_id=params["tool_use_id"],
+            is_error=True,
+            content=f"ValidationError: {e.message}"
+        )
+    except PermissionError as e:
+        return ToolResult(
+            tool_use_id=params["tool_use_id"],
+            is_error=True,
+            content=f"PermissionError: {e}"
+        )
+    except TimeoutError:
+        return ToolResult(
+            tool_use_id=params["tool_use_id"],
+            is_error=True,
+            content="Tool execution timed out"
+        )
+    except Exception as e:
+        return ToolResult(
+            tool_use_id=params["tool_use_id"],
+            is_error=True,
+            content=f"UnexpectedError: {type(e).__name__}: {e}"
+        )
+```
+
+The model receives the error in its next turn:
+
+```
+System: Tool result for toolu_abc123 (calculator)
+Error: ValidationError: 'expression' is required
+```
+
+The model can then reason about the error and retry:
+
+```
+I need to include the 'expression' parameter. Let me try again with the correct schema.
+```
+
+This error-as-observation pattern is critical for **robustness** — the agent can recover from transient failures, malformed inputs, and resource exhaustion without human intervention.
+
+## MCP: Dynamic Capability Discovery
+
+So far, we've assumed tools are **statically registered** in the harness at compile time. But what if:
+
+- Tools are provided by external systems with evolving APIs?
+- Different users need different tool sets?
+- Tools are too numerous to hardcode (e.g., thousands of enterprise APIs)?
+
+**Model Context Protocol (MCP)** solves this by treating tools as **dynamically discoverable capabilities**.
+
+### What is MCP?
+
+MCP is a protocol for connecting AI applications (like agent harnesses) to external systems (like databases, APIs, or internal tools). It defines how to:
+
+1. **List tools**: Query an MCP server for available tools and their schemas
+2. **Invoke tools**: Call a tool with parameters and receive a result
+3. **Negotiate capabilities**: Discover what the server supports (tools, resources, prompts)
+4. **Handle errors**: Return structured errors for invalid calls or server failures
+5. **Enforce security**: Authenticate clients and enforce access control
+
+MCP is **not just a tool dispatcher** — it's a standard interface for capability discovery and invocation. Think of it as "USB for AI" — a universal connector that lets harnesses plug into arbitrary systems without custom integration code.
+
+### Static Registry vs MCP Discovery
+
+<MermaidDiagram
+  chart={`graph TB
+    subgraph "Static Registry"
+        H1[Harness] --> R1[Tool Registry]
+        R1 --> T1[calculator]
+        R1 --> T2[web_search]
+        R1 --> T3[read_file]
+    end
+    
+    subgraph "MCP Dynamic Discovery"
+        H2[Harness] --> M[MCP Client]
+        M --> S1[MCP Server: Database Tools]
+        M --> S2[MCP Server: API Tools]
+        M --> S3[MCP Server: File Tools]
+        S1 --> T4[query_db]
+        S1 --> T5[insert_row]
+        S2 --> T6[fetch_api]
+        S3 --> T7[read_file]
+        S3 --> T8[write_file]
+    end
+    
+    style H1 fill:#e3f2fd
+    style H2 fill:#e3f2fd
+    style R1 fill:#fff3e0
+    style M fill:#e8f5e9
+    style S1 fill:#f3e5f5
+    style S2 fill:#fce4ec
+    style S3 fill:#fff9c4`}
+  fallback="Static registry: tools hardcoded in the harness. MCP discovery: tools provided by external servers, discovered at runtime."
+  caption="Static registries are simple but inflexible; MCP enables dynamic, per-session tool sets."
+/>
+
+### How MCP Dispatch Works
+
+When the model calls a tool via MCP:
+
+1. **Tool discovery** (happens once per session):
+   - Harness connects to MCP server
+   - Server returns list of available tools with schemas
+   - Harness registers these tools in its runtime registry
+
+2. **Tool invocation** (happens per tool call):
+   - Harness validates parameters against the MCP-provided schema
+   - Harness sends tool call to MCP server via JSON-RPC
+   - Server executes the tool and returns result or error
+   - Harness formats result for the model
+
+Here's a simplified example:
+
+```python
+import mcpclient
+
+class MCPDispatcher:
+    def __init__(self, server_url: str):
+        self.client = mcpclient.Client(server_url)
+        self.tools = {}
+        self._discover_tools()
+    
+    def _discover_tools(self):
+        """Query the MCP server for available tools."""
+        response = self.client.list_tools()
+        for tool in response["tools"]:
+            self.tools[tool["name"]] = tool["schema"]
+    
+    def dispatch(self, tool_name: str, params: Dict[str, Any]) -> Any:
+        """Validate and invoke a tool via MCP."""
+        if tool_name not in self.tools:
+            raise ValueError(f"Unknown tool: {tool_name}")
+        
+        schema = self.tools[tool_name]
+        jsonschema.validate(params, schema)
+        
+        # Invoke tool via MCP JSON-RPC
+        response = self.client.call_tool(tool_name, params)
+        
+        if response.get("error"):
+            raise RuntimeError(response["error"]["message"])
+        
+        return response["result"]
+
+# Example: Connect to a database MCP server
+db_dispatcher = MCPDispatcher("http://localhost:8080/mcp")
+result = db_dispatcher.dispatch("query_db", {"sql": "SELECT * FROM users LIMIT 10"})
+```
+
+### When to Use MCP
+
+Use MCP when:
+
+- **External systems**: Tools are provided by external services you don't control
+- **Dynamic tool sets**: Tools vary per user, session, or deployment
+- **Security boundaries**: Tools require authentication or fine-grained access control
+- **Evolving APIs**: Tool schemas change frequently, and you don't want to redeploy the harness
+
+Use static registries when:
+
+- **Simple, stable tools**: Tools are local functions that rarely change
+- **Low latency**: You need minimal overhead per tool call
+- **Full control**: You own the tool implementations and schemas
+
+## Structured Tool Calls vs Text Parsing
+
+Early agent systems (like ReAct) relied on **text parsing** to extract tool calls from free-form model output:
+
+```
+Thought: I need to search for information about MCP.
+Action: search
+Action Input: Model Context Protocol
+```
+
+The harness would parse this text to extract `tool_name="search"` and `params={"query": "Model Context Protocol"}`.
+
+This approach is fragile:
+
+- **Parsing failures**: Models might format the output incorrectly (e.g., missing newlines, extra whitespace)
+- **Ambiguity**: Is `Action Input: 2 + 2` a math expression or a search query?
+- **No validation**: The harness can't validate parameters until after parsing
+
+Modern systems use **structured tool calls** with typed schemas:
+
+```json
+{
+  "type": "tool_use",
+  "id": "toolu_abc123",
+  "name": "web_search",
+  "input": {
+    "query": "Model Context Protocol",
+    "max_results": 5
+  }
+}
+```
+
+This is:
+
+- **Unambiguous**: Clear separation between tool name and parameters
+- **Validatable**: Parameters can be checked against JSON Schema before parsing
+- **Robust**: No risk of parsing failures due to formatting issues
+
+<Callout>
+**Best practice**: Always use structured tool calls in production harnesses. Text parsing is a historical artifact, not a design pattern.
+</Callout>
+
+## Case Study: Dispatching Search and Calculator
+
+Let's trace two tool calls through the full dispatch pipeline: `web_search` (which succeeds) and `calculator` (which fails validation, then succeeds on retry).
+
+### Turn 1: Web Search
+
+**Model output:**
+
+```json
+{
+  "type": "tool_use",
+  "id": "toolu_001",
+  "name": "web_search",
+  "input": {
+    "query": "agent harness architecture",
+    "max_results": 5
+  }
+}
+```
+
+**Dispatch pipeline:**
+
+1. **Parse**: Extract `tool_name="web_search"`, `params={"query": "...", "max_results": 5}`
+2. **Validate**: Check params against schema → ✅ Pass (all required fields present, types correct)
+3. **Permissions**: Check if `web_search` is allowed → ✅ Pass
+4. **Execute**: Call `web_search("agent harness architecture", max_results=5)` → Returns 5 search results
+5. **Capture**: Wrap result in `ToolResult(is_error=False, content="...")`
+6. **Format**: Create `tool_result` message with results
+7. **Append**: Add to context for next turn
+
+**Result to model:**
+
+```json
+{
+  "type": "tool_result",
+  "tool_use_id": "toolu_001",
+  "content": "Found 5 results:\n1. Agent Harness Design Patterns\n2. Building Production Agent Systems\n..."
+}
+```
+
+### Turn 2: Calculator (First Attempt)
+
+**Model output:**
+
+```json
+{
+  "type": "tool_use",
+  "id": "toolu_002",
+  "name": "calculator",
+  "input": {}
+}
+```
+
+**Dispatch pipeline:**
+
+1. **Parse**: Extract `tool_name="calculator"`, `params={}`
+2. **Validate**: Check params against schema → ❌ Fail (`expression` is required but missing)
+3. **Capture**: Wrap validation error in `ToolResult(is_error=True, content="...")`
+4. **Format**: Create `tool_result` message with error
+5. **Append**: Add error to context
+
+**Result to model:**
+
+```json
+{
+  "type": "tool_result",
+  "tool_use_id": "toolu_002",
+  "is_error": true,
+  "content": "ValidationError: 'expression' is a required property"
+}
+```
+
+### Turn 3: Calculator (Retry)
+
+**Model output:**
+
+```json
+{
+  "type": "tool_use",
+  "id": "toolu_003",
+  "name": "calculator",
+  "input": {
+    "expression": "2 + 2"
+  }
+}
+```
+
+**Dispatch pipeline:**
+
+1. **Parse**: Extract `tool_name="calculator"`, `params={"expression": "2 + 2"}`
+2. **Validate**: Check params against schema → ✅ Pass
+3. **Permissions**: Check if `calculator` is allowed → ✅ Pass
+4. **Execute**: Call `calculator("2 + 2")` → Returns `4`
+5. **Capture**: Wrap result in `ToolResult(is_error=False, content="4")`
+6. **Format**: Create `tool_result` message
+7. **Append**: Add to context
+
+**Result to model:**
+
+```json
+{
+  "type": "tool_result",
+  "tool_use_id": "toolu_003",
+  "content": "4"
+}
+```
+
+This illustrates the power of **error-as-observation**: the model sees the validation failure, understands what went wrong, and corrects its input — all without human intervention or harness-level retry logic.
+
+## Summary
+
+Tool dispatch is the **execution engine** of the agent loop. It bridges the model's abstract requests (tool calls) with concrete execution (API calls, file operations, computations). The dispatch pipeline — parse, validate, permissions, execute, capture, format — ensures that tool execution is safe, observable, and recoverable.
+
+We've seen two architectural approaches:
+
+- **Static registries**: Tools are hardcoded at compile time. Simple, fast, but inflexible.
+- **MCP dynamic discovery**: Tools are discovered at runtime from external servers. More complex, but enables per-user tool sets, external system integration, and evolving APIs.
+
+We've also explored the tradeoffs in **parallel vs sequential execution** and the critical role of **error capture** in enabling model-driven recovery.
+
+But dispatch is only half the story. Tools produce results, but where do those results go? How does the harness decide which tools to show the model, which results to prioritize, and when to stop calling tools?
+
+In **Lesson 4 (Context, Goals, and State)**, we'll examine how the harness manages the **context window** (what the model can see), **goal tracking** (what the agent is trying to accomplish), and **state** (what has happened so far). These are the control mechanisms that turn tool dispatch from a reactive pipeline into a **goal-directed system**.
+
+<KeyTerms terms={[
+  { term: "Dispatch pipeline", definition: "The multi-stage process of parsing, validating, permissioning, executing, and formatting tool calls." },
+  { term: "Dispatch table", definition: "A mapping from tool names to implementations, used for static tool registration." },
+  { term: "Parameter validation", definition: "Checking tool call parameters against JSON Schema before execution to ensure type safety and constraint satisfaction." },
+  { term: "Permission boundaries", definition: "Rules that determine which tools an agent can invoke, based on static lists, user identity, or dynamic policies." },
+  { term: "Parallel execution", definition: "Running multiple independent tool calls concurrently to reduce latency." },
+  { term: "Sequential execution", definition: "Running tool calls one at a time, in order, to guarantee consistent execution and simplify debugging." },
+  { term: "Error capture", definition: "Treating tool failures as observations rather than crashes, enabling model-driven error recovery." },
+  { term: "MCP (Model Context Protocol)", definition: "A protocol for connecting AI applications to external systems through dynamic capability discovery." },
+  { term: "Structured tool calls", definition: "Tool invocations represented as typed JSON objects, as opposed to free-form text parsed by regex." },
+  { term: "Error-as-observation", definition: "The design pattern where tool failures are returned to the model as data, allowing the model to reason about and recover from errors." }
+]} />
