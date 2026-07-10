@@ -1,0 +1,520 @@
+---
+title: "Lesson 8: Observability — Traces, Logs, Evals, and Replay"
+quiz:
+  - question: "What is the primary difference between traces and logs in agent observability?"
+    options:
+      - "Traces are structured JSON while logs are plain text"
+      - "Traces capture parent-child relationships across spans while logs are flat event streams"
+      - "Traces are only for debugging while logs are for production monitoring"
+      - "Traces require OpenTelemetry while logs can use any format"
+    correctIndex: 1
+    explanation: "Traces organize events into a tree structure showing parent-child relationships between spans (run → turn → model/tool calls), while logs are individual timestamped events. Both can be structured, both are useful in production, and traces don't require OpenTelemetry."
+  - question: "Which level of replay guarantees identical results to the original run?"
+    options:
+      - "Trace replay with read-only walkthrough"
+      - "State replay from checkpoint with live model calls"
+      - "Deterministic replay with mocked tools and captured inputs"
+      - "None of the above — no replay level guarantees identical results"
+    correctIndex: 3
+    explanation: "Trace replay is read-only inspection (no re-execution), state replay uses live model calls that may differ, and deterministic replay attempts to reproduce results but non-determinism in model sampling and timing means identical results aren't guaranteed."
+  - question: "What is OpenTelemetry's role in agent observability?"
+    options:
+      - "It is a complete agent harness framework like LangGraph"
+      - "It provides a portability layer with semantic conventions for telemetry data"
+      - "It replaces the need for custom logging in agent systems"
+      - "It automatically generates evaluation metrics for agent runs"
+    correctIndex: 1
+    explanation: "OpenTelemetry provides standardized semantic conventions and export formats for telemetry data, enabling portability across observability backends. It's not a harness framework, doesn't replace custom logging needs, and doesn't generate evals — those require separate implementation."
+  - question: "Which diagnostic question helps identify context assembly bugs?"
+    options:
+      - "What did the model see?"
+      - "What did it decide?"
+      - "What happened during execution?"
+      - "Was the result correct?"
+    correctIndex: 0
+    explanation: "Context assembly bugs (missing search results, truncated history, incorrect prompt construction) are revealed by inspecting what the model actually received as input — 'What did the model see?' The other questions help diagnose decision quality, execution errors, and outcome correctness."
+---
+
+## Overview
+
+Agent observability is fundamentally different from traditional application monitoring. When your web server returns the wrong status code, you can reproduce it deterministically. When an agent produces the wrong summary, the next run might succeed — or fail differently. Multi-step reasoning introduces non-determinism, tool calls have side effects, and context assembly is invisible from the outside.
+
+This lesson covers the five pillars of agent observability: structured logs, distributed traces, evaluation metrics, cost and latency tracking, and run replay. You'll learn how traces organize events into trees, what questions diagnostics must answer, and how harnesses instrument runs for debugging and improvement.
+
+This is the last conceptual lesson before you build a complete harness from scratch. You now have the eight-concern mental model: loop control, task dispatch, state management, persistence, intervention, safety, code execution, and observability.
+
+<LearningObjectives items={[
+  "Identify the five pillars of agent observability and their diagnostic roles.",
+  "Explain why traces are trees of spans rather than flat event logs.",
+  "Map structured logging fields (run ID, span ID, event type) to diagnostic questions.",
+  "Distinguish three levels of replay and their reliability guarantees.",
+  "Describe how OpenAI Agents SDK, LangGraph, and OpenTelemetry approach instrumentation."
+]} />
+
+## Five Observability Pillars
+
+Agent harnesses must answer: *What happened? Why? Was it right? How much did it cost?* Five pillars support those questions:
+
+1. **Structured logs** — timestamped events with run ID, turn number, span ID, event type, and payload. Flat stream for search and alerting.
+2. **Distributed traces** — tree of spans showing parent-child relationships: root run → turn → model call / tool call / state update. Traces show causality.
+3. **Evaluation metrics** — per-run scoring: Did the agent achieve the goal? How many turns? What was the cost? Were there errors?
+4. **Cost and latency tracking** — token usage, model call duration, total run cost. Observability includes efficiency.
+5. **Run replay** — reconstruct what happened from trace, or resume from checkpoint, or attempt deterministic reproduction with mocked tools.
+
+<MermaidDiagram chart={`graph TD
+    Run[Agent Run] --> Logs[Structured Logs]
+    Run --> Trace[Distributed Trace]
+    Run --> Eval[Evaluation Metrics]
+    Run --> Cost[Cost & Latency]
+    Run --> Replay[Replay Capability]
+    
+    Logs --> Hook1[on_turn_start hook]
+    Logs --> Hook2[on_tool_result hook]
+    Trace --> Hook3[create_span context]
+    Eval --> Hook4[on_run_end hook]
+    Cost --> Hook5[track_tokens hook]
+    Replay --> Hook6[persist_checkpoint hook]
+    
+    style Run fill:#e6f3ff
+    style Logs fill:#fff4e6
+    style Trace fill:#e8f5e9
+    style Eval fill:#f3e5f5
+    style Cost fill:#fff9c4
+    style Replay fill:#fce4ec
+`} fallback="Diagram showing five observability pillars (structured logs, distributed traces, evaluation metrics, cost & latency tracking, run replay) connected to harness hook points for instrumentation." caption="The five observability pillars map to harness hook points. Logs use turn/tool hooks, traces use span contexts, evals use run-end hooks, cost uses token tracking, and replay uses checkpoint persistence." />
+
+These pillars are complementary. Logs provide a searchable event stream. Traces show relationships. Evals measure success. Cost tracks efficiency. Replay enables diagnosis.
+
+## Traces as the Primary Primitive
+
+A **trace** is a tree of **spans**. Each span represents a unit of work: a model call, a tool execution, a state update. Spans have:
+
+- **Span ID** — unique identifier
+- **Parent span ID** — links child to parent
+- **Start and end time** — duration
+- **Attributes** — metadata (model, tool name, token count)
+- **Events** — timestamped annotations within the span
+
+A multi-turn agent run produces a trace tree:
+
+```
+Root Span (run)
+├─ Span (turn 1)
+│  ├─ Span (model call)
+│  ├─ Span (tool: search)
+│  └─ Span (state update)
+├─ Span (turn 2)
+│  ├─ Span (model call)
+│  ├─ Span (tool: calculate)
+│  └─ Span (state update)
+└─ Span (turn 3)
+   └─ Span (model call)
+```
+
+<MermaidDiagram chart={`graph TD
+    Root[Root: Run abc-123] --> T1[Turn 1]
+    Root --> T2[Turn 2]
+    Root --> T3[Turn 3]
+    
+    T1 --> M1[Model Call: gpt-4<br/>500 tokens, 1.2s]
+    T1 --> Tool1[Tool: search<br/>query='climate data']
+    T1 --> State1[State Update<br/>results stored]
+    
+    T2 --> M2[Model Call: gpt-4<br/>300 tokens, 0.8s]
+    T2 --> Tool2[Tool: calculate<br/>avg temperature]
+    T2 --> State2[State Update<br/>answer stored]
+    
+    T3 --> M3[Model Call: gpt-4<br/>200 tokens, 0.6s]
+    
+    style Root fill:#e3f2fd
+    style T1 fill:#fff3e0
+    style T2 fill:#fff3e0
+    style T3 fill:#fff3e0
+    style M1 fill:#e8f5e9
+    style M2 fill:#e8f5e9
+    style M3 fill:#e8f5e9
+    style Tool1 fill:#f3e5f5
+    style Tool2 fill:#f3e5f5
+    style State1 fill:#fce4ec
+    style State2 fill:#fce4ec
+`} fallback="Trace tree showing root run span with three turn spans. Each turn contains model call, tool call, and state update spans with timing and token metadata." caption="A trace tree for a three-turn research run. Each turn spawns model, tool, and state spans. Timing and token counts are span attributes." />
+
+Why trees instead of flat logs? Because causality matters. "Tool call X failed" is ambiguous. "Tool call X failed *during turn 2 after model decided to search for Y*" shows the chain of decisions.
+
+Traces also enable:
+
+- **Filtering by span type** — show me only tool calls, only model calls over 2 seconds
+- **Aggregation** — average tokens per turn, p95 latency for search tool
+- **Comparison** — diff two runs to see where they diverged
+
+## Structured Logging
+
+Every log event should be a structured record, not a plain text line. Minimum fields:
+
+- **Run ID** — correlates events across the same run
+- **Turn number** — which iteration of the loop
+- **Span ID** — which unit of work
+- **Event type** — `model_call_start`, `tool_result`, `error`, `state_update`
+- **Timestamp** — when it happened
+- **Payload** — event-specific data (model name, tool args, error message)
+
+```python
+# structured_log.py
+import json
+import time
+
+def log_event(run_id, turn, span_id, event_type, payload):
+    event = {
+        "run_id": run_id,
+        "turn": turn,
+        "span_id": span_id,
+        "event_type": event_type,
+        "timestamp": time.time(),
+        "payload": payload
+    }
+    print(json.dumps(event))
+
+# Example usage
+log_event(
+    run_id="abc-123",
+    turn=2,
+    span_id="span-456",
+    event_type="tool_call",
+    payload={"tool": "search", "query": "climate data", "results": 12}
+)
+# Output:
+# {"run_id": "abc-123", "turn": 2, "span_id": "span-456", "event_type": "tool_call", "timestamp": 1720569600.0, "payload": {"tool": "search", "query": "climate data", "results": 12}}
+```
+
+Structured logs enable:
+
+- **Filtering** — `grep '"event_type": "error"'`
+- **Analytics** — count tool calls per run, measure success rates
+- **Correlation** — join with traces, evals, cost data by run ID
+
+Plain text logs ("Calling search tool with query 'climate data'") are human-readable but unmaintainable at scale. Structured logs are both machine-parseable and human-readable when formatted with `jq` or a log viewer.
+
+## The Four Diagnostic Questions
+
+Every observability system must answer these questions:
+
+1. **What did the model see?** (Context inspection)
+   - Full prompt with system message, conversation history, tool schemas
+   - Reveals context assembly bugs: truncated history, missing search results, incorrect prompt construction
+
+2. **What did it decide?** (Response analysis)
+   - Model output: tool calls, text response, reasoning
+   - Reveals decision bugs: chose wrong tool, ignored available information, hallucinated
+
+3. **What happened?** (Execution trace)
+   - Tool call results, state updates, errors
+   - Reveals execution bugs: tool failures, permission errors, timeouts
+
+4. **Was it right?** (Evaluation)
+   - Per-run scoring: goal achieved, turn count, cost, errors
+   - Reveals outcome bugs: wrong answer, inefficient path, partial completion
+
+<Callout type="info">
+These questions map to trace spans: (1) model call input, (2) model call output, (3) tool/state spans, (4) eval span at run end.
+</Callout>
+
+Example diagnostic workflow:
+
+- User reports: "Agent summarized the wrong paper."
+- Question 1: Check model input → context shows correct paper URL but search results were truncated.
+- Question 3: Check search tool span → tool returned 50 results but only 10 fit in context budget.
+- Question 4: Check eval → faithfulness score was 0.4 (below 0.7 threshold).
+- Root cause: Context assembly dropped key results due to budget pressure.
+
+## Cost and Latency as Observability
+
+Traditional observability focuses on correctness and availability. Agent observability adds efficiency:
+
+- **How expensive was this run?** Token usage per turn, total cost in dollars.
+- **How long did each step take?** Model call latency, tool execution time, total run duration.
+
+These are not separate from "what happened" — they *are* observability data. A run that costs $5 instead of $0.50 is a production incident. A tool call that takes 30 seconds instead of 3 seconds breaks user experience.
+
+Cost and latency tracking requires:
+
+- **Token counting** — prompt tokens, completion tokens, cached tokens (if using prompt caching)
+- **Timing instrumentation** — start/end timestamps for every span
+- **Pricing data** — model cost per 1M tokens (changes over time, requires updates)
+
+```python
+# cost_tracking.py
+PRICING = {
+    "gpt-4": {"prompt": 0.03, "completion": 0.06},  # per 1K tokens
+    "gpt-3.5-turbo": {"prompt": 0.0015, "completion": 0.002}
+}
+
+def calculate_cost(model, prompt_tokens, completion_tokens):
+    rates = PRICING.get(model, {"prompt": 0, "completion": 0})
+    prompt_cost = (prompt_tokens / 1000) * rates["prompt"]
+    completion_cost = (completion_tokens / 1000) * rates["completion"]
+    return prompt_cost + completion_cost
+
+# Example: 500 prompt tokens, 200 completion tokens with gpt-4
+cost = calculate_cost("gpt-4", 500, 200)
+print(f"Cost: ${cost:.4f}")  # Cost: $0.0270
+```
+
+Dashboards should show:
+
+- **Per-run cost distribution** — histogram of run costs, p50/p95/p99
+- **Cost over time** — daily/weekly spend, cost per user
+- **Latency percentiles** — p50/p95/p99 for model calls, tool calls, full runs
+
+## Evaluation as Runtime Observability
+
+Evaluation is not just offline benchmarking. **Per-run evals** are observability data:
+
+- **Goal achieved?** Binary or scored (0-1) measurement
+- **Turn count** — efficiency proxy (fewer turns often better)
+- **Cost** — already tracked, but evals can flag outliers
+- **Errors** — tool failures, timeout, max turns exceeded
+
+Evals answer question 4: *Was it right?* They also trigger alerts. If 10% of runs score below 0.5, something broke.
+
+Types of per-run evals:
+
+- **Rule-based** — did the agent call the required tool, did it return JSON, did it stay within budget
+- **LLM-as-judge** — "Rate this summary for faithfulness to the source (0-1)"
+- **User feedback** — thumbs up/down, explicit rating
+
+<Warning>
+LLM-as-judge evals are themselves non-deterministic. Use multiple judge calls or temperature=0 for consistency. Log judge prompts and scores as trace spans.
+</Warning>
+
+Example eval span:
+
+```json
+{
+  "span_id": "eval-789",
+  "parent_id": "run-abc-123",
+  "type": "evaluation",
+  "attributes": {
+    "goal_achieved": true,
+    "faithfulness_score": 0.85,
+    "turn_count": 3,
+    "total_cost": 0.027,
+    "errors": 0
+  }
+}
+```
+
+## Three Levels of Replay
+
+Debugging requires replay: *re-experience what happened* or *re-run with changes*. Three levels:
+
+### 1. Trace Replay (Read-Only Walkthrough)
+
+Inspect recorded spans without re-executing. Navigate the trace tree, view inputs/outputs, measure timing.
+
+- **Guarantees:** Shows exactly what happened originally.
+- **Limitations:** Cannot change anything, cannot test fixes.
+- **Use case:** Root cause analysis, forensic debugging.
+
+### 2. State Replay (Resume from Checkpoint)
+
+Load a checkpoint (turn N state) and continue with live model calls. Results may differ due to non-determinism.
+
+- **Guarantees:** Starts from the same state.
+- **Limitations:** Model may make different decisions, tool results may change if tools have side effects.
+- **Use case:** Test fix by resuming from failure point, explore alternative paths.
+
+### 3. Deterministic Replay Attempt (Mocked Tools + Captured Inputs)
+
+Replay with mocked tools returning recorded results and captured model inputs. Attempt to reproduce original behavior.
+
+- **Guarantees:** None — model sampling is non-deterministic even with temperature=0 (due to floating-point variance, API changes).
+- **Limitations:** Rarely produces identical results, requires extensive mocking infrastructure.
+- **Use case:** Approximate reproduction for debugging, testing prompt changes.
+
+<MermaidDiagram chart={`graph LR
+    Original[Original Run] --> Trace[Trace Replay]
+    Original --> State[State Replay]
+    Original --> Determ[Deterministic Replay]
+    
+    Trace --> T1[Read-Only Inspection]
+    Trace --> T2[100% Accurate History]
+    
+    State --> S1[Resume from Checkpoint]
+    State --> S2[Live Model Calls]
+    State --> S3[May Differ from Original]
+    
+    Determ --> D1[Mocked Tools]
+    Determ --> D2[Captured Inputs]
+    Determ --> D3[No Guarantees]
+    
+    style Original fill:#e3f2fd
+    style Trace fill:#e8f5e9
+    style State fill:#fff3e0
+    style Determ fill:#ffebee
+`} fallback="Diagram comparing three replay levels: trace replay (read-only, 100% accurate history), state replay (resume from checkpoint with live calls, may differ), and deterministic replay (mocked tools, no guarantees)." caption="Trace replay is forensic, state replay is experimental, deterministic replay is aspirational." />
+
+Most production systems use **trace replay** for root cause analysis and **state replay** for testing fixes. Deterministic replay is useful in research but unreliable in production.
+
+## How Harnesses Instrument
+
+Different harnesses take different approaches to instrumentation:
+
+### OpenAI Agents SDK
+
+Built-in tracing with predefined span types:
+
+- `agent.run` creates root span
+- Each turn creates `turn` span
+- Model calls create `llm` span with token counts
+- Tool calls create `tool` span with args/results
+
+Spans export to OpenTelemetry-compatible backends (Datadog, Honeycomb, custom).
+
+```python
+# OpenAI Agents SDK tracing (conceptual)
+from openai import Agent
+
+agent = Agent(name="research", tools=[search_tool])
+# Automatic instrumentation:
+# - Root span: run ID
+# - Turn spans: turn number, model input/output
+# - Tool spans: tool name, args, result, duration
+result = agent.run("What is the climate trend?")
+# Trace exported to configured backend
+```
+
+### LangGraph + LangSmith
+
+LangGraph is the harness, LangSmith is the observability backend:
+
+- Trace capture: automatic span creation for nodes, edges, model calls, tool calls
+- Run comparison: diff two traces side-by-side
+- Monitoring dashboards: latency, cost, success rate over time
+- Eval integration: run evals on every production run, alert on score drops
+
+LangSmith is opinionated (requires hosted backend) but provides full-stack observability without custom code.
+
+### OpenTelemetry GenAI Conventions
+
+OpenTelemetry provides **semantic conventions** for GenAI spans:
+
+- Span attribute: `gen_ai.system` (e.g., "openai", "anthropic")
+- Span attribute: `gen_ai.request.model` (e.g., "gpt-4")
+- Span attribute: `gen_ai.usage.prompt_tokens`
+- Span attribute: `gen_ai.usage.completion_tokens`
+
+This is a **portability layer**, not a harness. You still write the harness, but spans conform to standard schema. Benefit: any OTel-compatible backend (Jaeger, Tempo, Grafana Cloud) can ingest and query your traces.
+
+### Custom Structured JSON Logs
+
+Minimal approach: log JSON events, export to log aggregator (Elasticsearch, Loki), visualize with queries.
+
+```python
+# custom_logging.py
+import json
+import uuid
+
+class SimpleTracer:
+    def __init__(self, run_id=None):
+        self.run_id = run_id or str(uuid.uuid4())
+        self.events = []
+    
+    def log(self, event_type, span_id, payload):
+        event = {
+            "run_id": self.run_id,
+            "span_id": span_id,
+            "event_type": event_type,
+            "timestamp": time.time(),
+            "payload": payload
+        }
+        self.events.append(event)
+        print(json.dumps(event))
+    
+    def export(self):
+        # Send to log backend
+        return self.events
+
+tracer = SimpleTracer()
+tracer.log("turn_start", "span-1", {"turn": 1})
+tracer.log("model_call", "span-2", {"model": "gpt-4", "tokens": 500})
+tracer.log("tool_call", "span-3", {"tool": "search", "query": "climate"})
+tracer.log("turn_end", "span-1", {"turn": 1, "cost": 0.015})
+```
+
+This approach has no dependencies but requires manual span tree construction and backend setup.
+
+## Case Study: Diagnosing a Wrong Summary
+
+**Scenario:** A research agent summarizes a scientific paper. The summary claims the paper found "significant correlation" when the paper actually found "no significant correlation."
+
+**Step 1: Check eval score**
+
+Per-run eval (LLM-as-judge for faithfulness) scored 0.3 (below 0.7 threshold). Alert fired.
+
+**Step 2: Trace replay**
+
+Navigate trace tree:
+
+- Turn 1: Model calls `search(query="paper on climate correlation")`
+  - Tool returns 50 results
+  - Span shows 50 results but context budget is 2000 tokens
+- Turn 1: Model calls `read_paper(url="...")`
+  - Tool returns full paper text (8000 tokens)
+  - **Context assembly truncates to 2000 tokens, dropping the "Conclusion" section**
+- Turn 2: Model generates summary based on truncated context
+  - Model input (question 1: "What did the model see?") shows Introduction and Methods but no Conclusion
+  - Model output (question 2: "What did it decide?") infers correlation from Methods section
+
+**Root cause:** Context assembly bug dropped the Conclusion section where "no significant correlation" was stated.
+
+**Step 3: State replay with fix**
+
+Load checkpoint from turn 1 with larger context budget (4000 tokens). Rerun:
+
+- Model sees full paper including Conclusion
+- Summary now correctly states "no significant correlation"
+- Faithfulness eval scores 0.9
+
+**Fix deployed:** Increase context budget for paper reading, add assertion that Conclusion section is present before summarizing.
+
+<Callout type="success">
+The four diagnostic questions guided the root cause: (1) revealed truncated context, (2) showed incorrect inference, (3) confirmed tool returned full text, (4) flagged low score. Trace replay made the bug visible, state replay confirmed the fix.
+</Callout>
+
+## Summary
+
+Agent observability requires five pillars: structured logs for searchable events, distributed traces for causal trees, evaluation metrics for correctness, cost and latency tracking for efficiency, and run replay for diagnosis.
+
+Traces are the primary primitive because they show parent-child relationships: which model call led to which tool call, which turn failed, which span consumed the most tokens. Structured logging provides the event stream, evals measure success, cost tracking catches runaway spend, and replay enables iterative debugging.
+
+Different harnesses instrument differently: OpenAI Agents SDK provides built-in tracing, LangGraph integrates with LangSmith for full-stack observability, OpenTelemetry offers a portability layer, and custom JSON logs work when you need full control.
+
+You now have the complete eight-concern mental model:
+
+1. **Loop Control** — when to continue, when to stop
+2. **Task Dispatch** — parallel tools, sequential reasoning, interruption
+3. **State Management** — conversation history, working memory, handoffs
+4. **Persistence** — checkpoints, resumption, crash recovery
+5. **Human Intervention** — approval gates, input requests, guidance
+6. **Safety** — budget limits, content filtering, containment
+7. **Code Execution** — sandboxing, package management, result capture
+8. **Observability** — traces, logs, evals, replay
+
+Next lesson: synthesize these concerns by building a harness from scratch.
+
+<KeyTerms terms={[
+  { term: "Trace", definition: "A tree of spans representing a complete agent run, showing parent-child relationships between units of work (turns, model calls, tool calls)." },
+  { term: "Span", definition: "A unit of work in a trace with start/end time, attributes, and optional parent span. Examples: model call, tool execution, state update." },
+  { term: "Structured logging", definition: "Emitting log events as JSON records with consistent fields (run ID, span ID, event type, timestamp, payload) for machine parsing and analytics." },
+  { term: "LLM-as-judge", definition: "Using a language model to evaluate another model's output (e.g., scoring summary faithfulness, rating answer quality). Non-deterministic but scalable." },
+  { term: "Trace replay", definition: "Read-only inspection of recorded trace spans without re-execution. Shows exactly what happened originally." },
+  { term: "State replay", definition: "Resuming from a checkpoint with live model calls. May produce different results due to non-determinism." },
+  { term: "OpenTelemetry GenAI conventions", definition: "Standardized semantic attributes for GenAI spans (model name, token counts, system) enabling portability across observability backends." }
+]} />
+
+## Further Reading
+
+- OpenTelemetry Semantic Conventions for GenAI: https://opentelemetry.io/docs/specs/semconv/gen-ai/
+- LangSmith Tracing Documentation: https://docs.smith.langchain.com/observability/tracing
+- Honeycomb Guide to Distributed Tracing: https://www.honeycomb.io/distributed-tracing
+- "Debugging Machine Learning Models" (production observability): https://research.google/pubs/pub43146/
