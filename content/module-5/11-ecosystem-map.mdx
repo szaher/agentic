@@ -1,0 +1,276 @@
+---
+title: "Ecosystem Map"
+quiz:
+  - question: "Which runtime category does LangGraph belong to?"
+    options:
+      - "Agent SDKs / Model-Adjacent Runtimes"
+      - "Graph Runtimes"
+      - "Workflow / Orchestration Runtimes"
+      - "Multi-Agent Runtimes"
+    correctIndex: 1
+    explanation: "LangGraph is a graph runtime, designed around explicit state graphs with checkpointers and visual debugging."
+  - question: "What distinguishes Claude Agent SDK from Anthropic Messages API?"
+    options:
+      - "Claude Agent SDK is lower-level and requires manual tool execution"
+      - "Anthropic Messages API provides session continuity and managed execution"
+      - "Claude Agent SDK provides managed execution with session continuity, while Messages API is a lower-level tool_use protocol"
+      - "They are identical in functionality"
+    correctIndex: 2
+    explanation: "Claude Agent SDK is a managed runtime with session continuity and checkpointing, while Messages API is the lower-level protocol for direct tool_use integration."
+  - question: "Why does \"Custom\" appear in every row of the comparison table?"
+    options:
+      - "Because all frameworks require you to write custom code for every concern"
+      - "Because \"Custom\" means building from scratch without any framework"
+      - "Because every harness involves custom code making decisions about the eight concerns — frameworks only shift where customization happens"
+      - "Because the comparison table is incomplete"
+    correctIndex: 2
+    explanation: "Every harness is custom code. Frameworks shift decisions from 'you write the loop' to 'you configure the graph,' but you still make choices about all eight concerns."
+  - question: "What does MCP (Model Context Protocol) provide that static tool registration doesn't?"
+    options:
+      - "Faster model inference"
+      - "Protocol-native dynamic tool discovery and context exchange"
+      - "Cheaper API calls"
+      - "Multi-agent coordination"
+    correctIndex: 1
+    explanation: "MCP enables dynamic tool discovery and standardized context exchange, moving beyond static tool schemas hardcoded at runtime startup."
+---
+
+## Overview
+
+You've built a custom harness from scratch. You traced eight concerns — state, routing, tools, errors, events, interrupts, delegation, and persistence — from first principles through production features. Now you'll see how the industry solves the same problems.
+
+This lesson compares real-world harnesses across the eight-concern framework you learned in Lessons 1–8. You'll categorize frameworks, read a side-by-side comparison table, understand the "Custom" column, track ecosystem evolution, and identify trend lines that matter for production deployments.
+
+<Callout type="info">
+**Ecosystem Snapshot**
+
+This comparison reflects the landscape as of mid-2026. Framework capabilities evolve rapidly. Verify against current documentation before production decisions.
+</Callout>
+
+## Four Harness Categories
+
+Agent harnesses cluster into four categories, each with different primitives and integration points. Understanding the categories helps you match frameworks to your architecture.
+
+### Agent SDKs / Model-Adjacent Runtimes
+
+**Lower-Level Model APIs** provide direct access to tool use without managed execution:
+
+**Anthropic Messages API** is the foundational protocol for Claude. You send messages with a `tools` array, receive `tool_use` blocks, execute tools in your code, return `tool_result` messages, and repeat until the model returns a text block. State, routing, error recovery, and persistence are your responsibility. This API gives you full control and minimal abstraction.
+
+**Managed Agent SDKs** wrap the protocol loop and add session continuity:
+
+**OpenAI Agents SDK** provides a managed runtime for multi-turn conversations with persistent threads stored server-side. You define tools, configure assistants, and call `run()`. The SDK handles tool execution, streaming, and thread state. Persistence is managed by OpenAI's infrastructure.
+
+**Claude Agent SDK** offers file-based checkpointing and session continuity for local or self-hosted deployments. You define tools, run agents in isolated environments, and resume from checkpoint files. Persistence is file-based by default; full run-state durability requires external storage.
+
+**UI/App Agent SDKs** integrate LLM agents into application frontends:
+
+**Vercel AI SDK** provides React hooks (`useChat`, `useCompletion`), streaming UI components, and server-side route handlers for Next.js applications. It abstracts model provider differences (OpenAI, Anthropic, Google, etc.) and simplifies tool integration for web apps. State is typically managed client-side or in framework state.
+
+### Graph Runtimes
+
+**LangGraph** models agents as state graphs. You define nodes (agent steps or tool calls), edges (control flow), and state schemas. LangGraph provides:
+
+- **Checkpointers:** save/restore state at every step for durability and debugging.
+- **Stores:** persistent key-value storage for cross-run data.
+- **Interrupts:** pause execution for human approval or external input.
+- **LangSmith:** observability and tracing for graph executions.
+
+Graph-based harnesses make state transitions explicit. You see exactly where the agent is in the graph, what state it carries, and where it can branch next. This explicitness supports visual debugging, controlled interrupts, and deterministic retries.
+
+<MermaidDiagram
+  chart={`graph LR
+    Start[User Request] --> Router{Route Intent}
+    Router -->|Tool Call| Execute[Execute Tool]
+    Router -->|Response| Respond[Generate Response]
+    Execute --> Checkpoint1[Checkpoint]
+    Checkpoint1 --> Router
+    Respond --> End[Return to User]
+    
+    style Checkpoint1 fill:#fbbf24,stroke:#f59e0b,stroke-width:2px
+    style Router fill:#60a5fa,stroke:#3b82f6,stroke-width:2px
+`}
+  fallback="Graph runtime with explicit state transitions: user request → routing → tool execution or response → checkpoint → loop back or end."
+  caption="LangGraph state graph with explicit checkpoints and routing nodes."
+/>
+
+### Workflow / Orchestration Runtimes
+
+Workflow engines designed for distributed systems can host agent steps:
+
+**Temporal** is a durable execution platform. You write workflows as code (in Python, TypeScript, Go, etc.), and Temporal guarantees exactly-once execution, automatic retries, and recovery from failures. LLM integrations treat model calls as workflow activities. Temporal handles persistence, replay, and scheduling. This is useful when agents are part of larger distributed workflows (e.g., order processing with human-in-the-loop reviews and LLM-generated summaries).
+
+**Prefect / Airflow** are workflow orchestrators for data pipelines. You can embed LLM agent steps into tasks, schedule runs, and observe execution graphs. These frameworks excel at batch processing and scheduled workflows, but don't provide interactive session continuity.
+
+Workflow runtimes complement agent SDKs: use agent SDKs for conversational loops, workflow runtimes for long-running, multi-stage processes with external dependencies.
+
+### Multi-Agent Runtimes
+
+Multi-agent frameworks coordinate multiple agents working together:
+
+**CrewAI** models teams of agents with roles, goals, and delegation. You define a crew (e.g., researcher + writer + reviewer), assign tasks, and let agents delegate subtasks to each other. CrewAI handles task routing and agent collaboration.
+
+**AG2 / AutoGen Lineage** (formerly Microsoft AutoGen, now in maintenance mode with community forks like AG2) supports conversational agents that exchange messages in a group chat. You define agents with system prompts, tools, and conversation policies. AG2 manages message routing and turn-taking.
+
+**OpenAI Agents SDK Handoffs** allow one agent to transfer control to another by returning a handoff response. The SDK routes the conversation to the target agent. This is a lightweight multi-agent pattern for single-provider deployments.
+
+Multi-agent runtimes add orchestration overhead but enable specialization: one agent handles research, another writes reports, another reviews for quality.
+
+## Comparison Table
+
+The table below maps the eight concerns, deployment model, and protocol support across representative harnesses. Each cell summarizes how the framework addresses the concern.
+
+| Concern | OpenAI Agents SDK | Anthropic Messages API | Claude Agent SDK | LangGraph | CrewAI | AG2/AutoGen | Custom |
+|---------|-------------------|------------------------|------------------|-----------|--------|-------------|---------|
+| **State Management** | Server-side threads | Manual state in app | File checkpoints + session continuity | State graphs with typed schemas | Role-based agent state | Group chat message history | Developer-defined |
+| **Routing Logic** | Assistant instructions + function calling | Tool_use blocks in messages | Tool execution routing in agent loop | Graph edges with conditionals | Task delegation router | Conversational turn-taking | Developer-defined |
+| **Tool Integration** | Function calling schema | Tool_use protocol with tool array | Tool definitions + execution | LangChain tool wrappers | Tool integration per agent | Function schemas + executors | Developer-defined |
+| **Error Recovery** | Retry policies + thread continuity | Manual error handling in tool_result | Checkpoint-based recovery | Retry nodes + error edges | Task retry + fallback agents | Conversation recovery patterns | Developer-defined |
+| **Event Tracing** | API events + logs | Manual logging | Event hooks | LangSmith tracing | Task logs | Message logs | Developer-defined |
+| **Interrupts** | No native support | Manual pause/resume | Session pause/resume | Interrupt nodes in graph | Human-in-the-loop tasks | Conversation pauses | Developer-defined |
+| **Delegation** | No native delegation | Manual orchestration | No native delegation | Subgraph invocation | Crew task delegation | Agent-to-agent messages | Developer-defined |
+| **Persistence** | Server-side thread storage | None (app-level) | File checkpointing + session continuity; external for full run-state durability | Checkpointers (memory, SQLite, Postgres) + stores | Task state persistence | Conversation state persistence | Developer-defined |
+| **Deployment Model** | Managed cloud service | API calls from any runtime | Local or self-hosted | Self-hosted with optional cloud integrations | Self-hosted | Self-hosted | Self-hosted |
+| **Protocol Support** | OpenAI function calling | Anthropic tool_use | Anthropic tool_use + extensions | LangChain protocol wrappers | Framework-agnostic | Framework-agnostic | Developer-defined |
+
+<Callout type="note">
+**Reading the Table**
+
+- **OpenAI Agents SDK:** Fully managed, server-side state, best for single-provider cloud deployments.
+- **Anthropic Messages API:** Low-level protocol, maximum control, requires manual state and error handling.
+- **Claude Agent SDK:** Managed execution with file-based checkpointing and session continuity, suited for local or self-hosted use.
+- **LangGraph:** Explicit state graphs, rich persistence options, visual debugging, self-hosted.
+- **CrewAI:** Multi-agent teams with task delegation, role-based orchestration.
+- **AG2/AutoGen:** Conversational multi-agent groups, community-maintained (original Microsoft AutoGen in maintenance mode).
+- **Custom:** Every harness is custom code making decisions about the eight concerns.
+</Callout>
+
+## The "Custom" Column
+
+Notice that "Custom" appears in every row. This is not a limitation of the comparison — it's a fundamental truth about agent harnesses.
+
+**Every harness is custom code.** Even when you use a framework, you're writing custom tool definitions, custom routing logic, custom error handlers, custom state schemas, and custom persistence strategies. Frameworks shift *where* customization happens:
+
+- **With a low-level API (Anthropic Messages API):** You write the loop, the state machine, the retry logic, the checkpoint format, and the event tracing.
+- **With a managed SDK (OpenAI Agents SDK, Claude Agent SDK):** You configure assistants, define tools, and write application-level routing. The SDK handles the inner loop.
+- **With a graph runtime (LangGraph):** You define the graph structure, node functions, and state schema. The runtime handles execution and checkpointing.
+- **With a multi-agent framework (CrewAI, AG2):** You define agent roles, tasks, and delegation policies. The framework handles message routing.
+
+The "Custom" column reminds you: **frameworks don't eliminate decisions — they shift the abstraction level.** You still choose how to model state, when to interrupt, what to persist, and how to recover from errors. The framework gives you primitives; you build the harness.
+
+<Warning>
+**Framework Lock-In**
+
+Choosing a framework is a long-term commitment. Server-side managed services (OpenAI Agents SDK) lock you into provider infrastructure and pricing. Self-hosted frameworks (LangGraph, CrewAI) require operational investment but give you portability. Evaluate not just features but migration cost, vendor dependency, and open-source sustainability before production deployment.
+</Warning>
+
+## Ecosystem Evolution
+
+The agent harness ecosystem has evolved through distinct phases, each adding new primitives:
+
+<MermaidDiagram
+  chart={`timeline
+    title Agent Harness Evolution
+    2022 : Raw API Calls
+         : Manual tool execution
+         : No persistence primitives
+    2023 : Thin SDKs
+         : Function calling schemas
+         : Basic retry logic
+    2024 : Graph Runtimes
+         : Checkpointers and stores
+         : Visual debugging tools
+    2025 : Durable Orchestration
+         : Workflow engine integrations
+         : Cross-system persistence
+    2026 : Protocol-Native Runtimes
+         : MCP for dynamic tools
+         : A2A for agent interoperability
+`}
+  fallback="Agent harness evolution timeline: raw API calls (2022) → thin SDKs (2023) → graph runtimes (2024) → durable orchestration (2025) → protocol-native runtimes (2026)."
+  caption="Five phases of agent harness evolution, from manual loops to protocol-native runtimes."
+/>
+
+The timeline shows increasing abstraction:
+
+1. **Raw API Calls (2022):** Developers called model APIs directly, executed tools in application code, and managed state manually. No harness frameworks existed.
+2. **Thin SDKs (2023):** OpenAI introduced function calling schemas. SDKs wrapped the call-execute-return loop but left persistence and error recovery to developers.
+3. **Graph Runtimes (2024):** LangGraph popularized explicit state graphs with checkpointers. Developers gained visual debugging and durable execution.
+4. **Durable Orchestration (2025):** Temporal and Prefect integrations brought workflow-grade persistence and retry guarantees to LLM steps.
+5. **Protocol-Native Runtimes (2026):** MCP (Model Context Protocol) enables dynamic tool discovery. A2A (Agent-to-Agent protocol) standardizes multi-agent communication. Harnesses become protocol-native.
+
+<MermaidDiagram
+  chart={`quadrantChart
+    title Harness Positioning: Complexity vs Multi-Agent Support
+    x-axis Low Runtime Complexity --> High Runtime Complexity
+    y-axis Low Multi-Agent --> High Multi-Agent
+    quadrant-1 Complex Multi-Agent
+    quadrant-2 Simple Multi-Agent
+    quadrant-3 Simple Single-Agent
+    quadrant-4 Complex Single-Agent
+    Messages API: [0.15, 0.1]
+    Claude Agent SDK: [0.35, 0.2]
+    OpenAI Agents SDK: [0.3, 0.25]
+    Vercel AI SDK: [0.25, 0.15]
+    LangGraph: [0.65, 0.4]
+    Temporal: [0.85, 0.5]
+    CrewAI: [0.6, 0.75]
+    AG2: [0.55, 0.8]
+`}
+  fallback="2×2 matrix: runtime complexity (x-axis) vs multi-agent support (y-axis). Simple/single-agent: Messages API, Claude Agent SDK, OpenAI Agents SDK, Vercel AI SDK. Complex/single-agent: LangGraph, Temporal. Complex/multi-agent: CrewAI, AG2."
+  caption="Harness positioning by runtime complexity and multi-agent support."
+/>
+
+The matrix helps you choose: simple single-agent for prototypes (Messages API, Claude Agent SDK), complex single-agent for production durability (LangGraph, Temporal), complex multi-agent for team orchestration (CrewAI, AG2).
+
+## Trend Lines
+
+Three trends are reshaping agent harnesses:
+
+### Convergence Toward Durable Execution
+
+Early harnesses treated agent loops as ephemeral processes. State lived in memory; crashes lost work. Modern harnesses converge on durable execution:
+
+- **Checkpointing:** LangGraph, Claude Agent SDK, and Temporal all provide checkpoint-based recovery.
+- **Exactly-Once Semantics:** Temporal guarantees exactly-once execution for workflow activities.
+- **Replay Safety:** Checkpointers enable deterministic replay from any saved state.
+
+This trend is driven by production requirements: agents in customer-facing systems must survive restarts, network failures, and deployment rollouts without losing conversation state or re-executing expensive tool calls.
+
+### Protocol-Native Tool Access (MCP)
+
+Static tool registration hardcodes tool schemas at runtime startup. MCP (Model Context Protocol) enables dynamic tool discovery:
+
+- **Dynamic Discovery:** Agents query available tools at runtime, adapting to new capabilities without redeployment.
+- **Standardized Context:** MCP defines a protocol for exchanging context (e.g., file system access, database schemas) between agents and tools.
+- **Cross-Provider Compatibility:** MCP is vendor-neutral, allowing agents to use tools from any MCP-compliant provider.
+
+MCP shifts tools from "baked into the agent" to "discovered from the environment." This reduces coupling and enables runtime adaptability.
+
+<Callout type="info">
+**MCP Adoption**
+
+As of mid-2026, MCP support is growing but not universal. Claude Agent SDK and LangGraph have experimental MCP integrations. OpenAI Agents SDK uses proprietary function calling. Verify current support before assuming MCP availability in your framework.
+</Callout>
+
+### Standardized Agent Interoperability (A2A)
+
+Multi-agent systems today use framework-specific message formats. A2A (Agent-to-Agent protocol) aims to standardize:
+
+- **Message Format:** A common schema for agent-to-agent messages, requests, and responses.
+- **Handoff Protocol:** Standard semantics for transferring control between agents.
+- **Identity and Trust:** Authentication and authorization for agent-to-agent communication.
+
+A2A is early-stage (2026). No production framework has full A2A support yet, but the trend toward standardized multi-agent communication is clear. Future harnesses will interoperate across providers and frameworks using A2A as the coordination layer.
+
+## Summary
+
+You now have a map of the agent harness landscape:
+
+- **Four categories:** Agent SDKs / Model-Adjacent Runtimes (Anthropic Messages API, OpenAI Agents SDK, Claude Agent SDK, Vercel AI SDK), Graph Runtimes (LangGraph), Workflow / Orchestration Runtimes (Temporal, Prefect), Multi-Agent Runtimes (CrewAI, AG2, OpenAI handoffs).
+- **Comparison table:** Ten concerns across seven harnesses, showing where frameworks provide primitives and where you write custom code.
+- **The "Custom" column:** Every harness is custom code; frameworks shift abstraction levels.
+- **Ecosystem evolution:** Five phases from raw API calls to protocol-native runtimes.
+- **Trend lines:** Durable execution, MCP for dynamic tools, A2A for agent interoperability.
+
+Lesson 12 will give you a selection framework: how to choose a harness for your production requirements.
