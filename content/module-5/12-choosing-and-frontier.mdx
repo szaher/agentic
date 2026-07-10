@@ -259,16 +259,62 @@ Traditional harnesses treat tools and resources as static configuration: you def
 - **Federation**: Agents from different organizations can collaborate if they speak A2A.
 
 **Maturity (July 2026)**:
-- **Adoption**: Early-stage. Reference implementations exist (e.g., AutoGen Studio's A2A support), but no production-scale deployments.
-- **Challenges**: Discovery at scale, identity and trust (authenticating peer agents), message semantics (interpreting task delegation), and debugging multi-agent flows.
+- **Adoption**: Significant. Over 150 organizations support A2A, including AWS, Google, IBM, Microsoft, Salesforce, SAP, and ServiceNow. Production deployments exist in Azure AI Foundry, Amazon Bedrock AgentCore, and Copilot Studio.
+- **Native support**: Microsoft Agent Framework 1.0 ships with native A2A. Copilot Studio A2A is generally available. Google ADK includes A2A codelabs.
+- **Remaining challenges**: Cross-vendor federation (most deployments are within single-vendor ecosystems), identity verification across trust boundaries, durable delivery guarantees, and debugging multi-agent flows across runtimes.
 
-**Example**: A research agent delegates a subtask to a code-generation agent running in a different cluster. The delegation happens via A2A messages, not framework-specific APIs.
+**Example**: A research agent running in Google ADK delegates a subtask to a code-generation agent running in Microsoft Agent Framework. The delegation happens via A2A messages, not framework-specific APIs. Both agents discover each other through an A2A registry.
 
 <Callout type="warning" title="Maturity Warning">
 MCP is production-ready for single-user, local-first environments (e.g., Claude Desktop). Using MCP in multi-user, server-side, or untrusted-server scenarios requires additional security and permission infrastructure.
 
-A2A is experimental. Do not use it in production without understanding the federation, identity, and debugging challenges.
+A2A has reached early production within single-vendor ecosystems (Azure, Google Cloud). Cross-vendor federation and identity verification remain challenges. Evaluate whether your A2A deployment crosses trust boundaries before relying on it.
 </Callout>
+
+### CodeAct: Collapsing the Tool-Call Loop
+
+**What it is**: Instead of the traditional loop where the model issues many small tool calls (model → tool call → observation → model → tool call → observation), CodeAct has the model emit a single executable program that composes multiple tool calls inside a sandbox. The sandbox executes all the tool calls and returns a consolidated result.
+
+**Traditional loop:**
+
+```
+model → tool call → observation → model → tool call → observation → model → ...
+```
+
+**CodeAct loop:**
+
+```
+model → executable program → sandbox executes multiple tool calls → consolidated observation
+```
+
+**Runtime implications:**
+- **Fewer model turns:** CodeAct collapses multi-step tool plans into fewer round-trips, reducing orchestration overhead and latency.
+- **Sandbox requirement:** The runtime must provide an isolated execution environment (sandbox) for running model-generated code. Microsoft's Hyperlight micro-VMs provide per-call isolation at minimal overhead.
+- **Changed error surface:** Errors now occur inside the generated program, not at the tool-dispatch level. The runtime must capture and return sandbox execution errors to the model.
+- **Tool composition:** The model can compose tools programmatically (loops, conditionals, data transformation between tool calls) rather than relying on the harness for sequencing.
+
+**Maturity (July 2026):**
+- **Early production:** Microsoft Agent Framework ships CodeAct via the `agent-framework-hyperlight` (alpha) package, using Hyperlight micro-VMs for isolation.
+- **Open questions:** How to enforce permission boundaries inside generated code, how to handle partial execution failures, and how to provide observability into sandbox execution steps.
+
+<VerifyClaim status="verify">
+CodeAct latency reduction claims (approximately 50% lower orchestration overhead) require benchmark evidence from production deployments beyond Microsoft's initial announcements.
+</VerifyClaim>
+
+### Agent Identity, Delegation, and Governance
+
+**What it is**: As agents communicate across runtimes via protocols like MCP and A2A, a new runtime concern emerges: who is this agent, what authority does it have, and can you verify its actions? Agent protocols alone do not solve identity or authority.
+
+**Runtime implications:**
+- **Verifiable identity:** Each agent in a delegation chain needs a cryptographically verifiable identity, not just a name string. This enables audit trails and trust decisions.
+- **Delegated authority:** When Agent A delegates a task to Agent B, the runtime must track what authority was delegated, with what scope, and for how long. Invocation-bound capability tokens (proposed in the Agent Identity Protocol) attach authority to specific invocations rather than granting standing permissions.
+- **Provenance chains:** For compliance and debugging, the runtime must maintain an unbroken chain showing which agent initiated an action, through which intermediaries, and with what authorization.
+- **Governance patterns:** Centralized governance (who can delegate), decentralized enforcement (each runtime validates tokens), and cryptographically-verifiable actor chains.
+
+**Maturity (July 2026):**
+- **Converging patterns:** Three independent sources — Uber Engineering, Gartner, and the Coalition for Secure AI (CoSAI) — published agent identity architectures in June 2026 that converge on the same pattern: centralized governance, decentralized enforcement, and cryptographically-verifiable actor chains.
+- **Research proposals:** The Agent Identity Protocol (AIP) proposes invocation-bound capability tokens for verifiable delegation across MCP and A2A.
+- **No standard yet:** Each platform handles agent identity differently. Cross-vendor identity federation remains unsolved.
 
 ### Autonomous Goal Decomposition
 
@@ -336,23 +382,29 @@ graph LR
     Experimental --> EarlyProd[Early Production<br/>Adoption]
     EarlyProd --> Mature[Mature<br/>Standardized]
     
-    A2A[A2A Protocol] -.-> Experimental
+    AgentID[Agent Identity<br/>and Governance] -.-> Experimental
     GoalDecomp[Autonomous Goal<br/>Decomposition] -.-> Experimental
     LongRunning[Long-Running<br/>Agent OS] -.-> Research
+    CodeAct[CodeAct<br/>Sandbox Execution] -.-> Experimental
+    A2A[A2A Protocol] -.-> EarlyProd
     MCP[MCP Protocol] -.-> EarlyProd
     
-    style A2A fill:#fef3c7,stroke:#d97706
+    style AgentID fill:#fef3c7,stroke:#d97706
     style GoalDecomp fill:#fef3c7,stroke:#d97706
     style LongRunning fill:#fee2e2,stroke:#dc2626
+    style CodeAct fill:#fef3c7,stroke:#d97706
+    style A2A fill:#dbeafe,stroke:#1e40af
     style MCP fill:#dbeafe,stroke:#1e40af
   `}
-  fallback="Maturity radar showing four stages: Research → Experimental → Early Production → Mature. MCP is at Early Production. A2A and Autonomous Goal Decomposition are at Experimental. Long-Running Agent OS is at Research."
+  fallback="Maturity radar showing four stages: Research → Experimental → Early Production → Mature. MCP and A2A are at Early Production. CodeAct, Agent Identity, and Autonomous Goal Decomposition are at Experimental. Long-Running Agent OS is at Research."
   caption="Frontier maturity assessment (July 2026). Colors: red = research, yellow = experimental, blue = early production."
 />
 
 **Interpretation**:
-- **MCP**: Safe to use in local-first, single-user contexts. Requires hardening for server-side, multi-user, or untrusted-server scenarios.
-- **A2A**: Experimental. Suitable for research and prototypes, but not production multi-agent systems.
+- **MCP**: Production-adopted in Claude Desktop, Claude Code, MAF 1.0, and Google ADK. Requires hardening for server-side, multi-user, or untrusted-server scenarios.
+- **A2A**: Early production within single-vendor ecosystems (Azure, Google Cloud). 150+ supporting organizations. Cross-vendor federation still maturing.
+- **CodeAct**: Alpha in MAF via Hyperlight. Changes the loop shape (fewer model turns, sandbox execution). Permission boundaries and observability inside sandboxes are open questions.
+- **Agent identity and governance**: Converging architectural patterns from Uber, Gartner, and CoSAI. Research proposals (AIP) exist but no cross-vendor standard.
 - **Autonomous goal decomposition**: Demonstrated in research and early products, but reliability and controllability remain open challenges.
 - **Long-running agent OS**: Early experiments. No standardized runtime yet.
 
@@ -384,6 +436,8 @@ This module taught you how the **runtime layer** executes agent architectures.
   { term: "Protocol-native runtime", definition: "A runtime where tools and resources are discovered dynamically via protocols (e.g., MCP, A2A) instead of being statically configured." },
   { term: "MCP (Model Context Protocol)", definition: "A protocol for exposing tools, resources, and prompts to LLMs via servers that advertise capabilities dynamically." },
   { term: "A2A (Agent-to-Agent Protocol)", definition: "A protocol for agents to discover, message, and coordinate with other agents in a decentralized multi-agent system." },
+  { term: "CodeAct", definition: "A runtime pattern where the model emits an executable program that composes multiple tool calls inside a sandbox, collapsing the traditional multi-turn tool-call loop into fewer round-trips." },
+  { term: "Agent identity protocol", definition: "Mechanisms for cryptographically verifiable agent identity, delegated authority, and provenance chains across multi-agent and multi-runtime deployments." },
   { term: "Autonomous goal decomposition", definition: "Agents that take high-level goals and autonomously decompose them into subtasks, execute them, and re-plan when blocked." },
   { term: "Long-running agent OS", definition: "A runtime that supports agents persisting across days or weeks, with session management, memory consolidation, credential management, and cost budgeting." }
 ]} />
@@ -395,7 +449,9 @@ This module taught you how the **runtime layer** executes agent architectures.
 - Avoid anti-patterns: over-engineering (complex framework for simple tasks), under-engineering (raw API calls for complex workflows), hype-driven selection, building custom when a framework fits, and multi-agent when single agent suffices.
 
 **Part 2: Frontier Appendix**
-- **Protocol-native runtimes**: MCP is production-adopted but hardening required; A2A is experimental.
+- **Protocol-native runtimes**: MCP is production-adopted; A2A has reached early production with 150+ supporting organizations.
+- **CodeAct**: Collapses multi-turn tool-call loops into sandbox-executed programs. Alpha in MAF via Hyperlight.
+- **Agent identity and governance**: Converging patterns for verifiable identity, delegated authority, and provenance chains. No cross-vendor standard yet.
 - **Autonomous goal decomposition**: Demonstrated in research and early products; reliability and controllability remain open.
 - **Long-running agent OS**: Early experiments; no standardized runtime yet.
 

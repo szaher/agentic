@@ -220,7 +220,13 @@ Not every agent needs a harness. The decision depends on the task's complexity, 
     style SDK fill:#fbbf24,stroke:#f59e0b,color:#000
 `} />
 
-The key signals that push you toward a harness are **duration** (long runs need persistence), **risk** (consequential actions need approval gates), and **debuggability** (complex workflows need observability). Here are four scenarios that illustrate the spectrum:
+The key signals that push you toward a harness are **duration** (long runs need persistence), **risk** (consequential actions need approval gates), and **debuggability** (complex workflows need observability).
+
+<Callout type="warning" title="Why Harness Design Matters Now">
+Gartner predicted that over 40% of agentic AI projects may be canceled by end of 2027 due to escalating costs, unclear business value, and inadequate risk controls. Most of these failures trace back to runtime concerns — not model quality. The harness layer is where cost budgets are enforced, risk controls are applied, and operational reliability is built. Getting it wrong is the most common reason agentic projects fail in production.
+</Callout>
+
+Here are four scenarios that illustrate the spectrum:
 
 **Scenario 1: FAQ Chatbot — No harness needed**  
 You are building a chatbot that answers frequently asked questions from a company knowledge base. Each query is independent, responses take 2-3 seconds, and the agent has read-only access to a vector store. A raw API loop is fine here. If the agent crashes, the user retries. No state to lose, no long-running tasks, no risky actions. The absence of harness concerns is acceptable because failures are cheap and recovery is instant.

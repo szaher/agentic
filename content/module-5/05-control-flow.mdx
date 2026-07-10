@@ -462,6 +462,25 @@ Each agent has an identity: a name, role, and system prompt. When handing off, t
 
 The user sees a seamless handoff, but the underlying model now operates under different instructions and constraints.
 
+### Cross-Framework Handoffs: A2A Protocol
+
+The handoff examples above assume both agents run inside the same harness. But what if Agent B runs in a different framework — or a different organization?
+
+**A2A (Agent-to-Agent Protocol)** standardizes cross-runtime handoffs. Instead of framework-specific message passing, agents discover peers via a registry and coordinate through structured A2A messages: task delegation, status updates, and results.
+
+**Runtime implications for handoffs:**
+
+- **Discovery:** The harness queries an A2A registry to find agents that can handle a delegated task, rather than hardcoding agent identities.
+- **Identity and trust:** Each agent carries a verifiable identity. The receiving agent validates the sender's authority to delegate. This replaces implicit trust within a single harness with explicit, protocol-driven trust.
+- **Context serialization across runtimes:** The handoff context must be serialized in a format both runtimes understand — A2A defines this as structured task messages, not framework-internal state.
+- **Scope negotiation:** The receiving agent declares its capabilities (tools, models, permissions) via A2A. The harness can match the delegated task to agents with the right capabilities.
+
+**Ecosystem status (mid-2026):** A2A support has grown to over 150 organizations, including AWS, Google, IBM, Microsoft, Salesforce, SAP, and ServiceNow. Microsoft Agent Framework 1.0 ships with native A2A support, and Copilot Studio A2A reached general availability. Google ADK includes A2A codelabs showing ADK agents exposed as A2A services. However, production-grade cross-framework handoffs with full identity verification and durable delivery remain early-stage.
+
+<Callout type="info">
+**Handoff vs A2A:** Internal handoffs (within one harness) use framework-specific mechanisms — they are fast and tightly integrated. A2A handoffs (across runtimes) use a standardized protocol — they are interoperable but add serialization and network overhead. Choose based on whether the target agent lives in your runtime or not.
+</Callout>
+
 ## Case Study: Adding a Router to the Research Assistant
 
 Let's take the research assistant from Module 4 (a ReAct agent with search and summarization tools) and add a router.
