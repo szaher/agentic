@@ -1,0 +1,1062 @@
+{
+  "schemaVersion": "1.1.0",
+  "id": "agent-harnesses-runtime",
+  "title": "Agent Harnesses and Runtime Systems",
+  "description": "A comprehensive module covering the runtime layer that executes agent architectures — loop execution, tool dispatch, context management, state tracking, control flow, persistence, observability, and human intervention.",
+  "audience": {
+    "primary": "Intermediate AI engineers and platform developers building production agent systems",
+    "priorKnowledge": ["Python programming", "Basic LLM API usage", "Agent architectures (Module 4)"],
+    "roles": ["AI engineer", "platform developer", "ML engineer"],
+    "readingLevel": "Technical professional"
+  },
+  "prerequisites": ["Can write Python functions and classes", "Has called an LLM API at least once", "Understands agent architectures from Module 4"],
+  "learningObjectives": [
+    {
+      "id": "obj-define-harness",
+      "description": "Define the harness layer and classify its eight operational concerns",
+      "bloomLevel": "understand",
+      "assessmentIds": ["assess-harness-definition", "assess-concern-classification"]
+    },
+    {
+      "id": "obj-trace-loop",
+      "description": "Trace a single agent turn through the run/turn/step execution model",
+      "bloomLevel": "analyze",
+      "assessmentIds": ["assess-loop-trace"]
+    },
+    {
+      "id": "obj-implement-dispatch",
+      "description": "Implement a tool dispatch system with validation and error handling",
+      "bloomLevel": "apply",
+      "assessmentIds": ["assess-dispatch-implementation"]
+    },
+    {
+      "id": "obj-manage-context",
+      "description": "Design context assembly strategies that respect token limits",
+      "bloomLevel": "apply",
+      "assessmentIds": ["assess-context-design"]
+    },
+    {
+      "id": "obj-implement-persistence",
+      "description": "Implement checkpoint-based persistence for crash recovery",
+      "bloomLevel": "apply",
+      "assessmentIds": ["assess-persistence-implementation"]
+    },
+    {
+      "id": "obj-design-hitl",
+      "description": "Design human-in-the-loop intervention patterns for consequential actions",
+      "bloomLevel": "evaluate",
+      "assessmentIds": ["assess-hitl-design"]
+    },
+    {
+      "id": "obj-build-harness",
+      "description": "Build a functional agent harness from first principles",
+      "bloomLevel": "create",
+      "assessmentIds": ["assess-harness-build"]
+    },
+    {
+      "id": "obj-evaluate-frameworks",
+      "description": "Evaluate production frameworks against the eight-concern framework",
+      "bloomLevel": "evaluate",
+      "assessmentIds": ["assess-framework-evaluation"]
+    }
+  ],
+  "scope": {
+    "inScope": ["Agent execution loops", "Tool dispatch systems", "Context management", "State tracking", "Control flow patterns", "Persistence strategies", "Observability systems", "Human-in-the-loop patterns", "Framework comparisons"],
+    "nonGoals": ["Implementing complete production frameworks", "Model training or fine-tuning", "Frontend UI development", "Cloud infrastructure provisioning"]
+  },
+  "lessons": [
+    {
+      "id": "lesson-what-is-harness",
+      "slug": "01-what-is-an-agent-harness",
+      "title": "What Is an Agent Harness?",
+      "summary": "Introduction to the harness layer, its eight operational concerns, and the spectrum from minimal to full-featured harnesses.",
+      "estimatedMinutes": 20,
+      "difficulty": "beginner",
+      "prerequisites": ["Understands basic agent architectures"],
+      "objectiveIds": ["obj-define-harness"],
+      "conceptIds": ["concept-loop-execution", "concept-tool-dispatch", "concept-context-management", "concept-state-goals", "concept-control-flow", "concept-persistence", "concept-observability", "concept-hitl"],
+      "referenceIds": ["ref-anthropic-tool-use", "ref-mcp-spec"],
+      "artifacts": {
+        "mdxPath": "content/module-5/01-what-is-an-agent-harness.mdx",
+        "items": [
+          {
+            "id": "art-harness-concerns",
+            "type": "mermaid",
+            "status": "planned",
+            "objectiveIds": ["obj-define-harness"],
+            "accessibility": {
+              "altText": "Diagram showing eight harness concerns: loop execution, tool dispatch, context management, state tracking, control flow, persistence, observability, and human intervention",
+              "fallbackText": "The harness layer manages eight concerns: loop execution, tool dispatch, context management, state tracking, control flow, persistence, observability, and human intervention."
+            }
+          }
+        ]
+      },
+      "dependsOnLessonIds": [],
+      "multimediaPlan": {
+        "recommendations": [
+          {
+            "id": "rec-eight-concerns",
+            "type": "mermaid",
+            "rationale": "Visual overview of the eight harness concerns helps learners build a mental model.",
+            "priority": "required",
+            "placement": "Introduction section",
+            "contentBrief": "Diagram showing the eight operational concerns of an agent harness.",
+            "accessibilityNotes": "Provide fallback text listing all eight concerns.",
+            "estimatedEffort": "low"
+          }
+        ]
+      },
+      "metacognition": [
+        {
+          "type": "self-assessment",
+          "prompt": "Before starting, rate your understanding of what happens between calling an LLM API and getting a tool execution result.",
+          "placement": "before-lesson"
+        },
+        {
+          "type": "reflection",
+          "prompt": "Which of the eight harness concerns do you think would be most challenging to implement correctly?",
+          "placement": "after-lesson"
+        }
+      ],
+      "scaffolding": {
+        "hintLevels": 3,
+        "differentiatedPaths": true,
+        "graduatedComplexity": true
+      }
+    },
+    {
+      "id": "lesson-agent-loop-internals",
+      "slug": "02-agent-loop-internals",
+      "title": "Agent Loop Internals",
+      "summary": "Understanding the run/turn/step execution model, stop conditions, and common loop patterns.",
+      "estimatedMinutes": 25,
+      "difficulty": "intermediate",
+      "prerequisites": ["Understands what a harness is"],
+      "objectiveIds": ["obj-trace-loop"],
+      "conceptIds": ["concept-loop-execution"],
+      "referenceIds": ["ref-anthropic-tool-use", "ref-langgraph-docs"],
+      "artifacts": {
+        "mdxPath": "content/module-5/02-agent-loop-internals.mdx"
+      },
+      "dependsOnLessonIds": ["lesson-what-is-harness"],
+      "multimediaPlan": {
+        "recommendations": [
+          {
+            "id": "rec-loop-flowchart",
+            "type": "mermaid",
+            "rationale": "Flowchart of the run-turn-step model clarifies execution flow.",
+            "priority": "required",
+            "placement": "Loop execution section",
+            "contentBrief": "Flowchart showing run → turn → step → model call → tool execution → next turn cycle.",
+            "accessibilityNotes": "Describe the cycle in text form.",
+            "estimatedEffort": "medium"
+          }
+        ]
+      },
+      "metacognition": [
+        {
+          "type": "goal-setting",
+          "prompt": "What do you want to understand about agent loops by the end of this lesson?",
+          "placement": "before-lesson"
+        }
+      ],
+      "scaffolding": {
+        "hintLevels": 3,
+        "differentiatedPaths": false,
+        "graduatedComplexity": true
+      }
+    },
+    {
+      "id": "lesson-tool-dispatch",
+      "slug": "03-tool-dispatch",
+      "title": "Tool Dispatch",
+      "summary": "Tool registry patterns, validation strategies, execution mechanisms, and error handling for agent tools.",
+      "estimatedMinutes": 25,
+      "difficulty": "intermediate",
+      "prerequisites": ["Understands agent loop execution"],
+      "objectiveIds": ["obj-implement-dispatch"],
+      "conceptIds": ["concept-tool-dispatch"],
+      "referenceIds": ["ref-anthropic-tool-use", "ref-mcp-spec"],
+      "artifacts": {
+        "mdxPath": "content/module-5/03-tool-dispatch.mdx"
+      },
+      "dependsOnLessonIds": ["lesson-agent-loop-internals"],
+      "multimediaPlan": {
+        "recommendations": [
+          {
+            "id": "rec-dispatch-pipeline",
+            "type": "mermaid",
+            "rationale": "Sequence diagram showing validation → execution → error handling flow.",
+            "priority": "required",
+            "placement": "Dispatch pipeline section",
+            "contentBrief": "Sequence showing tool call validation, registry lookup, execution, and error handling.",
+            "accessibilityNotes": "Describe each step in the dispatch pipeline textually.",
+            "estimatedEffort": "medium"
+          }
+        ]
+      },
+      "metacognition": [
+        {
+          "type": "reflection",
+          "prompt": "What edge cases in tool dispatch could cause production failures?",
+          "placement": "after-lesson"
+        }
+      ],
+      "scaffolding": {
+        "hintLevels": 3,
+        "differentiatedPaths": true,
+        "graduatedComplexity": true
+      }
+    },
+    {
+      "id": "lesson-context-goals-state",
+      "slug": "04-context-goals-state",
+      "title": "Context, Goals, and State",
+      "summary": "Context assembly strategies, goal tracking mechanisms, and working memory management within token limits.",
+      "estimatedMinutes": 25,
+      "difficulty": "intermediate",
+      "prerequisites": ["Understands tool dispatch"],
+      "objectiveIds": ["obj-manage-context"],
+      "conceptIds": ["concept-context-management", "concept-state-goals"],
+      "referenceIds": ["ref-anthropic-tool-use", "ref-temporal-docs"],
+      "artifacts": {
+        "mdxPath": "content/module-5/04-context-goals-state.mdx"
+      },
+      "dependsOnLessonIds": ["lesson-tool-dispatch"],
+      "multimediaPlan": {
+        "recommendations": [
+          {
+            "id": "rec-context-assembly",
+            "type": "comparison-matrix",
+            "rationale": "Compare context assembly strategies by token budget, latency, and complexity.",
+            "priority": "recommended",
+            "placement": "Context strategies section",
+            "contentBrief": "Matrix comparing full history, sliding window, summarization, and semantic chunking strategies.",
+            "accessibilityNotes": "Use DataTable component with clear column headers.",
+            "estimatedEffort": "low"
+          }
+        ]
+      },
+      "metacognition": [
+        {
+          "type": "self-assessment",
+          "prompt": "How confident are you in designing context windows that balance history and token limits?",
+          "placement": "after-lesson"
+        }
+      ],
+      "scaffolding": {
+        "hintLevels": 3,
+        "differentiatedPaths": true,
+        "graduatedComplexity": true
+      }
+    },
+    {
+      "id": "lesson-control-flow",
+      "slug": "05-control-flow",
+      "title": "Control Flow",
+      "summary": "Control flow patterns: loops, graphs, handoffs, conditional routing, and graph-based execution.",
+      "estimatedMinutes": 20,
+      "difficulty": "intermediate",
+      "prerequisites": ["Understands context and state management"],
+      "objectiveIds": ["obj-trace-loop"],
+      "conceptIds": ["concept-control-flow"],
+      "referenceIds": ["ref-langgraph-docs"],
+      "artifacts": {
+        "mdxPath": "content/module-5/05-control-flow.mdx"
+      },
+      "dependsOnLessonIds": ["lesson-context-goals-state"],
+      "multimediaPlan": {
+        "recommendations": [
+          {
+            "id": "rec-control-flow-patterns",
+            "type": "mermaid",
+            "rationale": "Visualize different control flow patterns (loop, graph, handoff).",
+            "priority": "required",
+            "placement": "Control flow patterns section",
+            "contentBrief": "Diagrams showing loop-based, graph-based, and handoff control flow patterns.",
+            "accessibilityNotes": "Describe each pattern's structure in text.",
+            "estimatedEffort": "medium"
+          }
+        ]
+      },
+      "metacognition": [
+        {
+          "type": "reflection",
+          "prompt": "When would you choose graph-based control flow over a simple loop?",
+          "placement": "after-lesson"
+        }
+      ],
+      "scaffolding": {
+        "hintLevels": 2,
+        "differentiatedPaths": false,
+        "graduatedComplexity": true
+      }
+    },
+    {
+      "id": "lesson-persistence-checkpointing",
+      "slug": "06-persistence-checkpointing",
+      "title": "Persistence and Checkpointing",
+      "summary": "Checkpoint formats, crash recovery strategies, resumption patterns, and state migration.",
+      "estimatedMinutes": 25,
+      "difficulty": "intermediate",
+      "prerequisites": ["Understands control flow"],
+      "objectiveIds": ["obj-implement-persistence"],
+      "conceptIds": ["concept-persistence"],
+      "referenceIds": ["ref-temporal-docs", "ref-langgraph-docs"],
+      "artifacts": {
+        "mdxPath": "content/module-5/06-persistence-checkpointing.mdx"
+      },
+      "dependsOnLessonIds": ["lesson-control-flow"],
+      "multimediaPlan": {
+        "recommendations": [
+          {
+            "id": "rec-checkpoint-lifecycle",
+            "type": "mermaid",
+            "rationale": "Sequence diagram showing checkpoint save → crash → restore flow.",
+            "priority": "required",
+            "placement": "Checkpointing section",
+            "contentBrief": "Sequence showing checkpoint save, crash event, and state restoration.",
+            "accessibilityNotes": "Describe the checkpoint-restore cycle in text.",
+            "estimatedEffort": "medium"
+          }
+        ]
+      },
+      "metacognition": [
+        {
+          "type": "goal-setting",
+          "prompt": "What persistence edge cases are you most concerned about in production?",
+          "placement": "before-lesson"
+        }
+      ],
+      "scaffolding": {
+        "hintLevels": 3,
+        "differentiatedPaths": true,
+        "graduatedComplexity": true
+      }
+    },
+    {
+      "id": "lesson-human-in-the-loop",
+      "slug": "07-human-in-the-loop",
+      "title": "Human-in-the-Loop",
+      "summary": "Approval gates, escalation triggers, intervention patterns, and user confirmation for consequential actions.",
+      "estimatedMinutes": 20,
+      "difficulty": "intermediate",
+      "prerequisites": ["Understands persistence"],
+      "objectiveIds": ["obj-design-hitl"],
+      "conceptIds": ["concept-hitl"],
+      "referenceIds": ["ref-anthropic-tool-use"],
+      "artifacts": {
+        "mdxPath": "content/module-5/07-human-in-the-loop.mdx"
+      },
+      "dependsOnLessonIds": ["lesson-persistence-checkpointing"],
+      "multimediaPlan": {
+        "recommendations": [
+          {
+            "id": "rec-hitl-patterns",
+            "type": "decision-tree",
+            "rationale": "Decision tree for when to require human approval.",
+            "priority": "recommended",
+            "placement": "Approval patterns section",
+            "contentBrief": "Decision tree showing risk assessment → approval gate selection.",
+            "accessibilityNotes": "Provide text-based decision criteria.",
+            "estimatedEffort": "medium"
+          }
+        ]
+      },
+      "metacognition": [
+        {
+          "type": "reflection",
+          "prompt": "What actions in your domain should always require human approval?",
+          "placement": "after-lesson"
+        }
+      ],
+      "scaffolding": {
+        "hintLevels": 2,
+        "differentiatedPaths": true,
+        "graduatedComplexity": false
+      }
+    },
+    {
+      "id": "lesson-observability",
+      "slug": "08-observability",
+      "title": "Observability",
+      "summary": "Structured tracing, cost tracking, replay mechanisms, and integration with observability platforms.",
+      "estimatedMinutes": 25,
+      "difficulty": "intermediate",
+      "prerequisites": ["Understands human-in-the-loop patterns"],
+      "objectiveIds": ["obj-trace-loop"],
+      "conceptIds": ["concept-observability"],
+      "referenceIds": ["ref-opentelemetry", "ref-langgraph-docs"],
+      "artifacts": {
+        "mdxPath": "content/module-5/08-observability.mdx"
+      },
+      "dependsOnLessonIds": ["lesson-human-in-the-loop"],
+      "multimediaPlan": {
+        "recommendations": [
+          {
+            "id": "rec-trace-structure",
+            "type": "mermaid",
+            "rationale": "Visualize hierarchical trace structure (run → turn → step → tool).",
+            "priority": "required",
+            "placement": "Tracing section",
+            "contentBrief": "Hierarchy diagram showing trace spans at run, turn, step, and tool levels.",
+            "accessibilityNotes": "Describe trace hierarchy in text form.",
+            "estimatedEffort": "low"
+          }
+        ]
+      },
+      "metacognition": [
+        {
+          "type": "self-assessment",
+          "prompt": "How would you debug a production agent failure with only trace data?",
+          "placement": "after-lesson"
+        }
+      ],
+      "scaffolding": {
+        "hintLevels": 3,
+        "differentiatedPaths": false,
+        "graduatedComplexity": true
+      }
+    },
+    {
+      "id": "lesson-build-minimal-harness",
+      "slug": "09-build-minimal-harness",
+      "title": "Build a Minimal Harness",
+      "summary": "Hands-on lab: build a minimal agent harness from scratch using FakeModelClient for deterministic testing.",
+      "estimatedMinutes": 60,
+      "difficulty": "intermediate",
+      "prerequisites": ["Completed conceptual lessons 1-8"],
+      "objectiveIds": ["obj-build-harness"],
+      "conceptIds": ["concept-loop-execution", "concept-tool-dispatch", "concept-context-management", "concept-state-goals"],
+      "referenceIds": ["ref-anthropic-tool-use", "ref-mcp-spec"],
+      "artifacts": {
+        "mdxPath": "content/module-5/09-build-minimal-harness.mdx"
+      },
+      "dependsOnLessonIds": ["lesson-what-is-harness", "lesson-agent-loop-internals", "lesson-tool-dispatch", "lesson-context-goals-state", "lesson-control-flow", "lesson-persistence-checkpointing", "lesson-human-in-the-loop", "lesson-observability"],
+      "multimediaPlan": {
+        "recommendations": [
+          {
+            "id": "rec-minimal-harness-architecture",
+            "type": "mermaid",
+            "rationale": "Architecture diagram of the minimal harness being built.",
+            "priority": "recommended",
+            "placement": "Lab introduction",
+            "contentBrief": "Component diagram showing minimal harness architecture.",
+            "accessibilityNotes": "List components and their relationships in text.",
+            "estimatedEffort": "low"
+          }
+        ]
+      },
+      "metacognition": [
+        {
+          "type": "goal-setting",
+          "prompt": "What do you want to understand deeply by building this harness?",
+          "placement": "before-lesson"
+        },
+        {
+          "type": "reflection",
+          "prompt": "What was the most challenging aspect of implementing the harness?",
+          "placement": "after-lesson"
+        }
+      ],
+      "scaffolding": {
+        "hintLevels": 4,
+        "differentiatedPaths": true,
+        "graduatedComplexity": true
+      }
+    },
+    {
+      "id": "lesson-extend-harness",
+      "slug": "10-extend-harness",
+      "title": "Extend Your Harness",
+      "summary": "Hands-on lab: extend the minimal harness with persistence, human-in-the-loop, observability, and MCP tool integration.",
+      "estimatedMinutes": 45,
+      "difficulty": "advanced",
+      "prerequisites": ["Completed minimal harness build lab"],
+      "objectiveIds": ["obj-implement-persistence", "obj-design-hitl", "obj-build-harness"],
+      "conceptIds": ["concept-persistence", "concept-hitl", "concept-observability"],
+      "referenceIds": ["ref-mcp-spec", "ref-opentelemetry", "ref-temporal-docs"],
+      "artifacts": {
+        "mdxPath": "content/module-5/10-extend-harness.mdx"
+      },
+      "dependsOnLessonIds": ["lesson-build-minimal-harness"],
+      "multimediaPlan": {
+        "recommendations": [
+          {
+            "id": "rec-extended-harness-architecture",
+            "type": "mermaid",
+            "rationale": "Show extended harness with new capabilities highlighted.",
+            "priority": "recommended",
+            "placement": "Lab introduction",
+            "contentBrief": "Component diagram showing extended harness with persistence, HITL, and observability modules.",
+            "accessibilityNotes": "List extended capabilities in text.",
+            "estimatedEffort": "medium"
+          }
+        ]
+      },
+      "metacognition": [
+        {
+          "type": "reflection",
+          "prompt": "Which harness extension (persistence, HITL, observability, MCP) was most valuable for production readiness?",
+          "placement": "after-lesson"
+        }
+      ],
+      "scaffolding": {
+        "hintLevels": 4,
+        "differentiatedPaths": true,
+        "graduatedComplexity": true
+      }
+    },
+    {
+      "id": "lesson-ecosystem-map",
+      "slug": "11-ecosystem-map",
+      "title": "Ecosystem Map",
+      "summary": "Comparative analysis of production frameworks (LangGraph, Temporal, custom harnesses) across the eight harness concerns.",
+      "estimatedMinutes": 30,
+      "difficulty": "intermediate",
+      "prerequisites": ["Completed conceptual lessons 1-8"],
+      "objectiveIds": ["obj-evaluate-frameworks"],
+      "conceptIds": ["concept-loop-execution", "concept-tool-dispatch", "concept-context-management", "concept-state-goals", "concept-control-flow", "concept-persistence", "concept-observability", "concept-hitl"],
+      "referenceIds": ["ref-langgraph-docs", "ref-temporal-docs", "ref-mcp-spec"],
+      "artifacts": {
+        "mdxPath": "content/module-5/11-ecosystem-map.mdx"
+      },
+      "dependsOnLessonIds": ["lesson-what-is-harness", "lesson-agent-loop-internals", "lesson-tool-dispatch", "lesson-context-goals-state", "lesson-control-flow", "lesson-persistence-checkpointing", "lesson-human-in-the-loop", "lesson-observability"],
+      "multimediaPlan": {
+        "recommendations": [
+          {
+            "id": "rec-framework-comparison",
+            "type": "comparison-matrix",
+            "rationale": "Matrix comparing frameworks across eight harness concerns.",
+            "priority": "required",
+            "placement": "Framework comparison section",
+            "contentBrief": "Matrix comparing LangGraph, Temporal, and custom harnesses across loop execution, tool dispatch, context management, state tracking, control flow, persistence, observability, and HITL.",
+            "accessibilityNotes": "Use DataTable with clear row and column headers.",
+            "estimatedEffort": "medium"
+          }
+        ]
+      },
+      "metacognition": [
+        {
+          "type": "self-assessment",
+          "prompt": "How confident are you in choosing the right framework for a new project?",
+          "placement": "after-lesson"
+        }
+      ],
+      "scaffolding": {
+        "hintLevels": 2,
+        "differentiatedPaths": false,
+        "graduatedComplexity": false
+      }
+    },
+    {
+      "id": "lesson-choosing-and-frontier",
+      "slug": "12-choosing-and-frontier",
+      "title": "Choosing a Harness + Frontier",
+      "summary": "Decision framework for selecting a harness approach, MCP ecosystem integration, agent-to-agent communication, and frontier research appendix.",
+      "estimatedMinutes": 25,
+      "difficulty": "intermediate",
+      "prerequisites": ["Completed ecosystem map"],
+      "objectiveIds": ["obj-evaluate-frameworks"],
+      "conceptIds": ["concept-loop-execution", "concept-tool-dispatch", "concept-context-management", "concept-state-goals", "concept-control-flow", "concept-persistence", "concept-observability", "concept-hitl"],
+      "referenceIds": ["ref-mcp-spec", "ref-anthropic-tool-use", "ref-langgraph-docs"],
+      "artifacts": {
+        "mdxPath": "content/module-5/12-choosing-and-frontier.mdx"
+      },
+      "dependsOnLessonIds": ["lesson-ecosystem-map"],
+      "multimediaPlan": {
+        "recommendations": [
+          {
+            "id": "rec-decision-tree",
+            "type": "decision-tree",
+            "rationale": "Decision tree for choosing between custom harness, LangGraph, and Temporal.",
+            "priority": "required",
+            "placement": "Decision framework section",
+            "contentBrief": "Decision tree with criteria for selecting harness approach based on project requirements.",
+            "accessibilityNotes": "Provide text-based decision criteria.",
+            "estimatedEffort": "medium"
+          }
+        ]
+      },
+      "metacognition": [
+        {
+          "type": "reflection",
+          "prompt": "What harness approach would you choose for your current or upcoming project, and why?",
+          "placement": "after-lesson"
+        }
+      ],
+      "scaffolding": {
+        "hintLevels": 2,
+        "differentiatedPaths": false,
+        "graduatedComplexity": false
+      }
+    }
+  ],
+  "references": [
+    {
+      "id": "ref-anthropic-tool-use",
+      "title": "Anthropic Tool Use Documentation",
+      "url": "https://docs.anthropic.com/claude/docs/tool-use",
+      "publisher": "Anthropic",
+      "accessedAt": "2026-07-10",
+      "quality": "official-docs"
+    },
+    {
+      "id": "ref-langgraph-docs",
+      "title": "LangGraph Documentation",
+      "url": "https://langchain-ai.github.io/langgraph/",
+      "publisher": "LangChain AI",
+      "accessedAt": "2026-07-10",
+      "quality": "official-docs"
+    },
+    {
+      "id": "ref-temporal-docs",
+      "title": "Temporal Documentation",
+      "url": "https://docs.temporal.io/",
+      "publisher": "Temporal Technologies",
+      "accessedAt": "2026-07-10",
+      "quality": "official-docs"
+    },
+    {
+      "id": "ref-mcp-spec",
+      "title": "Model Context Protocol Specification",
+      "url": "https://modelcontextprotocol.io/",
+      "publisher": "Anthropic",
+      "accessedAt": "2026-07-10",
+      "quality": "primary"
+    },
+    {
+      "id": "ref-opentelemetry",
+      "title": "OpenTelemetry for LLM Observability",
+      "url": "https://opentelemetry.io/",
+      "publisher": "OpenTelemetry",
+      "accessedAt": "2026-07-10",
+      "quality": "official-docs"
+    }
+  ],
+  "concepts": [
+    {
+      "id": "concept-loop-execution",
+      "term": "Loop execution",
+      "definition": "The harness concern controlling when the agent runs, when it stops, and how many steps it may take.",
+      "relatedConceptIds": ["concept-control-flow", "concept-state-goals"]
+    },
+    {
+      "id": "concept-tool-dispatch",
+      "term": "Tool dispatch",
+      "definition": "The harness concern that validates tool-call requests, routes them to implementations, handles errors, and formats results.",
+      "relatedConceptIds": ["concept-context-management"]
+    },
+    {
+      "id": "concept-context-management",
+      "term": "Context management",
+      "definition": "The harness concern that assembles message history, system prompts, and tool schemas each turn within token limits.",
+      "relatedConceptIds": ["concept-state-goals"]
+    },
+    {
+      "id": "concept-state-goals",
+      "term": "State and goals",
+      "definition": "The harness concern tracking agent objectives, working memory, and progress indicators.",
+      "relatedConceptIds": ["concept-persistence"]
+    },
+    {
+      "id": "concept-control-flow",
+      "term": "Control flow",
+      "definition": "The harness concern routing execution through loops, branches, handoffs, or graph transitions.",
+      "relatedConceptIds": ["concept-loop-execution"]
+    },
+    {
+      "id": "concept-persistence",
+      "term": "Persistence",
+      "definition": "The harness concern checkpointing state to durable storage for crash recovery and run resumption.",
+      "relatedConceptIds": ["concept-state-goals", "concept-observability"]
+    },
+    {
+      "id": "concept-observability",
+      "term": "Observability",
+      "definition": "The harness concern emitting traces, tracking costs, supporting replay, and integrating with monitoring.",
+      "relatedConceptIds": ["concept-persistence"]
+    },
+    {
+      "id": "concept-hitl",
+      "term": "Human intervention",
+      "definition": "The harness concern defining approval gates, escalation triggers, and manual override mechanisms.",
+      "relatedConceptIds": ["concept-control-flow"]
+    }
+  ],
+  "misconceptions": [
+    {
+      "id": "mis-harness-is-loop",
+      "misconception": "The harness is just a while loop around the LLM API.",
+      "correction": "The harness manages eight distinct operational concerns beyond simple iteration: tool dispatch, context assembly, state tracking, control flow, persistence, observability, and human intervention.",
+      "conceptIds": ["concept-loop-execution", "concept-tool-dispatch", "concept-context-management", "concept-state-goals", "concept-control-flow", "concept-persistence", "concept-observability", "concept-hitl"]
+    },
+    {
+      "id": "mis-frameworks-eliminate-code",
+      "misconception": "Frameworks like LangGraph eliminate the need for custom harness code.",
+      "correction": "Frameworks shift the abstraction level but you still implement domain-specific logic. They handle common concerns but require custom tool definitions, context strategies, and control flow design.",
+      "conceptIds": ["concept-tool-dispatch", "concept-context-management", "concept-control-flow"]
+    },
+    {
+      "id": "mis-observability-is-logging",
+      "misconception": "Observability is just adding print statements or log files.",
+      "correction": "Production observability includes structured traces, cost tracking, replay mechanisms, and integration with monitoring platforms. It enables debugging, cost optimization, and compliance.",
+      "conceptIds": ["concept-observability"]
+    },
+    {
+      "id": "mis-persistence-is-optional",
+      "misconception": "Persistence is only needed for long-running agents.",
+      "correction": "Even short-lived agents benefit from checkpointing for crash recovery, debugging, and audit trails. Production systems require resume-from-checkpoint for reliability.",
+      "conceptIds": ["concept-persistence"]
+    }
+  ],
+  "workedExamples": [
+    {
+      "id": "example-loop-trace",
+      "title": "Tracing a single agent turn",
+      "prompt": "An agent receives the task 'Check weather in Paris and send a summary email.' Trace the execution through one turn.",
+      "steps": [
+        "Run: Agent starts with task and empty message history.",
+        "Turn 1: Assemble context (system prompt + task + tool schemas).",
+        "Step 1: Model returns tool_use for get_weather(location='Paris').",
+        "Tool dispatch: Validate request, execute get_weather, return result.",
+        "Turn 2: Assemble context (previous turn + tool result).",
+        "Step 2: Model returns tool_use for send_email(to='user', summary='Weather in Paris: 18°C, sunny').",
+        "Tool dispatch: HITL approval gate triggers for send_email.",
+        "User approves. Tool executes.",
+        "Turn 3: Model returns stop_reason='end_turn'.",
+        "Run completes."
+      ],
+      "explanation": "Each turn assembles context, calls the model, dispatches tools, and checks stop conditions. The harness manages context assembly, tool validation, HITL gates, and loop termination.",
+      "conceptIds": ["concept-loop-execution", "concept-tool-dispatch", "concept-context-management", "concept-hitl"],
+      "referenceIds": ["ref-anthropic-tool-use"]
+    },
+    {
+      "id": "example-context-strategy",
+      "title": "Choosing a context assembly strategy",
+      "prompt": "You're building a customer support agent that needs to reference conversation history. The average conversation is 50 turns. Your model has a 200k token context window but latency is a concern. Choose a context strategy.",
+      "steps": [
+        "Evaluate full history: 50 turns × 500 tokens/turn = 25k tokens. Within budget but may increase latency.",
+        "Consider sliding window: Keep last 10 turns (5k tokens). Risk losing important context from earlier turns.",
+        "Consider summarization: Summarize turns older than 10. Balances history and token efficiency.",
+        "Decision: Use summarization for turns 1-40, full history for last 10 turns.",
+        "Implement: After turn 40, trigger summarization agent to compress old turns into 2k summary."
+      ],
+      "explanation": "Context strategy depends on token budget, latency requirements, and task context needs. Summarization balances all three for long conversations.",
+      "conceptIds": ["concept-context-management"],
+      "referenceIds": ["ref-anthropic-tool-use"]
+    },
+    {
+      "id": "example-checkpoint-recovery",
+      "title": "Recovering from crash with checkpoints",
+      "prompt": "An agent crashes after completing 8 of 10 steps in a workflow. Show how checkpointing enables recovery.",
+      "steps": [
+        "Checkpoint format: { run_id, turn, step, messages[], state: { completed_steps: [...] } }",
+        "After step 8: Checkpoint saved with completed_steps: [1,2,3,4,5,6,7,8].",
+        "Crash: Process terminates.",
+        "Recovery: Load checkpoint from storage.",
+        "Resume: Restore message history and state.",
+        "Continue from step 9: Skip completed steps 1-8.",
+        "Complete steps 9-10."
+      ],
+      "explanation": "Checkpoints capture complete execution state (message history, agent state, step progress) to enable crash recovery without restarting from scratch.",
+      "conceptIds": ["concept-persistence", "concept-state-goals"],
+      "referenceIds": ["ref-temporal-docs"]
+    }
+  ],
+  "exercises": [
+    {
+      "id": "exercise-classify-concerns",
+      "prompt": "Classify each of the following harness responsibilities into one of the eight concerns: (a) Deciding when to stop the loop, (b) Truncating old messages to fit token limits, (c) Saving state to disk after each turn, (d) Logging model calls to OpenTelemetry, (e) Asking user to approve a file deletion.",
+      "type": "classification",
+      "difficulty": "beginner",
+      "conceptIds": ["concept-loop-execution", "concept-context-management", "concept-persistence", "concept-observability", "concept-hitl"],
+      "answerId": "answer-classify-concerns"
+    },
+    {
+      "id": "exercise-design-dispatch",
+      "prompt": "Design a tool dispatch system that validates tool calls against schemas, routes to implementations, handles timeouts, and formats errors. List the key components and their responsibilities.",
+      "type": "design",
+      "difficulty": "intermediate",
+      "conceptIds": ["concept-tool-dispatch"],
+      "answerId": "answer-design-dispatch"
+    },
+    {
+      "id": "exercise-hitl-patterns",
+      "prompt": "You're building an agent that can read files, write files, and execute shell commands. Which actions should require human approval and why?",
+      "type": "short-answer",
+      "difficulty": "intermediate",
+      "conceptIds": ["concept-hitl"],
+      "answerId": "answer-hitl-patterns"
+    }
+  ],
+  "answers": [
+    {
+      "id": "answer-classify-concerns",
+      "exerciseId": "exercise-classify-concerns",
+      "answer": "(a) Loop execution, (b) Context management, (c) Persistence, (d) Observability, (e) Human intervention",
+      "rubric": ["Correctly identifies all five concerns", "No incorrect classifications"]
+    },
+    {
+      "id": "answer-design-dispatch",
+      "exerciseId": "exercise-design-dispatch",
+      "answer": "Components: (1) Schema validator: Validates tool_use against registered schemas. (2) Tool registry: Maps tool names to implementations. (3) Executor: Invokes tool with timeout wrapper. (4) Error handler: Catches exceptions, formats error messages for model. (5) Result formatter: Converts tool output to tool_result format.",
+      "rubric": ["Includes validation component", "Includes registry/routing", "Handles errors and timeouts", "Formats results for model"]
+    },
+    {
+      "id": "answer-hitl-patterns",
+      "exerciseId": "exercise-hitl-patterns",
+      "answer": "Require approval for: (1) Write file: Prevents unintended data loss. (2) Execute shell commands: Prevents destructive actions (rm -rf, etc.). (3) Optional for read file: Depends on sensitivity of data. Rationale: Consequential, irreversible, or security-sensitive actions should require explicit user consent.",
+      "rubric": ["Identifies write and execute as requiring approval", "Provides reasonable rationale about consequences or risk"]
+    }
+  ],
+  "formativeAssessment": [
+    {
+      "id": "assess-harness-definition",
+      "type": "quiz",
+      "prompt": "What are the eight operational concerns of an agent harness?",
+      "expectedAnswer": "Loop execution, tool dispatch, context management, state and goals, control flow, persistence, observability, and human intervention.",
+      "objectiveIds": ["obj-define-harness"]
+    },
+    {
+      "id": "assess-concern-classification",
+      "type": "classification",
+      "prompt": "Classify harness responsibilities into the correct concern category.",
+      "expectedAnswer": "Learner correctly classifies at least 7 out of 8 sample responsibilities.",
+      "objectiveIds": ["obj-define-harness"]
+    },
+    {
+      "id": "assess-loop-trace",
+      "type": "free-response",
+      "prompt": "Trace a single agent turn from context assembly through tool dispatch to stop condition checking.",
+      "expectedAnswer": "Describes context assembly → model call → tool dispatch → result integration → stop check cycle.",
+      "objectiveIds": ["obj-trace-loop"]
+    },
+    {
+      "id": "assess-dispatch-implementation",
+      "type": "code-review",
+      "prompt": "Review this tool dispatch implementation and identify missing components.",
+      "expectedAnswer": "Identifies missing schema validation, error handling, or timeout mechanisms.",
+      "objectiveIds": ["obj-implement-dispatch"]
+    },
+    {
+      "id": "assess-context-design",
+      "type": "design",
+      "prompt": "Design a context assembly strategy for a 100-turn conversation within a 50k token budget.",
+      "expectedAnswer": "Proposes sliding window, summarization, or hybrid strategy with rationale.",
+      "objectiveIds": ["obj-manage-context"]
+    },
+    {
+      "id": "assess-persistence-implementation",
+      "type": "code-review",
+      "prompt": "Implement a checkpoint save/restore mechanism for an agent run.",
+      "expectedAnswer": "Implementation includes run_id, turn, step, messages, and state fields, with save and load functions.",
+      "objectiveIds": ["obj-implement-persistence"]
+    },
+    {
+      "id": "assess-hitl-design",
+      "type": "design",
+      "prompt": "Design an approval gate system for a production agent with file system access.",
+      "expectedAnswer": "Identifies consequential actions (write, delete, execute), proposes approval mechanism, includes bypass for safe reads.",
+      "objectiveIds": ["obj-design-hitl"]
+    },
+    {
+      "id": "assess-harness-build",
+      "type": "lab-submission",
+      "prompt": "Submit your minimal harness implementation with test suite.",
+      "expectedAnswer": "Working harness with loop execution, tool dispatch, context management, and passing tests using FakeModelClient.",
+      "objectiveIds": ["obj-build-harness"]
+    },
+    {
+      "id": "assess-framework-evaluation",
+      "type": "comparison",
+      "prompt": "Compare LangGraph and Temporal across the eight harness concerns.",
+      "expectedAnswer": "Matrix comparing both frameworks on all eight concerns with accurate characterizations.",
+      "objectiveIds": ["obj-evaluate-frameworks"]
+    }
+  ],
+  "masteryCriteria": [
+    {
+      "id": "mastery-harness-definition",
+      "description": "Can define the harness layer and accurately classify its eight operational concerns.",
+      "objectiveIds": ["obj-define-harness"],
+      "threshold": "Correctly identifies all eight concerns and classifies at least 7 of 8 sample responsibilities."
+    },
+    {
+      "id": "mastery-loop-trace",
+      "description": "Can trace agent execution through run/turn/step model with correct sequencing.",
+      "objectiveIds": ["obj-trace-loop"],
+      "threshold": "Accurately traces a multi-turn execution including context assembly, tool dispatch, and stop conditions."
+    },
+    {
+      "id": "mastery-dispatch",
+      "description": "Can implement a complete tool dispatch system with validation and error handling.",
+      "objectiveIds": ["obj-implement-dispatch"],
+      "threshold": "Implementation includes schema validation, registry, timeout handling, and error formatting."
+    },
+    {
+      "id": "mastery-context",
+      "description": "Can design context assembly strategies that balance history, token limits, and latency.",
+      "objectiveIds": ["obj-manage-context"],
+      "threshold": "Proposes appropriate strategy for given scenario with clear rationale."
+    },
+    {
+      "id": "mastery-persistence",
+      "description": "Can implement checkpoint-based persistence enabling crash recovery.",
+      "objectiveIds": ["obj-implement-persistence"],
+      "threshold": "Implementation supports save, load, and resume with complete state capture."
+    },
+    {
+      "id": "mastery-hitl",
+      "description": "Can design human-in-the-loop patterns appropriate for action consequences.",
+      "objectiveIds": ["obj-design-hitl"],
+      "threshold": "Identifies consequential actions requiring approval with sound risk assessment."
+    },
+    {
+      "id": "mastery-harness-build",
+      "description": "Can build a functional agent harness from first principles.",
+      "objectiveIds": ["obj-build-harness"],
+      "threshold": "Working harness passes all test cases with deterministic model stub."
+    },
+    {
+      "id": "mastery-framework-evaluation",
+      "description": "Can evaluate production frameworks against the eight-concern framework.",
+      "objectiveIds": ["obj-evaluate-frameworks"],
+      "threshold": "Accurately compares at least two frameworks on all eight concerns."
+    }
+  ],
+  "recap": [
+    "The harness layer manages eight operational concerns: loop execution, tool dispatch, context management, state tracking, control flow, persistence, observability, and human intervention.",
+    "Production harnesses require checkpoint-based persistence, structured observability, and human-in-the-loop gates for consequential actions.",
+    "Framework choice depends on your concern priorities: LangGraph for graph-based control flow, Temporal for durable execution, custom for maximum control."
+  ],
+  "nextSteps": [
+    "Complete the hands-on labs to build and extend a harness from scratch.",
+    "Evaluate production frameworks against the eight-concern framework for your use case.",
+    "Integrate MCP tools into your harness for ecosystem interoperability.",
+    "Instrument your harness with OpenTelemetry for production observability."
+  ],
+  "accessibility": {
+    "altTextRequired": true,
+    "captionsRequired": true,
+    "transcriptRequired": true,
+    "colorIndependent": true,
+    "keyboardNavigable": true,
+    "readingOrderChecked": true
+  },
+  "localization": {
+    "sourceLocale": "en-US",
+    "targetLocales": [],
+    "glossaryTerms": ["harness", "loop execution", "tool dispatch", "context management", "state", "control flow", "persistence", "observability", "human-in-the-loop", "checkpoint"],
+    "culturalAssumptions": ["Examples assume familiarity with Python and command-line development", "Labs use Unix-style file paths"]
+  },
+  "contentStyle": {
+    "voice": "systematic",
+    "approaches": ["hands-on", "analogical"],
+    "generationMode": "sequential"
+  },
+  "gamification": {
+    "enabled": true,
+    "badges": [
+      {
+        "id": "badge-eight-concerns",
+        "title": "Eight Concerns",
+        "description": "Complete all conceptual lessons (1-8).",
+        "criteria": "Finish lessons 1-8.",
+        "iconHint": "compass"
+      },
+      {
+        "id": "badge-harness-builder",
+        "title": "Harness Builder",
+        "description": "Complete both build labs (9-10).",
+        "criteria": "Finish lessons 9 and 10.",
+        "iconHint": "wrench"
+      },
+      {
+        "id": "badge-ecosystem-navigator",
+        "title": "Ecosystem Navigator",
+        "description": "Complete ecosystem and choosing lessons (11-12).",
+        "criteria": "Finish lessons 11 and 12.",
+        "iconHint": "map"
+      },
+      {
+        "id": "badge-module-complete",
+        "title": "Module Master",
+        "description": "Complete all 12 lessons in Module 5.",
+        "criteria": "Finish all lessons 1-12.",
+        "iconHint": "trophy"
+      }
+    ],
+    "pointRules": [
+      { "action": "lesson-complete", "points": 100, "description": "Points for completing a lesson." },
+      { "action": "quiz-perfect", "points": 50, "description": "Bonus points for perfect quiz score." },
+      { "action": "lab-complete", "points": 200, "description": "Extra points for completing hands-on labs." }
+    ],
+    "streakTracking": true,
+    "achievements": [
+      {
+        "id": "ach-unlock-labs",
+        "title": "Labs Unlocked",
+        "description": "Completing all conceptual lessons unlocks the hands-on labs.",
+        "unlocksLessonIds": ["lesson-build-minimal-harness", "lesson-extend-harness"]
+      }
+    ]
+  },
+  "adaptivePaths": [
+    {
+      "id": "path-conceptual-fast-track",
+      "title": "Conceptual Fast Track",
+      "description": "Cover the eight harness concerns and decision framework without hands-on labs.",
+      "entryCondition": "Learner wants conceptual understanding without implementation.",
+      "lessonSequence": ["lesson-what-is-harness", "lesson-agent-loop-internals", "lesson-tool-dispatch", "lesson-context-goals-state", "lesson-control-flow", "lesson-persistence-checkpointing", "lesson-human-in-the-loop", "lesson-observability", "lesson-choosing-and-frontier"],
+      "difficulty": "intermediate"
+    },
+    {
+      "id": "path-full-build",
+      "title": "Full Build Path",
+      "description": "Complete all 12 lessons including hands-on labs and ecosystem analysis.",
+      "entryCondition": "Learner wants comprehensive understanding with implementation experience.",
+      "lessonSequence": ["lesson-what-is-harness", "lesson-agent-loop-internals", "lesson-tool-dispatch", "lesson-context-goals-state", "lesson-control-flow", "lesson-persistence-checkpointing", "lesson-human-in-the-loop", "lesson-observability", "lesson-build-minimal-harness", "lesson-extend-harness", "lesson-ecosystem-map", "lesson-choosing-and-frontier"],
+      "difficulty": "intermediate"
+    }
+  ],
+  "spacedRepetition": {
+    "enabled": true,
+    "intervals": [1, 3, 7, 14, 30],
+    "reviewCardCount": 15
+  },
+  "microlearning": {
+    "enabled": false
+  },
+  "projectCapstones": [
+    {
+      "id": "capstone-production-harness",
+      "title": "Build a Production-Ready Harness",
+      "description": "Build a complete agent harness implementing all eight concerns with comprehensive test coverage.",
+      "deliverables": [
+        "Working harness with all eight concerns implemented",
+        "Test suite with FakeModelClient for deterministic testing",
+        "Architecture decision document explaining design choices",
+        "Integration with at least one MCP tool server"
+      ],
+      "rubric": [
+        "Implements all eight harness concerns correctly",
+        "Includes checkpoint-based persistence with crash recovery",
+        "Has structured trace output compatible with OpenTelemetry",
+        "Passes all tests with deterministic model stub",
+        "Architecture document justifies design decisions"
+      ],
+      "estimatedHours": 8,
+      "prerequisiteLessonIds": ["lesson-what-is-harness", "lesson-agent-loop-internals", "lesson-tool-dispatch", "lesson-context-goals-state", "lesson-control-flow", "lesson-persistence-checkpointing", "lesson-human-in-the-loop", "lesson-observability", "lesson-build-minimal-harness", "lesson-extend-harness", "lesson-ecosystem-map", "lesson-choosing-and-frontier"],
+      "conceptIds": ["concept-loop-execution", "concept-tool-dispatch", "concept-context-management", "concept-state-goals", "concept-control-flow", "concept-persistence", "concept-observability", "concept-hitl"]
+    }
+  ],
+  "udlFramework": {
+    "multipleRepresentations": ["text explanations", "mermaid diagrams", "code walkthroughs", "comparison tables", "worked examples"],
+    "multipleActions": ["quizzes", "classification exercises", "build labs", "framework comparison", "reflection prompts"],
+    "multipleEngagement": ["progressive case study", "gamified badges", "real-world failure scenarios", "hands-on coding"]
+  },
+  "collaborativeLearning": {
+    "enabled": false
+  }
+}
