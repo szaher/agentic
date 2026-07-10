@@ -1,0 +1,662 @@
+---
+title: "Lesson 6: Persistence, Checkpointing, and Resumability"
+quiz:
+  - question: "What is the key distinction between persistence and context?"
+    options:
+      - "Persistence is in-memory, context is on-disk"
+      - "Persistence stores intent and decisions; context stores conversation history"
+      - "Persistence is for short runs, context is for long runs"
+      - "They are identical concepts with different names"
+    correctIndex: 1
+    explanation: "Persistence captures agent state, goals, and control position for resumability. Context (like conversation history) is one *part* of what gets persisted, but persistence is the broader recovery mechanism."
+  - question: "Which of these violates serialization boundaries and should NOT be checkpointed directly?"
+    options:
+      - "The list of completed tool calls"
+      - "An open database connection handle"
+      - "The current goal stack"
+      - "The agent's message history"
+    correctIndex: 1
+    explanation: "Open connections, file handles, and ephemeral runtime objects cannot be reliably serialized. Checkpoint the *intent* to reconnect, not the connection itself."
+  - question: "When does event sourcing beat full state snapshots?"
+    options:
+      - "When you need to reconstruct past states or explain decision history"
+      - "When the state is very small"
+      - "When you never need to resume from failures"
+      - "When you want the fastest possible restart"
+    correctIndex: 0
+    explanation: "Event sourcing records every state transition, letting you replay history, audit decisions, and reconstruct any prior state. Full snapshots are faster to restore but lose the explanation trail."
+  - question: "What does the production triad connect?"
+    options:
+      - "Persistence, intervention, and observability"
+      - "State, context, and tools"
+      - "Planning, execution, and validation"
+      - "Input, processing, and output"
+    correctIndex: 0
+    explanation: "Persistence enables intervention (pause/resume). Intervention creates observable events. Observability audits both. This triad is the foundation of production agent systems."
+---
+
+## Overview
+
+A 20-step agent run that fails at step 17 should not restart from step 1.
+
+Without persistence, every failure means starting over. Every crash loses context. Every pause requires the user to re-explain the task. This is unacceptable for production systems where runs span minutes or hours, involve external API costs, or require human checkpoints.
+
+**Persistence** is the mechanism that lets agent harnesses save their state, survive failures, pause for human decisions, and resume exactly where they left off. It is the foundation of **resumability** — the ability to continue work after interruption.
+
+In this lesson, you will learn why persistence matters, what gets checkpointed, how real harnesses implement it, and how it connects to intervention and observability.
+
+<LearningObjectives items={[
+  "Identify five motivations for persistence in agent systems",
+  "Distinguish three persistence scopes: turn-level, run-level, and session-level",
+  "Describe the anatomy of a checkpoint",
+  "Recognize serialization boundaries and explain what cannot be checkpointed",
+  "Compare checkpoint strategies: full snapshots, incremental deltas, and event sourcing",
+  "Explain how LangGraph, OpenAI, and Claude Agent SDK implement persistence",
+  "Connect persistence, intervention, and observability in the production triad"
+]} />
+
+<Prerequisites items={[
+  "Module 5, Lesson 4: Context, Goals, and State",
+  "Module 5, Lesson 5: Control Flow and Planning"
+]} />
+
+---
+
+## Five Motivations for Persistence
+
+Why do agent harnesses need persistence? Here are five production motivations:
+
+### 1. Failure Recovery
+
+An agent run might fail due to:
+- Network timeout during a tool call
+- Rate limit from an external API
+- Model provider outage
+- Out-of-memory error
+- Crash in user code
+
+Without persistence, every failure means restarting the entire run. With persistence, the harness can resume from the last checkpoint, skipping already-completed steps.
+
+**Example:** A research agent searches 10 sources. It completes 7, then hits a rate limit. With persistence, it resumes at source 8 after the rate limit resets. Without persistence, it restarts from source 1.
+
+### 2. Human Intervention
+
+Some agent runs require human decisions mid-execution:
+- Approve a proposed action before executing it
+- Choose between multiple valid options
+- Provide additional input when the agent is stuck
+- Stop the run if it goes off-track
+
+Persistence lets the harness **pause** the run, wait for human input, then **resume** with the decision incorporated.
+
+**Example:** A deployment agent proposes a database migration. It pauses, shows the migration plan to the user, waits for approval, then resumes execution only if approved.
+
+### 3. Inspection
+
+Developers and operators need to inspect agent state during or after a run:
+- What was the agent thinking at step 12?
+- What tool calls were pending when it crashed?
+- What goals were active at the pause point?
+
+Checkpoints provide snapshots of agent state at specific moments, enabling forensic analysis.
+
+### 4. Time Travel
+
+Some harnesses support **time travel**: returning to a prior checkpoint and re-executing from there with different decisions.
+
+**Example:** An agent made a bad choice at step 5, leading to a dead end at step 10. Time travel lets you rewind to step 5, override the choice, and explore an alternative path.
+
+This is valuable for debugging, experimentation, and counterfactual reasoning.
+
+### 5. Auditability
+
+In regulated domains (healthcare, finance, legal), you must prove what an agent did, when, why, and based on what information.
+
+Checkpoints provide an **audit trail**: a timestamped sequence of states, decisions, and observations that can be reviewed, explained, and defended.
+
+**Example:** A loan approval agent denies an application. Auditors examine the checkpoint sequence to verify that the decision followed policy and was based on correct information.
+
+---
+
+## Three Persistence Scopes
+
+Not all persistence is the same. Harnesses implement persistence at three different scopes:
+
+<MermaidDiagram
+  chart={`graph TD
+    Turn[Turn-Level: Single Model Call] --> Run[Run-Level: Multi-Step Sequence]
+    Run --> Session[Session-Level: Cross-User Interactions]
+    
+    Turn -.->|Retry| Turn
+    Run -.->|Resume| Run
+    Session -.->|Continue| Session
+    
+    style Turn fill:#e3f2fd
+    style Run fill:#fff3e0
+    style Session fill:#f3e5f5
+  `}
+  fallback="Three persistence scopes: turn-level (single model call retry), run-level (multi-step resume), session-level (cross-user continuity)."
+  caption="Persistence scopes from narrowest (turn) to broadest (session)."
+/>
+
+### Turn-Level Persistence
+
+**Scope:** A single model call (one turn in the loop).
+
+**Use case:** Retry a failed model call without re-executing prior tools.
+
+**What gets saved:** Conversation messages up to the failed call.
+
+**Example:** The model provider returns a 500 error. The harness retries the call with the same messages, without re-running the tool calls that preceded it.
+
+### Run-Level Persistence
+
+**Scope:** A complete agent run (many turns, many tools, one high-level task).
+
+**Use case:** Resume a multi-step run after failure, pause, or timeout.
+
+**What gets saved:** Full agent state (messages, goals, pending calls, control position).
+
+**Example:** A 20-step research task crashes at step 17. The harness loads the checkpoint from step 16 and resumes at step 17.
+
+### Session-Level Persistence
+
+**Scope:** Multiple runs across user interactions (ongoing collaboration).
+
+**Use case:** Continue work across conversations, remember past tasks, build on prior context.
+
+**What gets saved:** Cross-run state (user profile, shared memory, recurring goals).
+
+**Example:** A user works with a coding agent over a week. Each day's conversation builds on prior work. Session persistence remembers the codebase context, past decisions, and open tasks.
+
+---
+
+## Checkpoint Anatomy
+
+What exactly gets saved in a checkpoint? Here is the core structure:
+
+```python
+@dataclass
+class Checkpoint:
+    # Unique identifier for this checkpoint
+    checkpoint_id: str
+    timestamp: datetime
+    
+    # Agent state (from Lesson 4)
+    state: AgentState
+    
+    # Conversation history
+    message_history: List[Message]
+    
+    # Goal progress (from Lesson 4)
+    goal_stack: List[Goal]
+    completed_goals: List[Goal]
+    
+    # Pending tool calls (from Lesson 3)
+    pending_calls: List[ToolCall]
+    
+    # Control flow position (from Lesson 5)
+    control_position: ControlPosition
+    
+    # Optional: parent checkpoint for incremental deltas
+    parent_checkpoint_id: Optional[str] = None
+```
+
+**Key components:**
+
+1. **State:** The agent's current working memory (variables, temporary context, intermediate results).
+2. **History:** The full conversation (user messages, model messages, tool results).
+3. **Goals:** What the agent is trying to achieve, what it has completed, what remains.
+4. **Pending calls:** Tool calls that were scheduled but not yet executed.
+5. **Control position:** Where the agent is in its control flow (planning phase? tool execution? result synthesis?).
+
+**Why these five?** Together, they capture everything needed to resume the run exactly as if it never stopped.
+
+---
+
+## Serialization Boundaries
+
+Not everything *can* be checkpointed. Some runtime objects are **non-serializable** or **ephemeral** and must be excluded.
+
+### What Can Be Checkpointed
+
+- **Data:** Strings, numbers, booleans, lists, dictionaries, dataclasses, JSON-serializable objects.
+- **Intent:** Tool names, arguments, goals, plans.
+- **History:** Messages, observations, decisions.
+- **Metadata:** Timestamps, IDs, counters.
+
+### What Cannot Be Checkpointed
+
+- **Open connections:** Database connections, HTTP sessions, WebSocket handles.
+- **File handles:** Open file descriptors.
+- **In-flight executions:** Running threads, async tasks, OS processes.
+- **Ephemeral auth:** Short-lived tokens, in-memory credentials.
+- **Provider caches:** Model-side caches, rate-limit state.
+- **Non-serializable objects:** Lambda functions, closures, native C objects.
+
+### Design Principle: Checkpoint Intent, Not Runtime Objects
+
+Instead of checkpointing a database connection, checkpoint the **connection parameters**. On resume, re-open the connection.
+
+Instead of checkpointing a running subprocess, checkpoint the **command** and **working directory**. On resume, re-launch the process.
+
+**Example:**
+
+```python
+# ❌ Bad: checkpoint the connection itself
+checkpoint.db_connection = sqlite3.connect("data.db")
+
+# ✅ Good: checkpoint the connection intent
+checkpoint.db_path = "data.db"
+
+# On resume:
+db = sqlite3.connect(checkpoint.db_path)
+```
+
+This principle keeps checkpoints portable, durable, and safe to serialize.
+
+---
+
+## Checkpoint Strategies
+
+How should a harness save state? Three common strategies:
+
+### 1. Full State Snapshots
+
+**What:** Save the complete agent state at every checkpoint.
+
+**Pros:**
+- Simple to implement
+- Fast to restore (one read, no reconstruction)
+- No dependency on prior checkpoints
+
+**Cons:**
+- Large storage footprint (redundant data)
+- Slow to write if state is large
+
+**Best for:** Small state, infrequent checkpoints, fast resume priority.
+
+### 2. Incremental Deltas
+
+**What:** Save only the *changes* since the last checkpoint.
+
+**Pros:**
+- Smaller storage footprint
+- Faster writes
+
+**Cons:**
+- Slower to restore (must replay deltas from base checkpoint)
+- Requires dependency chain (if base checkpoint is lost, deltas are useless)
+
+**Best for:** Large state, frequent checkpoints, storage optimization priority.
+
+### 3. Event Sourcing
+
+**What:** Save every state *transition* as an event. Reconstruct current state by replaying all events.
+
+**Pros:**
+- Complete history and auditability
+- Can reconstruct any prior state (time travel)
+- Natural explanation trail
+
+**Cons:**
+- Slowest to restore (must replay all events)
+- Requires careful event design to avoid ambiguity
+
+**Best for:** Auditability, debugging, time travel, regulated domains.
+
+<DataTable
+  headers={["Strategy", "Write Speed", "Restore Speed", "Storage Cost", "Auditability"]}
+  rows={[
+    ["Full Snapshots", "Slow", "Fast", "High", "Limited"],
+    ["Incremental Deltas", "Fast", "Medium", "Low", "Limited"],
+    ["Event Sourcing", "Fast", "Slow", "Medium", "Excellent"]
+  ]}
+  caption="Checkpoint strategy tradeoffs."
+/>
+
+**Real-world choice:** Many harnesses use a hybrid:
+- Full snapshot every N checkpoints (for fast restore)
+- Incremental deltas in between (for storage efficiency)
+- Event log in parallel (for auditability)
+
+---
+
+## How Real Harnesses Implement Persistence
+
+Let's look at three production agent SDKs.
+
+### LangGraph: Checkpointers and Stores
+
+**LangGraph** provides two persistence primitives:
+
+1. **Checkpointers:** Thread-level state snapshots.
+2. **Stores:** Cross-thread memory.
+
+**Checkpointers:**
+
+```python
+from langgraph.checkpoint.memory import MemorySaver
+
+checkpointer = MemorySaver()
+
+graph = StateGraph(AgentState, checkpointer=checkpointer)
+# ...build graph...
+
+# Run with thread ID
+result = graph.invoke(inputs, config={"configurable": {"thread_id": "user-123"}})
+
+# Checkpoint is saved automatically after each step
+# Resume by invoking with the same thread_id
+```
+
+LangGraph checkpoints after every node execution. If the run crashes, resuming with the same `thread_id` loads the last checkpoint.
+
+**Stores:**
+
+```python
+from langgraph.store.memory import InMemoryStore
+
+store = InMemoryStore()
+
+graph = StateGraph(AgentState, checkpointer=checkpointer, store=store)
+
+# Agent can read/write to persistent store during execution
+await store.put(("user-123", "preferences"), "dark_mode", {"theme": "dark"})
+value = await store.get(("user-123", "preferences"), "dark_mode")
+```
+
+Stores let agents persist data *across* runs, not just within a single run.
+
+### OpenAI Agents SDK: Sessions
+
+**OpenAI Agents SDK** uses **sessions** for cross-run continuity.
+
+```python
+from openai import OpenAI
+
+client = OpenAI()
+
+# Create session
+session = client.beta.assistants.sessions.create(
+    assistant_id="asst_abc123"
+)
+
+# Run 1
+run = client.beta.assistants.runs.create(
+    session_id=session.id,
+    instructions="Find the top 5 research papers on topic X."
+)
+
+# ...wait for completion...
+
+# Run 2 (same session, builds on Run 1 context)
+run = client.beta.assistants.runs.create(
+    session_id=session.id,
+    instructions="Summarize the papers you found."
+)
+```
+
+The session persists conversation history and state across multiple runs. The assistant remembers what it did in Run 1 when executing Run 2.
+
+### Claude Agent SDK: File Checkpointing and External State
+
+**Claude Agent SDK** uses file-based checkpointing for tool state and delegates full run-state persistence to the application.
+
+**File checkpointing:**
+
+When tool definitions change (new tools added, signatures modified), the SDK checkpoints the tool registry to disk. On restart, it detects changes and rebuilds the tool graph.
+
+**Session continuity:**
+
+The SDK maintains conversation history within a session. If the application crashes, history is lost unless the application persists it externally.
+
+**External persistence:**
+
+For full run-state checkpointing, applications using the Claude Agent SDK typically implement their own persistence layer (e.g., PostgreSQL, Redis, S3).
+
+```python
+import json
+
+class AgentRunner:
+    def save_checkpoint(self, checkpoint_id: str):
+        state = {
+            "checkpoint_id": checkpoint_id,
+            "messages": self.conversation.messages,
+            "goals": self.goal_stack,
+            "pending_calls": self.pending_calls
+        }
+        with open(f"checkpoints/{checkpoint_id}.json", "w") as f:
+            json.dump(state, f)
+    
+    def load_checkpoint(self, checkpoint_id: str):
+        with open(f"checkpoints/{checkpoint_id}.json", "r") as f:
+            state = json.load(f)
+        self.conversation.messages = state["messages"]
+        self.goal_stack = state["goals"]
+        self.pending_calls = state["pending_calls"]
+```
+
+This gives applications full control over what, when, and where to checkpoint.
+
+### Custom: Event-Sourced Logs
+
+Some teams build **event-sourced** harnesses that log every state transition:
+
+```python
+# Event log
+events = [
+    {"type": "user_message", "content": "...", "timestamp": "..."},
+    {"type": "model_call", "messages": [...], "timestamp": "..."},
+    {"type": "tool_call", "name": "search", "args": {...}, "timestamp": "..."},
+    {"type": "tool_result", "result": {...}, "timestamp": "..."},
+    # ...
+]
+
+# Reconstruct state by replaying events
+def reconstruct_state(events):
+    state = AgentState()
+    for event in events:
+        state.apply(event)
+    return state
+```
+
+This approach provides complete auditability and time travel at the cost of slower restoration.
+
+---
+
+## The Production Triad
+
+Persistence does not exist in isolation. It is one vertex of a three-part system:
+
+<MermaidDiagram
+  chart={`graph LR
+    P[Persistence] <-->|Enables| I[Intervention]
+    I <-->|Creates Events| O[Observability]
+    O <-->|Audits| P
+    
+    P -.->|Checkpoints| P
+    I -.->|Pause/Resume| I
+    O -.->|Logs/Traces| O
+    
+    style P fill:#e3f2fd
+    style I fill:#fff3e0
+    style O fill:#f3e5f5
+  `}
+  fallback="The production triad: Persistence enables intervention; intervention creates observable events; observability audits both."
+  caption="Persistence, intervention, and observability form a tightly coupled system."
+/>
+
+### How They Connect
+
+1. **Persistence enables intervention.** You cannot pause a run unless you can checkpoint its state. You cannot resume unless you can restore that state.
+
+2. **Intervention creates events.** Every pause, approval, rejection, and override is a **control event** that must be logged, timestamped, and attributed.
+
+3. **Observability audits both.** Logs, traces, and metrics explain what was persisted, why intervention occurred, and what decisions were made.
+
+**Example flow:**
+
+- Agent run reaches a checkpoint (persistence).
+- Harness pauses for human approval (intervention).
+- User approves, harness logs the decision (observability).
+- Run resumes from checkpoint (persistence).
+- Harness emits trace showing pause duration and approval (observability).
+
+This triad connects **Lesson 6 (Persistence)**, **Lesson 7 (HITL Intervention)**, and **Lesson 8 (Observability)**.
+
+---
+
+## Cost Implications of Checkpointing
+
+Persistence is not free. It has both **runtime cost** and **storage cost**.
+
+### Runtime Cost
+
+Checkpointing adds overhead to every step:
+- Serialize state
+- Write to storage
+- Validate write success
+
+For high-frequency checkpoints (after every tool call), this can slow the loop by 10-50ms per checkpoint.
+
+**Mitigation:** Use asynchronous writes, batch checkpoints, or checkpoint only at coarse-grained boundaries (after planning, after N tools).
+
+### Storage Cost
+
+Checkpoints accumulate over time. A single run might generate 20 checkpoints. A week of production traffic might generate millions.
+
+**Mitigation:**
+- Retention policies (delete checkpoints older than N days)
+- Compression (gzip JSON, use binary formats like MessagePack)
+- Incremental deltas (store only changes)
+
+### Cost Savings
+
+Checkpointing *saves* cost when it prevents re-execution:
+
+**Example:** A 20-step agent run costs $0.50 in model API calls. It crashes at step 17. Without persistence, restarting costs another $0.50. With persistence, resuming costs only the $0.05 for steps 17-20.
+
+**Rule of thumb:** If your agent runs are expensive (many model calls, long durations), checkpointing pays for itself by avoiding re-execution.
+
+---
+
+## Case Study: Crash and Resume in a Research Assistant
+
+Let's walk through a real scenario.
+
+### Scenario
+
+A research assistant agent receives this task:
+
+> "Find 5 authoritative sources on climate change mitigation strategies published after 2020."
+
+The agent plans a 5-step process:
+
+1. Search for source 1
+2. Search for source 2
+3. Search for source 3
+4. Search for source 4
+5. Search for source 5
+
+Each search is a separate tool call to a web search API.
+
+### Execution Timeline
+
+```
+00:00 - Start run (checkpoint C0)
+00:10 - Search source 1 → success (checkpoint C1)
+00:20 - Search source 2 → success (checkpoint C2)
+00:30 - Search source 3 → success (checkpoint C3)
+00:40 - Search source 4 → network timeout, crash
+```
+
+The harness crashes at 00:40 before checkpointing C4.
+
+### Without Persistence
+
+User restarts the agent. It begins from step 1:
+
+```
+00:50 - Restart run
+01:00 - Search source 1 → success (duplicate of 00:10)
+01:10 - Search source 2 → success (duplicate of 00:20)
+01:20 - Search source 3 → success (duplicate of 00:30)
+01:30 - Search source 4 → success
+01:40 - Search source 5 → success
+```
+
+**Total time:** 100 seconds. **Wasted effort:** 50 seconds re-executing steps 1-3.
+
+### With Persistence
+
+The harness loads checkpoint C3 (last successful state):
+
+```
+00:50 - Restart run, load checkpoint C3
+00:51 - Resume at step 4
+01:01 - Search source 4 → success (checkpoint C4)
+01:11 - Search source 5 → success (checkpoint C5)
+```
+
+**Total time:** 71 seconds (40 before crash + 31 after resume). **Savings:** 29 seconds and 3 redundant API calls.
+
+### Key Takeaway
+
+Persistence turns a full restart into a targeted resume, saving time, cost, and user frustration.
+
+---
+
+## Summary
+
+**Persistence** is the mechanism that makes agent harnesses production-ready. It enables:
+
+- **Failure recovery** (resume after crashes)
+- **Human intervention** (pause for decisions, resume after approval)
+- **Inspection** (examine state at any moment)
+- **Time travel** (rewind and re-execute)
+- **Auditability** (prove what happened, when, why)
+
+Harnesses implement persistence at three scopes:
+
+- **Turn-level** (retry a single call)
+- **Run-level** (resume a multi-step task)
+- **Session-level** (continue across user interactions)
+
+Checkpoints capture:
+
+- Agent state
+- Message history
+- Goal progress
+- Pending tool calls
+- Control flow position
+
+Not everything can be checkpointed. Respect serialization boundaries: checkpoint **intent**, not runtime objects.
+
+Harnesses use different checkpoint strategies:
+
+- **Full snapshots** (simple, fast restore)
+- **Incremental deltas** (storage efficient)
+- **Event sourcing** (auditable, time travel)
+
+Real harnesses (LangGraph, OpenAI, Claude Agent SDK) provide persistence primitives. Applications choose the right strategy for their needs.
+
+Persistence does not stand alone. It is one vertex of the **production triad**:
+
+- Persistence enables intervention.
+- Intervention creates observable events.
+- Observability audits both.
+
+This triad is the foundation of production agent systems. You will explore intervention in Lesson 7 and observability in Lesson 8.
+
+---
+
+## Next Steps
+
+You now understand *what* gets persisted and *why* it matters. But you have not yet seen *when* the harness should pause.
+
+Some pauses are automatic (failure, timeout). Others are intentional: the harness stops and waits for a human decision before proceeding.
+
+In **Lesson 7**, you will learn about **Human-in-the-Loop (HITL) Intervention**: how harnesses detect when to pause, present options to users, wait for decisions, and resume execution based on human input.
+
+Persistence made resumability possible. Intervention makes it deliberate.
