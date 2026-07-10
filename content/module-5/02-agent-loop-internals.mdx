@@ -1,0 +1,795 @@
+---
+title: "The Agent Loop Internals"
+quiz:
+  - question: "What is the precise distinction between a 'turn' and a 'step' in agent terminology?"
+    options:
+      - "A turn is one model call; a step is one tool call"
+      - "A turn is one complete model-call-and-tool-execution cycle; a step is any atomic action (model call, tool dispatch, or hook) within that turn"
+      - "There is no distinction — turn and step are synonyms"
+      - "A turn is one user message; a step is one assistant response"
+    correctIndex: 1
+  - question: "In the canonical turn lifecycle, which phase comes immediately AFTER 'response parsing'?"
+    options:
+      - "Tool execution"
+      - "Model call"
+      - "Action validation"
+      - "Post-turn hooks"
+    correctIndex: 2
+  - question: "When is a 'max turns' termination strategy most appropriate compared to 'goal satisfaction'?"
+    options:
+      - "When you have a reliable way to detect goal completion and want the agent to stop as soon as it succeeds"
+      - "When the agent might run indefinitely without a hard stop, or when goal detection is unreliable, and you need a guaranteed upper bound on execution"
+      - "When you want the agent to run as long as possible"
+      - "Max turns should never be used — goal satisfaction is always better"
+    correctIndex: 1
+  - question: "What happens when a streaming model response includes a tool call midway through the stream?"
+    options:
+      - "The harness must buffer the entire stream before dispatching any tool calls"
+      - "The harness can dispatch the tool call immediately and continue streaming text in parallel"
+      - "Streaming is incompatible with tool calls — the model must use batch mode"
+      - "The stream is canceled and restarted in batch mode"
+    correctIndex: 0
+---
+
+## Overview
+
+In Lesson 1, you learned what a harness is: the runtime layer responsible for loop execution, tool dispatch, context management, state, control flow, persistence, observability, and human intervention. You saw what breaks when those concerns are missing. Now we open the black box.
+
+This lesson traces a single turn through the agent loop, dissecting every decision point, every phase transition, and every control flow choice. By the end, you will be able to read any SDK's loop implementation — whether it is a simple while-loop, an event-driven scheduler, or a graph runtime — and identify where each of the eight harness concerns is addressed.
+
+> **Preview:** After this lesson, you will understand the internal mechanics of agent execution. Lesson 3 will zoom into tool dispatch specifically, and Lesson 4 will cover state management and checkpointing. This lesson establishes the vocabulary and control flow that everything else builds on.
+
+We will continue following the "research assistant" case study from Lesson 1. In that lesson, we saw it as a naive raw loop. Here, we will trace a four-turn run step by step and annotate every harness decision.
+
+## Vocabulary: Runs, Turns, and Steps
+
+Agent execution has three nested levels of granularity. Precision here matters — when you are debugging a failure at "step 14 of turn 3," you need to know exactly what that means.
+
+**Run** — A complete execution session from agent initialization to final termination. A run has an objective, a start time, an end time (or current duration for in-progress runs), and a terminal state (success, failure, max-turns-reached, user-canceled). One run may contain many turns.
+
+**Turn** — One complete cycle of: model call → response parsing → action (tool calls or text output) → observation (tool results or user feedback) → context update. A turn is the fundamental unit of agent progress. Each turn increments the turn counter. A run with no tool calls might have one turn. A run with 20 tool calls might have 20 turns or 10 turns (if multiple tools are called per turn).
+
+**Step** — Any atomic action within a turn: the model API call, a single tool dispatch, a pre-turn hook, a post-turn hook, a validation check, a state checkpoint. Steps are the finest-grained trace unit. A turn with 3 tool calls might have 7 steps: pre-turn hook, model call, validation, tool dispatch 1, tool dispatch 2, tool dispatch 3, post-turn hook.
+
+<DataTable caption="The three levels of agent execution granularity">
+  <thead>
+    <tr>
+      <th>Concept</th>
+      <th>Scope</th>
+      <th>Example Count</th>
+      <th>Tracked By</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Run</td>
+      <td>Entire agent session</td>
+      <td>1 per agent invocation</td>
+      <td>Run ID, start/end timestamps, terminal state</td>
+    </tr>
+    <tr>
+      <td>Turn</td>
+      <td>Model call + actions + observation</td>
+      <td>1–50+ per run (typical)</td>
+      <td>Turn index, parent run ID, model response, tool calls</td>
+    </tr>
+    <tr>
+      <td>Step</td>
+      <td>Single atomic action in a turn</td>
+      <td>5–20 per turn (typical)</td>
+      <td>Step index, parent turn, step type, duration, status</td>
+    </tr>
+  </tbody>
+</DataTable>
+
+**Mapping to SDK terminology:**
+
+Different frameworks use different names, but the concepts map consistently:
+
+- **OpenAI Agents SDK:** "run" is a run, "message" cycle is a turn, internal events are steps
+- **LangGraph:** "invocation" or "thread run" is a run, "node execution" is a step, turn is implicit in the message-model-message cycle
+- **Claude Agent SDK:** "run" is a run, "turn" is explicit in the API, "event" is a step
+- **LangChain:** "chain invocation" is a run, "agent step" is typically a turn, tool calls are steps
+
+The vocabulary divergence is a historical accident — the concepts are universal. When you read documentation, translate to run/turn/step and the architecture becomes clear.
+
+## The Canonical Loop
+
+Every agent harness, at its core, implements some variation of this loop:
+
+```python
+# Canonical agent loop (pseudocode)
+
+def run_agent(objective: str, tools: List[Tool], config: Config) -> Result:
+    # Initialize run
+    run_id = generate_run_id()
+    messages = [{"role": "user", "content": objective}]
+    state = AgentState(goal=objective, turn_count=0)
+    
+    while not should_terminate(state, config):
+        # --- TURN BOUNDARY ---
+        state.turn_count += 1
+        
+        # Phase 1: Pre-turn hooks
+        execute_hooks("pre_turn", state)
+        
+        # Phase 2: Context assembly
+        context = assemble_context(messages, tools, state, config)
+        
+        # Phase 3: Model call
+        response = call_model(context, config.model)
+        
+        # Phase 4: Response parsing
+        text_output, tool_calls = parse_response(response)
+        
+        # Phase 5: Action validation
+        validated_calls = validate_tool_calls(tool_calls, tools)
+        
+        if len(validated_calls) == 0 and text_output:
+            # Agent produced final answer
+            execute_hooks("post_turn", state)
+            return Result(success=True, output=text_output, state=state)
+        
+        # Phase 6: Tool execution
+        tool_results = []
+        for call in validated_calls:
+            result = dispatch_tool(call, tools, state)
+            tool_results.append(result)
+        
+        # Phase 7: Observation and context update
+        messages.append({"role": "assistant", "content": response})
+        messages.append({"role": "user", "content": format_tool_results(tool_results)})
+        
+        # Phase 8: State checkpoint
+        checkpoint_state(state, messages, run_id)
+        
+        # Phase 9: Post-turn hooks
+        execute_hooks("post_turn", state)
+        
+        # Phase 10: Termination check
+        # (handled by while condition at top of loop)
+    
+    # Loop exited — check why
+    return Result(
+        success=False,
+        output=state.last_output,
+        state=state,
+        reason=determine_termination_reason(state, config)
+    )
+```
+
+**Key observations:**
+
+1. The loop boundary is the turn. Each iteration is one turn.
+2. The model call (phase 3) is one step within a turn.
+3. Tool execution (phase 6) may involve multiple steps if multiple tools are called.
+4. The termination check happens twice: at the top of the loop (while condition) and inside when the agent produces a final answer.
+5. Hooks and checkpoints are explicit phases — they are not afterthoughts.
+
+This is the **canonical shape**. Real implementations vary — some collapse phases, some reorder them, some make them asynchronous — but every production agent harness implements all ten phases in some form.
+
+<MermaidDiagram chart={`graph TD
+    START([Agent Invoked]) --> INIT[Initialize Run<br/>run_id, messages, state]
+    INIT --> CHECK_TERM{Termination<br/>Check}
+    
+    CHECK_TERM -->|Continue| PRE[Phase 1: Pre-turn Hooks]
+    CHECK_TERM -->|Terminate| EXIT([Return Result])
+    
+    PRE --> CTX[Phase 2: Context Assembly<br/>messages + tools + state]
+    CTX --> MODEL[Phase 3: Model Call]
+    MODEL --> PARSE[Phase 4: Response Parsing<br/>text + tool calls]
+    
+    PARSE --> VALIDATE[Phase 5: Action Validation]
+    VALIDATE --> DECISION{Tool calls<br/>present?}
+    
+    DECISION -->|No, final answer| POST_FINAL[Phase 9: Post-turn Hooks]
+    POST_FINAL --> EXIT
+    
+    DECISION -->|Yes| DISPATCH[Phase 6: Tool Execution<br/>for each call]
+    DISPATCH --> OBSERVE[Phase 7: Observation<br/>update messages]
+    OBSERVE --> CHECKPOINT[Phase 8: State Checkpoint]
+    CHECKPOINT --> POST[Phase 9: Post-turn Hooks]
+    POST --> CHECK_TERM
+    
+    style MODEL fill:#e3f2fd,stroke:#1976d2
+    style DISPATCH fill:#fff3e0,stroke:#f57c00
+    style CHECKPOINT fill:#f3e5f5,stroke:#7b1fa2
+    style CHECK_TERM fill:#ffebee,stroke:#c62828
+`} />
+
+The flowchart reveals the **two exit paths**: 
+
+1. The agent produces a final text answer with no tool calls (immediate exit after validation).
+2. The termination check at the top of the loop triggers (max turns, timeout, error, user cancellation).
+
+This dual-exit pattern is why the harness must track both "did the agent succeed at its goal?" and "why did the loop stop?" — they are not always the same.
+
+## Turn Lifecycle Phases
+
+Let us walk through each of the ten phases in detail. This is where the harness makes all the decisions that determine agent behavior.
+
+### Phase 1: Pre-Turn Hooks
+
+Before the model is called, the harness executes any registered pre-turn hooks. These are user-defined callbacks that can:
+
+- Log the turn start and current state
+- Inject context dynamically (e.g., fetch fresh data from a database)
+- Modify the tool list (e.g., disable expensive tools after turn 10)
+- Enforce policies (e.g., reject the turn if the agent is in a forbidden state)
+- Trigger alerts (e.g., notify a human if the agent has retried the same action 3 times)
+
+Example: A pre-turn hook that injects the current timestamp as context so the agent always knows "what time is it now?"
+
+```python
+def inject_current_time(state: AgentState) -> None:
+    """Pre-turn hook: add current timestamp to context"""
+    current_time = datetime.now().isoformat()
+    state.context["current_time"] = current_time
+    print(f"[Pre-turn {state.turn_count}] Injected time: {current_time}")
+
+```
+
+Hooks are where you layer in custom harness behavior without modifying the core loop.
+
+### Phase 2: Context Assembly
+
+The harness assembles everything the model will see this turn:
+
+- **System prompt** — the agent's role, instructions, output format
+- **Message history** — all prior user and assistant messages (or a pruned window)
+- **Tool schemas** — the list of available tools with descriptions and parameters
+- **Injected context** — any state, knowledge, or facts added by hooks or the application
+- **Working memory** — variables, intermediate results, goal state
+
+Context assembly is where **context management** (concern #3 from Lesson 1) is implemented. The harness must:
+
+- Enforce token limits (prune old messages if history exceeds budget)
+- Decide what to prune (oldest-first, least-relevant-first, summarize-and-prune)
+- Format tool schemas correctly for the target model API
+- Inject state in a way the model can parse (often as a system message or special user message)
+
+Example: If the context budget is 100,000 tokens and the history is 120,000 tokens, the harness might prune the oldest 20% of messages, replacing them with a summary.
+
+### Phase 3: Model Call
+
+The harness calls the model API with the assembled context. This is the only phase where the harness **waits on external I/O**. Everything else is local.
+
+The model call may be:
+
+- **Synchronous batch** — wait for the full response before proceeding
+- **Streaming** — receive tokens incrementally as they are generated
+- **Cached** — reuse a prior response if the context is identical (prompt caching)
+
+The harness must handle:
+
+- **API errors** — rate limits, timeouts, 5xx errors, malformed responses
+- **Retries** — exponential backoff, circuit breaking
+- **Cost tracking** — count input and output tokens, log cost per turn
+
+This is where **observability** (concern #7) surfaces: every model call is traced with input token count, output token count, latency, cost, and model version.
+
+### Phase 4: Response Parsing
+
+The model response contains:
+
+- **Text content** — conversational output or final answer
+- **Tool calls** — structured requests to invoke tools (name, arguments, call ID)
+- **Stop reason** — why generation ended (end_turn, max_tokens, stop_sequence, tool_use, error)
+
+The harness parses the response into these components. Different model APIs return different formats:
+
+- **Anthropic Messages API:** `content` is a list of blocks, each block is `text` or `tool_use`
+- **OpenAI Chat Completions:** `message` has `content` (text) and `tool_calls` (array)
+- **Google Gemini:** `parts` array with `text` or `function_call` objects
+
+The harness abstracts this into a canonical format so the rest of the loop is API-agnostic.
+
+### Phase 5: Action Validation
+
+Before dispatching tool calls, the harness validates them:
+
+- **Is the tool registered?** If the model requests `tool_X` but `tool_X` is not in the tool list, this is an error.
+- **Are the arguments valid?** Check against the tool's schema: required fields present, types correct, values in range.
+- **Is the tool allowed?** The harness may enforce policies: "tool Y is disabled after turn 5" or "tool Z requires human approval."
+- **Is this a duplicate call?** If the model requests the same tool with the same arguments as the prior turn, this may indicate a loop — the harness can reject it or flag it for human review.
+
+Validation failures have three possible outcomes:
+
+1. **Reject and return error to model** — append a tool result with `"error": "tool not found"` and continue the loop. The model sees the error and can adapt.
+2. **Terminate the run** — treat the invalid call as a fatal error and exit.
+3. **Escalate to human** — pause execution and request approval.
+
+This is **tool dispatch** (concern #2) doing its job.
+
+### Phase 6: Tool Execution
+
+For each validated tool call, the harness:
+
+1. Looks up the tool implementation (a function or API client)
+2. Invokes it with the parsed arguments
+3. Captures the result (return value or exception)
+4. Wraps the result in the expected format (tool result message)
+
+Tool execution may involve:
+
+- **Parallel dispatch** — if the model called multiple tools, execute them concurrently
+- **Sequential dispatch** — execute tools one at a time (safer but slower)
+- **Sandboxing** — run tool code in an isolated environment (Docker container, subprocess, WebAssembly runtime)
+- **Timeout enforcement** — kill the tool if it exceeds a time budget
+- **Error wrapping** — catch exceptions and convert them to tool result errors, not harness crashes
+
+Example: The model calls `web_search(query="top competitors in market X")` and `calculator(expression="1500 * 12")`. The harness dispatches both in parallel. `web_search` takes 2 seconds and returns 10 URLs. `calculator` takes 10 milliseconds and returns `18000`. Both results are formatted as tool result messages.
+
+### Phase 7: Observation and Context Update
+
+The harness appends the model's response and the tool results to the message history:
+
+1. Add an assistant message with the response and tool calls
+2. Add a user message with the tool results
+
+This gives the model **observability into its own actions**. On the next turn, the model will see:
+
+- What tools it called
+- What arguments it used
+- What results it received
+
+This is the feedback loop that allows the agent to **adapt**. If the tool returned an error, the model can retry with different arguments. If the tool returned partial results, the model can call another tool to gather more information.
+
+### Phase 8: State Checkpoint
+
+The harness persists the current state to durable storage:
+
+- **Run metadata** — run ID, turn count, elapsed time, cost so far
+- **Message history** — all messages up to this turn
+- **Agent state** — goal, working memory, variables
+- **Trace** — structured log of every step in this turn
+
+This is **persistence** (concern #6). If the process crashes after this checkpoint, the run can resume from turn N, not turn 0.
+
+Different harnesses use different persistence strategies:
+
+- **In-memory only** — no persistence (the naive loop)
+- **JSON file per run** — write state to a file after each turn
+- **Database row per turn** — insert a row with run metadata, state, and messages
+- **Event log** — append each step as an event to a Kafka topic or S3 log stream
+- **Workflow engine** — delegate persistence to Temporal, Inngest, or a similar durable execution system
+
+Production agents almost always need persistence. Even a 30-second run is too expensive to restart from scratch on every deploy or transient failure.
+
+### Phase 9: Post-Turn Hooks
+
+After the turn completes, the harness executes post-turn hooks. These can:
+
+- Log the turn end and results
+- Update external systems (e.g., write a row to a monitoring database)
+- Trigger alerts (e.g., if the agent called an expensive tool, notify the team)
+- Enforce policies (e.g., if cost exceeds $1 this turn, pause for approval)
+
+Example: A post-turn hook that tracks cumulative cost and pauses if it exceeds a budget:
+
+```python
+def enforce_cost_budget(state: AgentState, config: Config) -> None:
+    """Post-turn hook: enforce per-run cost budget"""
+    if state.total_cost > config.max_cost_per_run:
+        print(f"[Post-turn {state.turn_count}] Cost ${state.total_cost:.2f} exceeds budget ${config.max_cost_per_run:.2f}")
+        raise BudgetExceededError("Cost limit reached")
+
+```
+
+This hook will terminate the run before the next turn starts. The harness will catch the exception and return a result with `reason="budget_exceeded"`.
+
+### Phase 10: Termination Check
+
+At the top of the next loop iteration, the harness checks `should_terminate(state, config)`. This function returns `True` if any termination condition is met.
+
+This is where **loop execution** (concern #1) enforces the rules. The next section covers the full taxonomy of termination strategies.
+
+## Loop Termination Strategies
+
+How do you know when an agent is done? There are five canonical strategies, and production agents often combine multiple.
+
+<DataTable caption="Five termination strategies and when to apply them">
+  <thead>
+    <tr>
+      <th>Strategy</th>
+      <th>Condition</th>
+      <th>When to Use</th>
+      <th>Risk</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Max Turns</td>
+      <td>turn_count &gt;= max_turns</td>
+      <td>Agent might loop indefinitely; goal detection is unreliable; hard upper bound needed</td>
+      <td>Agent stops before completing goal</td>
+    </tr>
+    <tr>
+      <td>Token Budget</td>
+      <td>total_tokens &gt;= budget</td>
+      <td>Cost control is critical; run must stay under budget</td>
+      <td>Agent stops mid-task when budget exhausted</td>
+    </tr>
+    <tr>
+      <td>Explicit Stop Signal</td>
+      <td>Model returns stop_reason == 'end_turn' with no tool calls</td>
+      <td>Agent can reliably detect when goal is met; model produces final answer</td>
+      <td>Model may never produce stop signal (loops forever)</td>
+    </tr>
+    <tr>
+      <td>Goal Satisfaction</td>
+      <td>goal_check(state) == True</td>
+      <td>Goal is verifiable programmatically (e.g., 'file exists', 'test passes')</td>
+      <td>Goal check may be expensive or unreliable</td>
+    </tr>
+    <tr>
+      <td>Timeout</td>
+      <td>elapsed_time &gt;= max_duration</td>
+      <td>Runs must complete within time SLA; prevents runaway agents</td>
+      <td>Agent stops even if one more turn would succeed</td>
+    </tr>
+  </tbody>
+</DataTable>
+
+**Combining strategies:**
+
+In practice, you use multiple strategies in **OR** logic:
+
+```python
+def should_terminate(state: AgentState, config: Config) -> bool:
+    # Stop if any condition is met
+    if state.turn_count >= config.max_turns:
+        return True
+    if state.total_tokens >= config.token_budget:
+        return True
+    if state.elapsed_time >= config.max_duration:
+        return True
+    if goal_satisfied(state):
+        return True
+    if state.last_stop_reason == "end_turn" and len(state.last_tool_calls) == 0:
+        return True
+    return False
+```
+
+The first condition to trigger stops the loop. The harness logs which condition triggered so you can distinguish "agent succeeded" from "agent hit max turns."
+
+**Best practice:** Always set a `max_turns` or `max_duration` ceiling, even if you have goal detection. This prevents infinite loops from bugs in goal-checking logic or model behavior.
+
+## Loop Shapes: Beyond the While-Loop
+
+The canonical loop is a `while` loop, but production harnesses use four common shapes, each with different trade-offs.
+
+### Shape 1: Simple While-Loop
+
+```python
+while not done:
+    turn()
+```
+
+**Pros:** Simple, easy to reason about, easy to debug.
+
+**Cons:** Blocking (cannot handle async I/O well), hard to pause/resume, no built-in parallelism.
+
+**Used by:** Prototypes, scripts, single-agent CLIs.
+
+### Shape 2: Event-Driven Loop
+
+The harness is an event loop that dispatches events:
+
+```python
+event_queue.push(TurnStartEvent(run_id))
+
+while event_queue.has_events():
+    event = event_queue.pop()
+    handle_event(event)  # may push new events
+```
+
+Each phase (model call, tool dispatch, checkpoint) is an event. The harness processes events one at a time. This decouples the loop from execution order and enables **async I/O**, **retries**, and **priority queues**.
+
+**Pros:** Non-blocking, supports async tools, easy to add retries and circuit breakers.
+
+**Cons:** Harder to debug (execution order is not linear), requires event infrastructure.
+
+**Used by:** Production systems with async tools, distributed agents.
+
+### Shape 3: Coroutine-Based Loop
+
+The harness is a coroutine that yields control at I/O boundaries:
+
+```python
+async def run_agent(objective):
+    while not done:
+        response = await call_model(...)
+        results = await asyncio.gather(*[dispatch_tool(call) for call in tool_calls])
+        checkpoint_state(...)
+```
+
+This is the async/await pattern applied to agents. The harness yields during model calls and tool dispatch, allowing other agents or tasks to run concurrently in the same process.
+
+**Pros:** Efficient concurrency, natural fit for Python `asyncio` or JavaScript `async/await`.
+
+**Cons:** Requires async-compatible tools and APIs.
+
+**Used by:** Web servers running multiple agents concurrently, JavaScript/TypeScript agent frameworks.
+
+### Shape 4: Graph-Based Loop
+
+The harness is a graph executor. The agent is defined as a directed graph where:
+
+- **Nodes** are steps (model call, tool dispatch, conditional branch, human approval)
+- **Edges** are transitions (always, conditional, error-handling)
+
+The harness walks the graph, executing nodes and following edges until it reaches an end node.
+
+```python
+graph = {
+    "start": ConditionalNode(condition=lambda s: s.goal_met, true_edge="end", false_edge="model_call"),
+    "model_call": ModelNode(model="claude-sonnet-4", next_edge="parse"),
+    "parse": ParseNode(next_edge="tool_dispatch"),
+    "tool_dispatch": ToolDispatchNode(next_edge="start"),  # cycle back
+    "end": EndNode()
+}
+run_graph(graph, state)
+```
+
+**Pros:** Declarative control flow, supports cycles and branching, visualizable.
+
+**Cons:** More complex than a loop, harder for simple cases.
+
+**Used by:** LangGraph, Burr, workflow-based agents.
+
+<MermaidDiagram chart={`graph LR
+    subgraph WhileLoop["While-Loop"]
+        W1[Turn 1] --> W2[Turn 2] --> W3[Turn 3] --> W4[Done]
+    end
+    
+    subgraph EventDriven["Event-Driven"]
+        E1[Event Queue] --> E2{Pop Event}
+        E2 --> E3[Handle] --> E4[Push New Events]
+        E4 --> E2
+    end
+    
+    subgraph Graph["Graph-Based"]
+        G1([Start]) --> G2{Goal Met?}
+        G2 -->|No| G3[Model Call]
+        G3 --> G4[Tool Dispatch]
+        G4 --> G2
+        G2 -->|Yes| G5([End])
+    end
+    
+    style WhileLoop fill:#e3f2fd,stroke:#1976d2
+    style EventDriven fill:#fff3e0,stroke:#f57c00
+    style Graph fill:#f3e5f5,stroke:#7b1fa2
+`} />
+
+## SDK Comparison: Loop Shapes in Practice
+
+Let us see how three major SDKs express the same agent loop differently.
+
+### Claude Agent SDK (While-Loop)
+
+```python
+from anthropic import Anthropic
+
+client = Anthropic()
+
+def run_research_agent(question: str) -> str:
+    messages = [{"role": "user", "content": question}]
+    
+    while True:
+        response = client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=4096,
+            tools=[web_search_tool, calculator_tool],
+            messages=messages,
+        )
+        
+        if response.stop_reason == "end_turn":
+            return response.content[0].text
+        
+        # Tool dispatch phase
+        tool_results = []
+        for block in response.content:
+            if block.type == "tool_use":
+                result = execute_tool(block.name, block.input)
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": block.id,
+                    "content": result
+                })
+        
+        # Context update
+        messages.append({"role": "assistant", "content": response.content})
+        messages.append({"role": "user", "content": tool_results})
+
+```
+
+This is a **simple while-loop**. The SDK provides `client.messages.create()` and structured tool-result formatting, but you own the loop.
+
+### OpenAI Agents SDK (Event-Driven Runner)
+
+```python
+from openai import OpenAI
+from openai.agents import Runner
+
+client = OpenAI()
+
+def run_research_agent(question: str) -> str:
+    runner = Runner(
+        model="gpt-4o",
+        tools=[web_search_tool, calculator_tool],
+        instructions="You are a research assistant. Answer the user's question."
+    )
+    
+    # Event-driven: runner handles loop internally
+    response = runner.run(question)
+    
+    return response.final_output
+
+```
+
+The **Runner** is an event-driven harness. You call `runner.run()` and it manages the loop internally. You can subscribe to events (`on_tool_call`, `on_turn_complete`) but you do not own the loop logic. This is higher-level than the Claude SDK — less control, less boilerplate.
+
+### LangGraph (Graph-Based)
+
+```python
+from langgraph.graph import StateGraph, END
+
+def model_node(state):
+    response = client.chat.completions.create(
+        model="gpt-4o",
+        messages=state["messages"],
+        tools=state["tools"]
+    )
+    return {"messages": state["messages"] + [response.choices[0].message]}
+
+def tool_node(state):
+    last_message = state["messages"][-1]
+    results = [execute_tool(call.function.name, call.function.arguments)
+               for call in last_message.tool_calls]
+    return {"messages": state["messages"] + [{"role": "tool", "content": results}]}
+
+def should_continue(state):
+    return "tool_node" if state["messages"][-1].tool_calls else END
+
+graph = StateGraph()
+graph.add_node("model_node", model_node)
+graph.add_node("tool_node", tool_node)
+graph.add_edge("model_node", should_continue)
+graph.add_edge("tool_node", "model_node")
+graph.set_entry_point("model_node")
+
+result = graph.invoke({"messages": [{"role": "user", "content": question}]})
+
+```
+
+This is a **graph-based loop**. You define nodes (model call, tool dispatch) and edges (transitions). The graph executor handles the loop. This is more declarative — you describe what happens, not how to loop.
+
+**Comparison:**
+
+| SDK | Loop Shape | Control | Boilerplate | Flexibility |
+|-----|-----------|---------|-------------|-------------|
+| Claude Agent SDK | While-loop | Full | Medium | High (you own the loop) |
+| OpenAI Agents SDK | Event-driven Runner | Partial (hooks) | Low | Medium (runner abstracts loop) |
+| LangGraph | Graph-based | Declarative | Medium | High (graph is composable) |
+
+No shape is "best" — it depends on your constraints. If you need full control and transparency, own the loop. If you want minimal code and trust the SDK, use a runner. If you need complex branching and cycles, use a graph.
+
+## Streaming vs Batch Execution
+
+When the model generates a response, it can either:
+
+- **Batch mode** — wait for the entire response, then return it
+- **Streaming mode** — emit tokens as they are generated
+
+Streaming improves perceived latency (the user sees output sooner) but complicates tool dispatch.
+
+**The problem:** In batch mode, you receive the full response with all tool calls, then dispatch them. In streaming mode, you receive tokens incrementally. If the model decides to call a tool midway through generation, **when do you dispatch it?**
+
+**Option 1: Buffer the entire stream before dispatching**
+
+```python
+chunks = []
+for chunk in stream:
+    chunks.append(chunk)
+response = merge_chunks(chunks)
+# Now dispatch tool calls
+```
+
+This defeats the latency benefit of streaming. The user sees nothing until the stream completes. But it is simple and safe.
+
+**Option 2: Dispatch tool calls as soon as they appear in the stream**
+
+Some model APIs emit tool calls as structured events mid-stream. The harness can dispatch the tool **while the model is still streaming text**. This is maximally responsive but requires:
+
+- The model API must support mid-stream tool-call events (Anthropic Messages API does; OpenAI Chat Completions does not as of early 2025)
+- The harness must handle concurrent execution: streaming text to the user while dispatching tools in the background
+- The harness must handle errors mid-stream: if a tool fails, how do you communicate that to the user while the stream is ongoing?
+
+**Production pattern:** Use streaming for text output (better UX) but **buffer tool calls until the stream completes** before dispatching. This balances responsiveness and simplicity. The user sees text immediately, but tools execute only after the model finishes its thought.
+
+```python
+# Streaming with buffered tool dispatch
+
+text_buffer = ""
+tool_calls_buffer = []
+
+for chunk in stream:
+    if chunk.type == "text":
+        text_buffer += chunk.text
+        print(chunk.text, end="", flush=True)  # stream to user
+    elif chunk.type == "tool_use":
+        tool_calls_buffer.append(chunk)
+
+# Stream complete — now dispatch tools
+tool_results = dispatch_tools(tool_calls_buffer)
+
+```
+
+## Case Study: Tracing a Research Assistant Run
+
+Let us trace a concrete example: a research assistant that answers "What is the average annual revenue of the top 3 SaaS companies in 2024?"
+
+**Turn 1:**
+
+- **Context:** User message: "What is the average annual revenue of the top 3 SaaS companies in 2024?"
+- **Model call:** Claude Sonnet 4
+- **Response:** Text: "I need to search for the top SaaS companies and their 2024 revenue." + Tool call: `web_search(query="top SaaS companies 2024 revenue")`
+- **Validation:** `web_search` is registered, arguments are valid
+- **Tool execution:** `web_search` returns 10 URLs and snippets mentioning Microsoft, Salesforce, Adobe
+- **Observation:** Tool result appended to messages
+- **Termination check:** Turn count = 1, no max reached, no final answer → continue
+
+**Turn 2:**
+
+- **Context:** All prior messages + tool result from turn 1
+- **Model call:** Claude Sonnet 4
+- **Response:** Text: "I found three companies: Microsoft ($211B), Salesforce ($31B), Adobe ($19B). Now I need to calculate the average." + Tool call: `calculator(expression="(211 + 31 + 19) / 3")`
+- **Validation:** `calculator` is registered, arguments valid
+- **Tool execution:** `calculator` returns `87.0`
+- **Observation:** Tool result appended
+- **Termination check:** Turn count = 2, no max reached, no final answer → continue
+
+**Turn 3:**
+
+- **Context:** All prior messages + tool result from turn 2
+- **Model call:** Claude Sonnet 4
+- **Response:** Text: "The average annual revenue of the top 3 SaaS companies in 2024 is approximately $87 billion." + No tool calls + `stop_reason = "end_turn"`
+- **Validation:** No tool calls
+- **Decision:** Final answer detected → return immediately
+- **Post-turn hook:** Log final answer
+- **Result:** `success=True`, `output="The average annual revenue..."`
+
+**Run summary:**
+
+- **Total turns:** 3
+- **Total steps:** ~12 (pre-turn hook, model call, parse, validate, dispatch, observe, checkpoint, post-turn hook × 3 turns, minus some for the final turn with no tools)
+- **Tools called:** `web_search` (turn 1), `calculator` (turn 2)
+- **Termination reason:** Explicit stop signal (final answer with no tool calls)
+
+**Harness decisions annotated:**
+
+| Turn | Harness Decision | Why |
+|------|-----------------|-----|
+| 1 | Continue after tool dispatch | `stop_reason != "end_turn"`, tool calls present |
+| 1 | Dispatch `web_search` | Validation passed, tool registered |
+| 2 | Continue after tool dispatch | `stop_reason != "end_turn"`, tool calls present |
+| 2 | Dispatch `calculator` | Validation passed |
+| 3 | Return final answer immediately | `stop_reason == "end_turn"`, no tool calls |
+
+This trace shows how the harness makes **every control flow decision**. The model reasons about what to do, but the harness decides when to dispatch, when to continue, and when to stop.
+
+## Summary
+
+The agent loop is a structured cycle of ten phases: pre-turn hooks, context assembly, model call, response parsing, action validation, tool execution, observation, state checkpoint, post-turn hooks, and termination check. Every phase is a decision point where the harness enforces policy, handles errors, and controls execution.
+
+Runs contain turns, turns contain steps. Different SDKs use different terminology, but the concepts map universally.
+
+Loop termination uses five strategies: max turns, token budget, explicit stop signal, goal satisfaction, and timeout. Production agents combine multiple strategies in OR logic.
+
+Loop shapes vary: simple while-loops (prototypes), event-driven loops (async I/O), coroutine-based loops (concurrency), and graph-based loops (declarative control flow).
+
+Streaming improves UX but complicates tool dispatch. The production pattern is to stream text but buffer tool calls until the stream completes.
+
+In the next lesson, **Tool Dispatch Deep Dive**, we will open phase 6 (tool execution) and trace how tool-call requests become actual function invocations, how errors propagate, and how sandboxing and retries work.
+
