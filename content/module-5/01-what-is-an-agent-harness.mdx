@@ -92,9 +92,17 @@ Before we dive into the harness itself, it helps to clarify what the harness is 
 - **Observability** — tracing, logging, cost tracking, replay
 - **Human intervention** — approval gates, escalation, manual overrides
 
-**Application Layer** — This is your product. The UI that users interact with, the business logic that defines the workflow, the integration with your backend services. The application calls the harness to run an agent, but it does not implement the agent loop.
+**Application Layer** — This is your product. The UI that users interact with, the business logic that defines the workflow, the integration with your backend services. The application calls the harness to run an agent, but it does not implement the agent loop. In our research assistant example introduced later, the Application Layer is the user-facing interface that accepts a research question and displays the final synthesized findings.
 
-**Orchestration Layer** — When you have multiple agents working together, or agents deployed across services, you need orchestration: workflow management, inter-agent communication, deployment infrastructure. This sits above the harness. The harness runs one agent; orchestration coordinates many.
+**Orchestration Layer** — When you have multiple agents working together, or agents deployed across services, you need orchestration: workflow management, inter-agent communication, deployment infrastructure. This sits above the harness. The harness runs one agent; orchestration coordinates many. In our research assistant, the Orchestration Layer would manage handoffs if we split research across specialized sub-agents (one for web search, one for data analysis, one for synthesis).
+
+To make this concrete for the research assistant we will build in this module:
+
+- **Tool Layer:** The actual capabilities — `web_search` to query sources, `calculator` to compute statistics, `read_document` to parse PDFs.
+- **Model API:** The LLM service (Claude, GPT-4, etc.) that receives the research question and decides which tools to call and how to synthesize findings.
+- **Harness / Runtime:** The execution environment that runs the agent loop, validates and dispatches tool calls to `web_search` and `calculator`, assembles the growing context of sources found so far, checkpoints progress after each search, and tracks how close the agent is to the user's research goal.
+- **Orchestration Layer:** Not needed for a single-agent research assistant, but would coordinate if we decomposed the task into specialized agents (search → extract → synthesize).
+- **Application Layer:** The chat UI where the user types "What are the top 5 trends in AI agent deployment in 2026?" and sees the final synthesized report with citations.
 
 ## The Eight Harness Concerns
 
@@ -166,6 +174,22 @@ The platform manages everything: loop, tools, state, control flow, persistence, 
 
 Where you land on this spectrum depends on your constraints: How critical is reliability? How long do runs take? Do you need human oversight? Can you afford to debug opaque failures?
 
+## When You Need a Harness
+
+Not every agent needs a harness. The decision depends on the task's complexity, duration, risk, and reliability requirements. Here are four scenarios across the spectrum:
+
+**Scenario 1: FAQ Chatbot — No harness needed**  
+You are building a chatbot that answers frequently asked questions from a company knowledge base. Each query is independent, responses take 2-3 seconds, and the agent has read-only access to a vector store. A raw API loop is fine here. If the agent crashes, the user retries. No state to lose, no long-running tasks, no risky actions. The absence of harness concerns is acceptable because failures are cheap and recovery is instant.
+
+**Scenario 2: Code Review Agent — Needs harness (persistence, observability, step limits)**  
+You are building an agent that reviews pull requests by reading 20+ files, checking style, running static analysis, and generating a report. This takes 10-15 minutes and involves dozens of tool calls. Without a harness, a crash at minute 12 means restarting from scratch. Without observability, you cannot trace why the agent flagged a false positive. Without step limits, a circular import could cause infinite recursion. The harness provides persistence (resume from the last file), observability (trace every file read and analysis step), and loop execution controls (max 100 steps, 20-minute timeout).
+
+**Scenario 3: Customer Support Agent — Needs harness (HITL approval gates, audit logging)**  
+You are building an agent that handles refund requests. It reads the user's account history, determines eligibility, and can issue refunds up to $500. This agent takes consequential actions on behalf of the company. Without a harness, there is no approval gate — the agent could issue refunds incorrectly or be exploited. Without observability, you have no audit trail of why a refund was approved. The harness provides human intervention (require approval for refunds over $100), persistence (checkpoint the decision context for later review), and observability (structured logs for compliance audits).
+
+**Scenario 4: Research Agent — Needs harness (context management, state tracking, error recovery)**  
+You are building an agent that researches a question by searching 20+ sources, extracting key facts, cross-referencing claims, and synthesizing a report with citations. This involves 50+ tool calls, takes 5-10 minutes, and accumulates a large context of intermediate findings. Without context management, the agent will exceed token limits after 30 sources. Without state tracking, it cannot remember which sources it has already checked or what facts it has found. Without error recovery, a single search API timeout crashes the entire run. The harness provides context management (prune old search results, keep only key facts), state tracking (maintain a list of sources checked and facts extracted), and tool dispatch error handling (retry failed searches with exponential backoff).
+
 ## Case Study: The Missing Concerns
 
 Let us make this concrete. Here is a "research assistant" implemented as a raw API loop using the Anthropic SDK:
@@ -194,23 +218,23 @@ def research(question: str) -> str:
                 ]})
 `} language="python" filename="naive_research_agent.py" />
 
-This is 20 lines and it works — for the happy path. Now let us audit it against the eight harness concerns:
+This is 20 lines and it works — for the happy path. Now let us audit it against the eight harness concerns. Each missing concern would manifest as a specific production failure that blocks deployment or damages user trust.
 
-**1. Loop Execution** — The `while True` loop runs forever until `stop_reason == "end_turn"`. What if the model never returns `end_turn`? What if the API call times out? There is no step limit, no max duration, no way to interrupt.
+**1. Loop Execution** — The `while True` loop runs forever until `stop_reason == "end_turn"`. What if the model never returns `end_turn`? What if the API call times out? There is no step limit, no max duration, no way to interrupt. In production, this means a single bad API response can lock the process indefinitely, consuming compute and blocking the user with no way to cancel the research task.
 
-**2. Tool Dispatch** — `call_tool()` is a placeholder. What if `block.name` is not a registered tool? What if `block.input` is malformed? What if the tool raises an exception? The loop crashes.
+**2. Tool Dispatch** — `call_tool()` is a placeholder. What if `block.name` is not a registered tool? What if `block.input` is malformed? What if the tool raises an exception? The loop crashes. In production, this means the first tool error — a search API rate limit, a malformed JSON input, a network timeout — crashes the entire agent, forcing the user to restart and losing all progress.
 
-**3. Context Management** — The `messages` list grows unbounded. If the agent takes 50 tool calls, you will exceed the context window and the API will reject the request. There is no history pruning.
+**3. Context Management** — The `messages` list grows unbounded. If the agent takes 50 tool calls, you will exceed the context window and the API will reject the request. There is no history pruning. In production, this means research tasks that require more than ~30 sources will fail with a cryptic "context length exceeded" error, and users will not understand why some questions work while others fail unpredictably.
 
-**4. State and Goals** — There is no state. If you wanted to track progress ("how many sources have I checked?") or save intermediate results, where would you put them? Local variables are lost on restart.
+**4. State and Goals** — There is no state. If you wanted to track progress ("how many sources have I checked?") or save intermediate results, where would you put them? Local variables are lost on restart. In production, this means you cannot show the user a progress indicator, cannot resume a partially completed research task, and cannot debug why the agent stopped searching before finding enough sources.
 
-**5. Control Flow** — The flow is hardcoded: loop until done. What if you wanted to pause for human approval before calling a destructive API? What if you wanted to hand off to a specialized summarization agent? No mechanism.
+**5. Control Flow** — The flow is hardcoded: loop until done. What if you wanted to pause for human approval before calling a destructive API? What if you wanted to hand off to a specialized summarization agent? No mechanism. In production, this means you cannot implement workflows like "research 10 sources, then ask the user if they want more detail" or "hand off to a fact-checking agent before returning results."
 
-**6. Persistence** — None. If the process crashes at step 15 of 20, you restart from step 1. If you need to resume later, you cannot.
+**6. Persistence** — None. If the process crashes at step 15 of 20, you restart from step 1. If you need to resume later, you cannot. In production, this means any transient failure — a deploy, a container restart, a rate limit error — loses all accumulated research, forcing the agent to re-search sources it already processed and wasting both time and API costs.
 
-**7. Observability** — You have no trace of what the agent did. No structured logs, no cost tracking, no replay. Debugging requires adding print statements and re-running.
+**7. Observability** — You have no trace of what the agent did. No structured logs, no cost tracking, no replay. Debugging requires adding print statements and re-running. In production, this means when a user reports "the agent gave me wrong information," you have no way to audit which sources it searched, what facts it extracted, or why it chose to cite source X over source Y — debugging becomes archeology.
 
-**8. Human Intervention** — None. The agent runs autonomously until it finishes or crashes. If it is about to call an expensive API or take a risky action, you have no way to intervene.
+**8. Human Intervention** — None. The agent runs autonomously until it finishes or crashes. If it is about to call an expensive API or take a risky action, you have no way to intervene. In production, this means if the agent is about to call a paid data API 100 times (burning $500 in credits) or is about to search a restricted internal database, you have no approval gate to stop it — users will discover these issues only after the damage is done.
 
 **What breaks first in production?**  
 Context overflow. The agent will run for a few dozen turns, exceed the token limit, and fail. You will patch it by truncating messages. Then tool dispatch will fail when a tool times out. You will add exception handling. Then you will realize you cannot resume interrupted runs. You will add manual checkpointing. You will repeat this for every missing concern until you have rebuilt a harness from scratch.
