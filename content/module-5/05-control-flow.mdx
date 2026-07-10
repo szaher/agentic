@@ -1,0 +1,545 @@
+---
+title: "Control Flow: Loops, Routers, Graphs, and Workflows"
+quiz:
+  - question: "Which control flow model does LangGraph primarily use?"
+    options:
+      - "Linear loop with conditional routing"
+      - "Directed graph with explicit nodes and edges"
+      - "State machine with named transitions"
+      - "Fully autonomous loop with no explicit flow control"
+    correctIndex: 1
+    explanation: "LangGraph uses a directed graph model where developers define nodes (agent steps or tools) and edges (conditional transitions), with the runtime executing the graph based on state routing logic."
+  - question: "When does a plan-and-execute agent typically outgrow a simple linear loop?"
+    options:
+      - "When the plan contains more than three steps"
+      - "When sub-goals need to run in parallel or branch conditionally"
+      - "When the model cannot generate a plan in a single turn"
+      - "When tool results exceed the context window budget"
+    correctIndex: 1
+    explanation: "A linear loop executes steps sequentially. When the plan requires parallelism (multiple sub-goals at once) or branching logic (if condition X then route Y), the agent needs a more sophisticated flow control model like a graph or workflow."
+  - question: "What changes at the runtime level when an agent hands off to another agent?"
+    options:
+      - "The model weights are swapped in memory"
+      - "Context is serialized, tool scope may change, and identity switches to the new agent"
+      - "The conversation history is deleted and restarted from scratch"
+      - "The harness terminates the first agent and spawns a second unrelated process"
+    correctIndex: 1
+    explanation: "A handoff is a runtime event: the harness serializes the current context (conversation, state), may adjust tool permissions for the new agent, and updates the active agent identity. The conversation continues, not restarts."
+  - question: "What determines whether control flow is harness-driven or model-driven?"
+    options:
+      - "Whether the harness uses a graph runtime or a simple loop"
+      - "Whether the model chooses the next step or the harness enforces a predefined flow"
+      - "Whether the agent is ReAct or Plan-and-Execute"
+      - "Whether the system uses synchronous or asynchronous tool execution"
+    correctIndex: 1
+    explanation: "Harness-driven flow means the harness controls the next step (via graph edges, state machine rules, or explicit routing logic). Model-driven flow means the model decides what to do next within a flexible loop. The architecture may influence this, but the distinction is about who controls the flow."
+---
+
+## Overview
+
+Module 4 taught you the architecture shapes — ReAct, Plan-and-Execute, Reflection, Routing, Multi-Agent. These are conceptual patterns that describe **how** agents solve problems. But to run in production, every architecture must be implemented as a **control flow** inside the harness runtime.
+
+Control flow is the mechanism that determines what happens next: does the agent loop continue? Does it route to a different handler? Does it follow a predefined graph? Does it transition to a new state in a workflow?
+
+This lesson introduces four control flow models, maps them to the architectures you've learned, explores the autonomy spectrum from fully model-driven to fully harness-driven, and shows how handoffs work as runtime events.
+
+By the end of this lesson, you'll understand how the harness implements architecture at runtime, when to choose each flow model, and how to design systems where the agent's behavior is shaped by both the model's reasoning and the harness's control logic.
+
+## Four Control Flow Models
+
+Every agent harness uses one (or a combination) of these four flow models:
+
+### 1. Linear Loop
+
+The simplest flow: the harness runs the agent loop until a termination condition is met.
+
+**Structure:**
+
+```python
+while not done:
+    response = call_model(context)
+    if response.finish_reason == "stop":
+        done = True
+    elif response.tool_calls:
+        results = execute_tools(response.tool_calls)
+        context.append(results)
+    else:
+        done = True  # no tools, no continuation
+```
+
+**Characteristics:**
+
+- The model decides what to do next (tool call, reasoning, stop).
+- The harness provides the loop structure and termination logic.
+- No branching, routing, or conditional paths.
+
+**When to use:**
+
+- ReAct agents (most common case)
+- Simple assistants with a single goal
+- Prototypes and minimal harnesses
+
+**Limitations:**
+
+- Cannot express parallelism (all tool calls are sequential or batched within a single turn).
+- Cannot enforce specific step sequences.
+- Hard to implement multi-stage workflows without embedding complex logic in the system prompt.
+
+### 2. Conditional Router
+
+The harness inspects the agent's output or state and routes to different handlers based on conditions.
+
+**Structure:**
+
+```python
+request_type = classify_request(user_message)
+
+if request_type == "search":
+    response = search_handler.run(context)
+elif request_type == "summarize":
+    response = summarize_handler.run(context)
+elif request_type == "generate":
+    response = generation_handler.run(context)
+else:
+    response = default_handler.run(context)
+```
+
+**Characteristics:**
+
+- Routing logic is explicit in the harness, not inferred by the model.
+- Each handler may have different tools, prompts, or even different models.
+- Routing can happen at the start of a run (intent classification) or mid-run (state-based branching).
+
+**When to use:**
+
+- Multi-capability assistants (search, summarize, generate, etc.)
+- Handoff systems (route to specialist agents)
+- Cases where you want deterministic routing instead of model-driven decisions
+
+**Limitations:**
+
+- Routing conditions must be predefined.
+- Not suitable for complex multi-step workflows with many decision points.
+
+### 3. Directed Graph
+
+The harness defines a graph of nodes (steps or tools) and edges (transitions). The runtime executes nodes and follows edges based on state or conditions.
+
+**Structure:**
+
+```python
+# Define graph
+graph = Graph()
+graph.add_node("plan", planning_step)
+graph.add_node("search", search_step)
+graph.add_node("summarize", summarize_step)
+graph.add_edge("plan", "search", condition=lambda state: "search" in state.plan)
+graph.add_edge("plan", "summarize", condition=lambda state: "summarize" in state.plan)
+graph.add_edge("search", "summarize")
+
+# Run
+state = initial_state
+current_node = "plan"
+while not done:
+    state = graph.run_node(current_node, state)
+    next_edges = graph.get_edges(current_node)
+    current_node = select_next_node(next_edges, state)
+    if current_node is None:
+        done = True
+```
+
+**Characteristics:**
+
+- Flow is explicit and inspectable (you can visualize the graph).
+- State is threaded through nodes (immutable or mutable depending on the runtime).
+- The harness controls the flow; the model produces outputs that inform transitions.
+
+**When to use:**
+
+- LangGraph-style workflows
+- Multi-step pipelines with branching and conditional paths
+- Cases where you want to enforce a specific flow structure
+- Systems that require graph visualization or formal verification
+
+**Limitations:**
+
+- More complex to define and debug than a simple loop.
+- Requires upfront design of the graph structure.
+- Less flexible than fully model-driven flow (the model can't invent new steps at runtime).
+
+### 4. State Machine / Workflow
+
+The harness defines a finite state machine with named states and transitions. The agent moves through states based on events, outputs, or conditions.
+
+**Structure:**
+
+```python
+class WorkflowState(Enum):
+    INIT = "init"
+    PLANNING = "planning"
+    EXECUTING = "executing"
+    REVIEWING = "reviewing"
+    DONE = "done"
+
+state = WorkflowState.INIT
+while state != WorkflowState.DONE:
+    if state == WorkflowState.INIT:
+        context = initialize_context()
+        state = WorkflowState.PLANNING
+    elif state == WorkflowState.PLANNING:
+        plan = generate_plan(context)
+        state = WorkflowState.EXECUTING
+    elif state == WorkflowState.EXECUTING:
+        result = execute_plan(plan, context)
+        state = WorkflowState.REVIEWING
+    elif state == WorkflowState.REVIEWING:
+        if review_passes(result):
+            state = WorkflowState.DONE
+        else:
+            state = WorkflowState.PLANNING  # retry
+```
+
+**Characteristics:**
+
+- States are explicit and named.
+- Transitions are deterministic or condition-based.
+- Common in business process automation and compliance-driven systems.
+
+**When to use:**
+
+- Deterministic workflows with regulatory or audit requirements
+- Multi-stage processes with explicit checkpoints and approval gates
+- Systems that need state persistence and resumability (state machines checkpoint easily)
+
+**Limitations:**
+
+- Less flexible than graphs (states are predefined).
+- Can become unwieldy if there are many states and transitions.
+
+### Visual Comparison
+
+<MermaidDiagram
+  chart={`graph TB
+    subgraph Linear Loop
+      L1[User Input] --> L2[Model Response]
+      L2 --> L3{Tool Calls?}
+      L3 -->|Yes| L4[Execute Tools]
+      L4 --> L2
+      L3 -->|No| L5[Done]
+    end
+    
+    subgraph Conditional Router
+      R1[User Input] --> R2{Classify Intent}
+      R2 -->|Search| R3[Search Handler]
+      R2 -->|Summarize| R4[Summarize Handler]
+      R2 -->|Generate| R5[Generate Handler]
+    end
+    
+    subgraph Directed Graph
+      G1[Plan Node] --> G2{State Check}
+      G2 -->|Search in Plan| G3[Search Node]
+      G2 -->|Summarize in Plan| G4[Summarize Node]
+      G3 --> G4
+      G4 --> G5[Done]
+    end
+    
+    subgraph State Machine
+      S1[Init] --> S2[Planning]
+      S2 --> S3[Executing]
+      S3 --> S4[Reviewing]
+      S4 -->|Pass| S5[Done]
+      S4 -->|Fail| S2
+    end
+  `}
+  fallback="Four control flow models: Linear Loop (model-driven iteration with tool execution), Conditional Router (intent-based branching to handlers), Directed Graph (explicit nodes and edges with state-based transitions), State Machine (named states with deterministic or conditional transitions)."
+  caption="Four control flow models used in agent harnesses. Each offers different tradeoffs between flexibility, determinism, and complexity."
+/>
+
+## Architecture → Control Flow Mapping
+
+The architectures from Module 4 can usually be implemented with one or more of these control flow models. The mappings are not rigid — the same architecture may evolve from a simple loop to a graph as requirements grow.
+
+### ReAct → Usually Linear Loop
+
+**Why:** ReAct is reasoning + acting in a loop. The model decides when to think, when to use tools, and when to stop. A linear loop fits this naturally.
+
+**When it evolves:** If you need to enforce tool sequences (e.g., "always search before summarizing"), you may add routing logic or upgrade to a graph.
+
+### Plan-and-Execute → Loop + Planning State, May Evolve into Graph/Workflow
+
+**Why:** The simplest plan-and-execute agent generates a plan in one turn, then executes steps in a loop. This is still a linear loop with a "planning phase" at the start.
+
+**When it evolves:** If sub-goals can run in parallel, or if the plan contains conditional branches ("if search fails, try alternative source"), the loop becomes too rigid. You'll upgrade to a graph (for branching logic) or a workflow (for explicit stages like "plan → execute → review → revise").
+
+### Routing/Handoffs → Conditional Router
+
+**Why:** Routing systems classify the request and hand off to the appropriate handler. The classification logic lives in the harness, not the model.
+
+**When it evolves:** If routing becomes complex (multi-level classification, state-dependent routing), you may use a graph to represent routing paths explicitly.
+
+### LangGraph-Style → Directed Graph
+
+**Why:** LangGraph is explicitly graph-based. Developers define nodes and edges, and the runtime executes the graph.
+
+**Note:** Some LangGraph workflows also embed linear loops inside individual nodes (e.g., a "research" node that runs a ReAct loop internally).
+
+### Deterministic Business Processes → State Machine
+
+**Why:** Compliance, audit, and regulatory systems need explicit, inspectable states and transitions. State machines provide this structure.
+
+**Example:** A loan approval workflow with states `INIT → VALIDATE_DOCS → CREDIT_CHECK → UNDERWRITING → APPROVAL → DONE`. Each state has clear entry/exit criteria.
+
+### Key Insight: Use Nuanced Language
+
+These mappings are tendencies, not laws. A ReAct agent **usually** uses a linear loop, but it **may evolve** into a graph if you add branching logic. A plan-and-execute agent **often starts** as a loop with planning state, but **may migrate** to a workflow when you add multi-stage review cycles.
+
+When designing or evaluating harnesses, ask:
+
+- What flow model does this use **today**?
+- What flow model will it need **when requirements grow**?
+- Is the current model flexible enough to evolve, or will we need a runtime migration?
+
+## The Autonomy Spectrum
+
+Control flow models live on a spectrum from **fully autonomous** (the model controls what happens next) to **fully deterministic** (the harness enforces a predefined flow).
+
+<MermaidDiagram
+  chart={`graph LR
+    A[Fully Autonomous] --> B[Guided]
+    B --> C[Structured]
+    C --> D[Deterministic]
+    
+    A2["Linear Loop<br/>ReAct Agent<br/>Model decides everything"] -.-> A
+    B2["Router with<br/>Model-Driven Steps<br/>Harness classifies, model executes"] -.-> B
+    C2["Directed Graph<br/>LangGraph Workflow<br/>Predefined nodes, state-based routing"] -.-> C
+    D2["State Machine<br/>Business Process<br/>Fixed states and transitions"] -.-> D
+  `}
+  fallback="The autonomy spectrum runs from Fully Autonomous (model controls all decisions, linear loop) to Guided (harness classifies, model executes within constraints) to Structured (explicit graph with predefined nodes and state-based routing) to Deterministic (state machine with fixed states and transitions)."
+  caption="The autonomy spectrum: as you move right, the harness gains control and the model loses decision-making authority."
+/>
+
+### Fully Autonomous
+
+**Example:** A ReAct agent with a linear loop.
+
+**Who controls flow:** The model. The harness provides tools and a termination condition, but the model decides when to reason, when to act, and when to stop.
+
+**Tradeoffs:**
+
+- **Pro:** Maximum flexibility. The model can adapt to unexpected situations.
+- **Con:** Unpredictable behavior. Hard to enforce compliance, audit, or cost controls.
+
+### Guided
+
+**Example:** A router that classifies intent, then hands off to a model-driven handler.
+
+**Who controls flow:** The harness controls routing; the model controls execution within each handler.
+
+**Tradeoffs:**
+
+- **Pro:** Balances flexibility (model-driven execution) with structure (explicit routing).
+- **Con:** Routing logic must be maintained separately. Misclassification can send the agent down the wrong path.
+
+### Structured
+
+**Example:** A LangGraph workflow with explicit nodes and conditional edges.
+
+**Who controls flow:** The harness enforces the graph structure; the model produces outputs that inform transitions.
+
+**Tradeoffs:**
+
+- **Pro:** Flow is inspectable and verifiable. Easy to add checkpoints, observability, and human-in-the-loop gates.
+- **Con:** Less flexible than autonomous agents. The model cannot invent new steps outside the graph.
+
+### Deterministic
+
+**Example:** A state machine for loan approval.
+
+**Who controls flow:** The harness. The model may generate outputs (e.g., a credit score), but the harness enforces state transitions.
+
+**Tradeoffs:**
+
+- **Pro:** Maximum predictability. Suitable for regulated industries and compliance-driven workflows.
+- **Con:** Minimal model autonomy. If the problem requires creative problem-solving, a deterministic flow may be too rigid.
+
+### When the Harness Controls Flow vs. the Model Controls Flow
+
+**Harness controls flow:**
+
+- When you need determinism, auditability, or compliance.
+- When you want to enforce specific step sequences.
+- When you need to gate expensive or risky operations.
+- When the workflow is well-understood and unlikely to change.
+
+**Model controls flow:**
+
+- When the task is open-ended and requires creative problem-solving.
+- When you don't know the step sequence upfront.
+- When you want the agent to adapt to unexpected situations.
+- When you're prototyping and need fast iteration.
+
+**Hybrid (most common in production):**
+
+- The harness controls high-level routing (classification, handoffs, approval gates).
+- The model controls execution within bounded contexts (tool selection, reasoning, response generation).
+
+## Handoffs as Runtime Events
+
+A **handoff** occurs when one agent transfers control to another agent. This is a runtime event managed by the harness, not the model.
+
+### What Happens During a Handoff
+
+1. **Context Serialization:** The harness captures the current conversation, state, and any metadata.
+2. **Tool Scope Adjustment:** The new agent may have a different set of available tools. The harness narrows or widens tool permissions.
+3. **Identity Switching:** The harness updates the active agent identity (name, role, system prompt).
+4. **Execution Handoff:** The harness resumes the loop with the new agent, which sees the serialized context.
+
+### Handoff Sequence Diagram
+
+<MermaidDiagram
+  chart={`sequenceDiagram
+    participant U as User
+    participant H as Harness
+    participant A1 as Agent A (Generalist)
+    participant A2 as Agent B (Specialist)
+    
+    U->>H: "I need help with X"
+    H->>A1: Run with context
+    A1->>H: "This requires specialist knowledge, handoff to Agent B"
+    H->>H: Serialize context (conversation, state, metadata)
+    H->>H: Switch identity to Agent B
+    H->>H: Adjust tool scope (narrow to specialist tools)
+    H->>A2: Resume with serialized context
+    A2->>H: Execute specialist task
+    H->>U: Return result from Agent B
+  `}
+  fallback="Handoff sequence: User sends request to Harness, which runs Agent A (Generalist). Agent A requests handoff to Agent B (Specialist). Harness serializes context, switches identity, adjusts tool scope, and resumes execution with Agent B. Agent B completes the task and returns the result."
+  caption="A handoff is a runtime event where the harness transfers control from one agent to another by serializing context, switching identity, and adjusting tool scope."
+/>
+
+### Example: OpenAI Agents SDK Handoffs
+
+The OpenAI Agents SDK (Swarm) provides a `handoff` tool that agents can call to transfer control. When the model invokes `handoff(target_agent="specialist")`, the harness:
+
+1. Stops the current agent's loop.
+2. Serializes the conversation and state.
+3. Loads the new agent's system prompt and tools.
+4. Resumes the loop with the new agent, which sees the full conversation history.
+
+**Code example:**
+
+```python
+# Agent A (Generalist) calls handoff
+response = client.run(
+    agent=generalist_agent,
+    messages=[{"role": "user", "content": "Help with X"}]
+)
+
+# Model returns tool call: handoff(target_agent="specialist")
+# Harness handles handoff internally
+# Next turn runs with specialist_agent
+```
+
+**Key insight:** The handoff is **not** a model capability. The model generates a tool call that **signals** a handoff. The harness executes the handoff by managing context, tools, and identity.
+
+### Tool Scope Narrowing/Widening
+
+When handing off, the harness may adjust tool permissions:
+
+- **Narrowing:** A generalist agent has broad tool access (search, file read, API calls). A specialist agent only has domain-specific tools (e.g., a financial analyst agent only has access to financial databases).
+- **Widening:** A specialist escalates to a supervisor agent with elevated permissions (e.g., approval authority).
+
+This is a security and cost-control mechanism. The harness enforces tool boundaries; the model cannot bypass them.
+
+### Identity Switching
+
+Each agent has an identity: a name, role, and system prompt. When handing off, the harness updates the identity, which changes how the model reasons and presents itself.
+
+**Example:**
+
+- Agent A (Generalist): "I'm a general-purpose assistant. I can search, summarize, and answer questions."
+- Agent B (Specialist): "I'm a financial analyst. I have access to proprietary financial models and real-time market data."
+
+The user sees a seamless handoff, but the underlying model now operates under different instructions and constraints.
+
+## Case Study: Adding a Router to the Research Assistant
+
+Let's take the research assistant from Module 4 (a ReAct agent with search and summarization tools) and add a router.
+
+### Before: Linear Loop
+
+```python
+# Simple ReAct loop
+while not done:
+    response = call_model(context, tools=["search", "summarize"])
+    if response.tool_calls:
+        results = execute_tools(response.tool_calls)
+        context.append(results)
+    else:
+        done = True
+```
+
+**Behavior:** The model decides whether to search or summarize based on the user's request. If the user says "find recent papers on X," the model calls `search`. If the user says "summarize this text," the model calls `summarize`.
+
+### After: Conditional Router
+
+```python
+# Classify request
+def classify_request(user_message):
+    # Use a classification model or regex
+    if "search" in user_message or "find" in user_message:
+        return "search"
+    elif "summarize" in user_message:
+        return "summarize"
+    else:
+        return "general"
+
+# Route to handler
+request_type = classify_request(user_message)
+
+if request_type == "search":
+    response = search_handler.run(context, tools=["search"])
+elif request_type == "summarize":
+    response = summarize_handler.run(context, tools=["summarize"])
+else:
+    response = general_handler.run(context, tools=["search", "summarize"])
+```
+
+**Behavior:** The harness classifies the user's intent and routes to a specialized handler. Each handler has a focused tool set and a more specific system prompt.
+
+### What Changed?
+
+- **Control:** The harness now controls the initial routing decision. The model still controls execution within each handler.
+- **Tools:** Each handler has a narrower tool set, reducing ambiguity and cost (fewer tools in the prompt = fewer tokens).
+- **Prompts:** Each handler can have a specialized system prompt optimized for its task.
+
+### Why This Matters
+
+- **Predictability:** You can enforce that search requests always go to the search handler, which may have rate limits, caching, or specific retry logic.
+- **Cost Control:** The summarize handler doesn't pay for search tool definitions in its context.
+- **Observability:** You can instrument each handler separately (e.g., track search latency, summarization quality).
+
+### Same Model, Different Runtime Shape
+
+The model is the same. The tools are the same. But the **runtime shape** is different. The harness now has explicit routing logic, which changes how the agent behaves in practice.
+
+This illustrates a core principle: **the harness shapes the agent's behavior as much as the model does.**
+
+## Summary
+
+Control flow is how the harness implements architecture at runtime. You have four models to choose from:
+
+1. **Linear Loop:** Model-driven, maximum flexibility, minimal structure.
+2. **Conditional Router:** Harness-driven routing, model-driven execution.
+3. **Directed Graph:** Explicit nodes and edges, state-based transitions.
+4. **State Machine:** Deterministic states and transitions, maximum predictability.
+
+Architecture maps to flow, but the mappings are not rigid. A ReAct agent usually uses a linear loop, but may evolve into a graph. A plan-and-execute agent often starts as a loop with planning state, but may migrate to a workflow.
+
+The autonomy spectrum runs from fully model-driven (the model controls flow) to fully harness-driven (the harness enforces flow). Most production systems are hybrid: the harness controls routing and gates, the model controls execution.
+
+Handoffs are runtime events where the harness transfers control from one agent to another by serializing context, switching identity, and adjusting tool scope.
+
+The same model and tools can produce very different behavior depending on the control flow model. The harness shapes the agent's behavior as much as the model does.
+
+**Preview:** Control flow determines **what happens next**. But what happens when the process crashes, or the user closes the session, or you need to inspect what the agent did three steps ago? That's the job of **persistence**, which we'll explore in Lesson 6.
