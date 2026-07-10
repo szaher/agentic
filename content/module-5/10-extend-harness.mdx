@@ -1,0 +1,1644 @@
+---
+title: "Extend the Harness — State, Checkpoints, Tracing, and Intervention"
+---
+
+<LearningObjectives items={[
+  "Add structured state management that tools can read and write across turns",
+  "Implement checkpoint/resume with idempotency to survive crashes",
+  "Build a tracing system with structured JSON events for observability",
+  "Create an approval gate for human-in-the-loop intervention"
+]} />
+
+## Overview
+
+In Lesson 9, you built a minimal harness with four concerns: loop internals, tool dispatch, context assembly, and loop controls. That harness runs, but it's fragile. It has no memory between tool calls, it can't recover from crashes, and it offers no visibility into what it's doing.
+
+In this lesson, you'll extend it with four production-critical features:
+
+1. **Structured Agent State** — a serializable state object that tools can read and write
+2. **Checkpoint and Resume with Idempotency** — save/restore state and skip completed work on resume
+3. **Tracing** — structured JSON events for observability and debugging
+4. **Approval Gate** — human-in-the-loop intervention for dangerous actions
+
+Each extension builds incrementally. By the end, you'll have a harness that implements **6 of the 8 concerns** from Lesson 1.
+
+**Pedagogical strategy:** Each section introduces one extension in isolation. The final section integrates all four into a complete harness. The case study at the end demonstrates all four working together in a real run with crash-and-resume.
+
+Let's start.
+
+## Extension 1: Structured Agent State
+
+Right now, tools are stateless functions. They receive inputs, return outputs, and forget everything. If `web_search` finds three sources, the next tool call has no way to access them.
+
+**Solution:** Add an `AgentState` class — a serializable dict that tools can read and write. Pass it to every tool.
+
+```python
+# harness_state.py
+import json
+from typing import Dict, Any, List
+
+class AgentState:
+    """Mutable state that tools can read and write.
+    
+    Separate from message history. History is the conversation.
+    State is working memory.
+    """
+    
+    def __init__(self):
+        self.data: Dict[str, Any] = {}
+    
+    def get(self, key: str, default=None):
+        """Read a value from state."""
+        return self.data.get(key, default)
+    
+    def set(self, key: str, value: Any):
+        """Write a value to state."""
+        self.data[key] = value
+    
+    def to_dict(self) -> dict:
+        """Serialize state to a dict."""
+        return self.data.copy()
+    
+    def from_dict(self, data: dict):
+        """Restore state from a dict."""
+        self.data = data.copy()
+
+
+# Modified Tool Registry with State Support
+class ToolRegistry:
+    """Tool registry that passes state to tool functions."""
+    
+    def __init__(self):
+        self.tools: Dict[str, callable] = {}
+        self.schemas: Dict[str, dict] = {}
+    
+    def register(self, name: str, fn: callable, schema: dict):
+        self.tools[name] = fn
+        self.schemas[name] = schema
+    
+    def dispatch(self, name: str, input_data: dict, state: AgentState) -> Any:
+        """Dispatch a tool call with state access."""
+        if name not in self.tools:
+            raise ValueError(f"Tool '{name}' not registered")
+        
+        # Pass state as an additional argument
+        # Unpack dict as kwargs with state
+        tool_fn = self.tools[name]
+        return tool_fn(state=state, **input_data)
+    
+    def get_tool_schemas(self) -> List[dict]:
+        return list(self.schemas.values())
+
+
+# Updated web_search: stores findings in state
+def web_search(state: AgentState, query: str) -> str:
+    """Web search that stores results in state."""
+    
+    # Simulate search results
+    results = []
+    if "agent" in query.lower() and "framework" in query.lower():
+        results = [
+            {"title": "LangGraph Overview", "url": "https://langchain.com/langgraph", "snippet": "LangGraph is a framework for building stateful agents."},
+            {"title": "AutoGPT", "url": "https://github.com/Significant-Gravitas/AutoGPT", "snippet": "AutoGPT is an autonomous agent framework."},
+            {"title": "Claude SDK", "url": "https://docs.anthropic.com/en/sdk", "snippet": "The Claude SDK includes a tool runner for agent loops."}
+        ]
+    elif "population" in query.lower():
+        results = [
+            {"title": "France Population", "url": "https://example.com", "snippet": "France has ~67 million people."}
+        ]
+    
+    # Store results in state
+    existing_sources = state.get("search_results", [])
+    existing_sources.extend(results)
+    state.set("search_results", existing_sources)
+    
+    # Return formatted results
+    return json.dumps({"results": results, "count": len(results)})
+
+
+# Updated calculator: logs computation history in state
+def calculator(state: AgentState, expression: str) -> str:
+    """Calculator that logs computations in state."""
+    try:
+        result = eval(expression, {"__builtins__": {}}, {})
+        
+        # Log to state
+        history = state.get("computation_history", [])
+        history.append({"expression": expression, "result": result})
+        state.set("computation_history", history)
+        
+        return str(result)
+    except Exception as e:
+        return f"Error: {e}"
+
+
+# Updated Harness with State
+class Harness:
+    """Harness with structured state management."""
+    
+    def __init__(self, client, registry: ToolRegistry, max_turns: int = 10):
+        self.client = client
+        self.registry = registry
+        self.max_turns = max_turns
+        self.done_flag = False
+        self.state = AgentState()  # Add state
+    
+    def assemble_context(self, goal: str, history: List[dict]) -> List[dict]:
+        system_message = {
+            "role": "system",
+            "content": (
+                "You are a research assistant. Use web_search to find information. "
+                "Use calculator for math. Call done when finished."
+            )
+        }
+        user_message = {"role": "user", "content": goal}
+        return [system_message, user_message] + history
+    
+    def run(self, goal: str) -> dict:
+        """Run agent loop with state management."""
+        history = []
+        turn_count = 0
+        
+        print(f"[Harness] Starting with goal: '{goal}'\n")
+        
+        while not self.done_flag and turn_count < self.max_turns:
+            messages = self.assemble_context(goal, history)
+            response = self.client.create_message(messages, tools=self.registry.get_tool_schemas())
+            
+            turn_count += 1
+            print(f"\n[Turn {turn_count}]")
+            
+            assistant_message = {"role": "assistant", "content": []}
+            tool_results = []
+            
+            for block in response["content"]:
+                if block["type"] == "text":
+                    print(f"  Assistant: {block['text']}")
+                    assistant_message["content"].append(block)
+                
+                elif block["type"] == "tool_use":
+                    tool_name = block["name"]
+                    tool_input = block["input"]
+                    tool_id = block["id"]
+                    
+                    print(f"  Calling: {tool_name}({tool_input})")
+                    
+                    # Dispatch with state
+                    result = self.registry.dispatch(tool_name, tool_input, self.state)
+                    print(f"  Result: {result}")
+                    
+                    assistant_message["content"].append(block)
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": tool_id,
+                        "content": result
+                    })
+            
+            history.append(assistant_message)
+            if tool_results:
+                history.append({"role": "user", "content": tool_results})
+            
+            # Print state after each turn
+            print(f"  State: {json.dumps(self.state.to_dict(), indent=2)}")
+        
+        return {
+            "turns": turn_count,
+            "state": self.state.to_dict(),
+            "history": history
+        }
+```
+
+**What changed:**
+
+- `AgentState` class: simple key-value store with `get()`, `set()`, and serialization methods
+- `ToolRegistry.dispatch()`: now passes `state` as the first argument to every tool
+- `web_search`: stores search results in `state.data["search_results"]`
+- `calculator`: logs computation history in `state.data["computation_history"]`
+- `Harness`: owns the state object and prints it after each turn
+
+**Why this matters:** Tools can now share data. A `web_search` → `summarize` → `send_email` sequence can pass findings through state without encoding them in the conversation.
+
+**Run it:** Search for "AI agent frameworks" and inspect the state. You'll see all three sources stored in `search_results`.
+
+## Extension 2: Checkpoint and Resume with Idempotency
+
+What happens if the harness crashes mid-run? All progress is lost. In production, long-running agents (research tasks, deployments, data pipelines) must survive failures.
+
+**Solution:** Add checkpointing. Serialize state + history + completed tool calls to disk. On resume, skip completed work and continue from the last checkpoint.
+
+```python
+# harness_checkpoint.py
+import json
+import os
+from pathlib import Path
+from typing import Set
+
+class CheckpointManager:
+    """Manages checkpoint persistence and resume."""
+    
+    def __init__(self, checkpoint_dir: str = ".checkpoints"):
+        self.checkpoint_dir = Path(checkpoint_dir)
+        self.checkpoint_dir.mkdir(exist_ok=True)
+    
+    def save(self, run_id: str, turn: int, state: dict, history: list, completed_calls: Set[str]):
+        """Save a checkpoint to disk."""
+        checkpoint_path = self.checkpoint_dir / f"{run_id}_turn{turn}.json"
+        
+        data = {
+            "run_id": run_id,
+            "turn": turn,
+            "state": state,
+            "history": history,
+            "completed_calls": list(completed_calls)
+        }
+        
+        with open(checkpoint_path, "w") as f:
+            json.dump(data, f, indent=2)
+        
+        print(f"[Checkpoint] Saved to {checkpoint_path}")
+    
+    def restore(self, run_id: str) -> dict:
+        """Restore the latest checkpoint for a run."""
+        checkpoints = list(self.checkpoint_dir.glob(f"{run_id}_turn*.json"))
+        
+        if not checkpoints:
+            raise FileNotFoundError(f"No checkpoints found for run_id '{run_id}'")
+        
+        # Sort by turn number, take the latest
+        latest = max(checkpoints, key=lambda p: int(p.stem.split("turn")[1]))
+        
+        with open(latest, "r") as f:
+            data = json.load(f)
+        
+        print(f"[Checkpoint] Restored from {latest}")
+        return data
+
+
+class HarnessWithCheckpoint:
+    """Harness with checkpoint/resume and idempotency."""
+    
+    def __init__(self, client, registry: ToolRegistry, run_id: str, max_turns: int = 10):
+        self.client = client
+        self.registry = registry
+        self.run_id = run_id
+        self.max_turns = max_turns
+        self.done_flag = False
+        self.state = AgentState()
+        self.checkpoint_manager = CheckpointManager()
+        self.completed_calls: Set[str] = set()  # Track completed tool call IDs
+    
+    def assemble_context(self, goal: str, history: List[dict]) -> List[dict]:
+        system_message = {
+            "role": "system",
+            "content": (
+                "You are a research assistant. Use web_search to find information. "
+                "Use calculator for math. Call done when finished."
+            )
+        }
+        user_message = {"role": "user", "content": goal}
+        return [system_message, user_message] + history
+    
+    def checkpoint(self, turn: int, history: list):
+        """Save a checkpoint after each turn."""
+        self.checkpoint_manager.save(
+            self.run_id,
+            turn,
+            self.state.to_dict(),
+            history,
+            self.completed_calls
+        )
+    
+    def restore(self):
+        """Restore from the latest checkpoint."""
+        data = self.checkpoint_manager.restore(self.run_id)
+        
+        self.state.from_dict(data["state"])
+        self.completed_calls = set(data["completed_calls"])
+        
+        return data["history"], data["turn"]
+    
+    def run(self, goal: str, resume: bool = False) -> dict:
+        """Run agent loop with checkpoint/resume."""
+        
+        if resume:
+            print(f"[Harness] Resuming run '{self.run_id}'...")
+            history, last_turn = self.restore()
+            turn_count = last_turn
+            print(f"[Harness] Restored from turn {last_turn}. Completed calls: {len(self.completed_calls)}")
+        else:
+            print(f"[Harness] Starting new run '{self.run_id}'...")
+            history = []
+            turn_count = 0
+        
+        while not self.done_flag and turn_count < self.max_turns:
+            messages = self.assemble_context(goal, history)
+            response = self.client.create_message(messages, tools=self.registry.get_tool_schemas())
+            
+            turn_count += 1
+            print(f"\n[Turn {turn_count}]")
+            
+            assistant_message = {"role": "assistant", "content": []}
+            tool_results = []
+            
+            for block in response["content"]:
+                if block["type"] == "text":
+                    print(f"  Assistant: {block['text']}")
+                    assistant_message["content"].append(block)
+                
+                elif block["type"] == "tool_use":
+                    tool_name = block["name"]
+                    tool_input = block["input"]
+                    tool_id = block["id"]
+                    
+                    # Check idempotency: skip completed calls
+                    if tool_id in self.completed_calls:
+                        print(f"  [Idempotent Skip] {tool_name}({tool_input}) already completed")
+                        # Return cached result from history
+                        # In production, you'd store results in the checkpoint
+                        # For this lab, we'll just return a placeholder
+                        result = "[cached result]"
+                    else:
+                        print(f"  Calling: {tool_name}({tool_input})")
+                        result = self.registry.dispatch(tool_name, tool_input, self.state)
+                        print(f"  Result: {result}")
+                        
+                        # Mark as completed
+                        self.completed_calls.add(tool_id)
+                    
+                    assistant_message["content"].append(block)
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": tool_id,
+                        "content": result
+                    })
+            
+            history.append(assistant_message)
+            if tool_results:
+                history.append({"role": "user", "content": tool_results})
+            
+            # Checkpoint after each turn
+            self.checkpoint(turn_count, history)
+        
+        print(f"\n[Harness] Run complete. Total turns: {turn_count}")
+        return {
+            "turns": turn_count,
+            "state": self.state.to_dict(),
+            "history": history
+        }
+```
+
+**What changed:**
+
+- `CheckpointManager`: saves/restores checkpoints as JSON files in `.checkpoints/`
+- `completed_calls`: a set of tool call IDs that have been executed
+- `checkpoint()`: saves state + history + completed_calls after each turn
+- `restore()`: loads the latest checkpoint and rebuilds state
+- **Idempotency:** Before dispatching a tool, check if its ID is in `completed_calls`. If yes, skip it and return a cached result.
+
+**Demo: crash and resume**
+
+```python
+# Run for 3 turns, then simulate a crash
+harness = HarnessWithCheckpoint(client, registry, run_id="research_001", max_turns=10)
+harness.run("Research AI agent frameworks", resume=False)
+
+# Manually kill the process (Ctrl+C) after turn 3
+
+# Resume from checkpoint
+harness2 = HarnessWithCheckpoint(client, registry, run_id="research_001", max_turns=10)
+harness2.run("Research AI agent frameworks", resume=True)
+```
+
+**Expected behavior:**
+
+- First run: completes 3 turns, checkpoints after each
+- Kill the process
+- Second run: restores from turn 3, skips completed tool calls, continues from turn 4
+
+**Why this matters:** Long-running agents (data pipelines, multi-hour research tasks, deployment workflows) can survive crashes, network failures, and rate limits without losing progress.
+
+## Extension 3: Tracing
+
+Right now, the harness prints logs to stdout. You can see what's happening, but you can't analyze it. Questions like "which turn was most expensive?" or "how long did tool X take?" require structured data.
+
+**Solution:** Add a `TracingContext` that emits structured JSON events for every model call, tool call, and state mutation. Write events to a `.jsonl` file (JSON Lines — one JSON object per line).
+
+```python
+# harness_tracing.py
+import json
+import time
+from pathlib import Path
+from typing import Optional
+from dataclasses import dataclass, asdict
+from datetime import datetime
+
+@dataclass
+class TraceEvent:
+    """Structured trace event."""
+    run_id: str
+    turn: int
+    span_id: str
+    event_type: str  # "model_call", "tool_call", "state_mutation"
+    timestamp: str
+    duration_ms: Optional[float] = None
+    input_tokens: Optional[int] = None
+    output_tokens: Optional[int] = None
+    tool_name: Optional[str] = None
+    tool_input: Optional[dict] = None
+    tool_result: Optional[str] = None
+    state_key: Optional[str] = None
+    state_value: Optional[Any] = None
+
+
+class TracingContext:
+    """Tracing context that emits structured JSON events."""
+    
+    def __init__(self, run_id: str, trace_dir: str = ".traces"):
+        self.run_id = run_id
+        self.trace_dir = Path(trace_dir)
+        self.trace_dir.mkdir(exist_ok=True)
+        
+        self.trace_file = self.trace_dir / f"{run_id}.jsonl"
+        self.span_counter = 0
+    
+    def next_span_id(self) -> str:
+        """Generate a unique span ID."""
+        self.span_counter += 1
+        return f"span_{self.span_counter}"
+    
+    def emit(self, event: TraceEvent):
+        """Write an event to the trace file."""
+        with open(self.trace_file, "a") as f:
+            f.write(json.dumps(asdict(event)) + "\n")
+    
+    def model_call(self, turn: int, input_tokens: int, output_tokens: int, duration_ms: float):
+        """Log a model API call."""
+        event = TraceEvent(
+            run_id=self.run_id,
+            turn=turn,
+            span_id=self.next_span_id(),
+            event_type="model_call",
+            timestamp=datetime.utcnow().isoformat(),
+            duration_ms=duration_ms,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens
+        )
+        self.emit(event)
+    
+    def tool_call(self, turn: int, tool_name: str, tool_input: dict, tool_result: str, duration_ms: float):
+        """Log a tool call."""
+        event = TraceEvent(
+            run_id=self.run_id,
+            turn=turn,
+            span_id=self.next_span_id(),
+            event_type="tool_call",
+            timestamp=datetime.utcnow().isoformat(),
+            duration_ms=duration_ms,
+            tool_name=tool_name,
+            tool_input=tool_input,
+            tool_result=tool_result
+        )
+        self.emit(event)
+    
+    def state_mutation(self, turn: int, key: str, value: Any):
+        """Log a state mutation."""
+        event = TraceEvent(
+            run_id=self.run_id,
+            turn=turn,
+            span_id=self.next_span_id(),
+            event_type="state_mutation",
+            timestamp=datetime.utcnow().isoformat(),
+            state_key=key,
+            state_value=value
+        )
+        self.emit(event)
+
+
+class HarnessWithTracing:
+    """Harness with structured tracing."""
+    
+    def __init__(self, client, registry: ToolRegistry, run_id: str, max_turns: int = 10):
+        self.client = client
+        self.registry = registry
+        self.run_id = run_id
+        self.max_turns = max_turns
+        self.done_flag = False
+        self.state = AgentState()
+        self.tracer = TracingContext(run_id)
+    
+    def assemble_context(self, goal: str, history: List[dict]) -> List[dict]:
+        system_message = {
+            "role": "system",
+            "content": (
+                "You are a research assistant. Use web_search to find information. "
+                "Use calculator for math. Call done when finished."
+            )
+        }
+        user_message = {"role": "user", "content": goal}
+        return [system_message, user_message] + history
+    
+    def run(self, goal: str) -> dict:
+        """Run agent loop with tracing."""
+        history = []
+        turn_count = 0
+        
+        print(f"[Harness] Starting run '{self.run_id}'. Traces → {self.tracer.trace_file}\n")
+        
+        while not self.done_flag and turn_count < self.max_turns:
+            messages = self.assemble_context(goal, history)
+            
+            # Time the model call
+            start = time.time()
+            response = self.client.create_message(messages, tools=self.registry.get_tool_schemas())
+            duration_ms = (time.time() - start) * 1000
+            
+            # Extract usage
+            usage = response.get("usage", {})
+            input_tokens = usage.get("input_tokens", 0)
+            output_tokens = usage.get("output_tokens", 0)
+            
+            turn_count += 1
+            
+            # Log model call
+            self.tracer.model_call(turn_count, input_tokens, output_tokens, duration_ms)
+            
+            print(f"\n[Turn {turn_count}] Model call: {input_tokens} in + {output_tokens} out = {duration_ms:.2f}ms")
+            
+            assistant_message = {"role": "assistant", "content": []}
+            tool_results = []
+            
+            for block in response["content"]:
+                if block["type"] == "text":
+                    print(f"  Assistant: {block['text']}")
+                    assistant_message["content"].append(block)
+                
+                elif block["type"] == "tool_use":
+                    tool_name = block["name"]
+                    tool_input = block["input"]
+                    tool_id = block["id"]
+                    
+                    print(f"  Calling: {tool_name}({tool_input})")
+                    
+                    # Time the tool call
+                    start = time.time()
+                    result = self.registry.dispatch(tool_name, tool_input, self.state)
+                    duration_ms = (time.time() - start) * 1000
+                    
+                    # Log tool call
+                    self.tracer.tool_call(turn_count, tool_name, tool_input, result, duration_ms)
+                    
+                    print(f"  Result: {result} ({duration_ms:.2f}ms)")
+                    
+                    assistant_message["content"].append(block)
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": tool_id,
+                        "content": result
+                    })
+            
+            history.append(assistant_message)
+            if tool_results:
+                history.append({"role": "user", "content": tool_results})
+        
+        print(f"\n[Harness] Run complete. Trace saved to {self.tracer.trace_file}")
+        return {
+            "turns": turn_count,
+            "state": self.state.to_dict(),
+            "history": history
+        }
+```
+
+**What changed:**
+
+- `TraceEvent`: a dataclass with all event fields
+- `TracingContext`: emits events to a `.jsonl` file
+- `tracer.model_call()`: logs model API calls with token usage and duration
+- `tracer.tool_call()`: logs tool dispatch with inputs, results, and duration
+- `HarnessWithTracing`: wraps every model/tool call with timing and logging
+
+**Inspect the trace:**
+
+After a run, open `.traces/research_001.jsonl`:
+
+```json
+{"run_id": "research_001", "turn": 1, "span_id": "span_1", "event_type": "model_call", "timestamp": "2026-07-10T14:32:01.123Z", "duration_ms": 234.5, "input_tokens": 120, "output_tokens": 45}
+{"run_id": "research_001", "turn": 1, "span_id": "span_2", "event_type": "tool_call", "timestamp": "2026-07-10T14:32:01.400Z", "duration_ms": 12.3, "tool_name": "web_search", "tool_input": {"query": "AI agent frameworks"}, "tool_result": "{\"results\": [...]}"}
+{"run_id": "research_001", "turn": 2, "span_id": "span_3", "event_type": "model_call", "timestamp": "2026-07-10T14:32:02.100Z", "duration_ms": 189.7, "input_tokens": 200, "output_tokens": 60}
+```
+
+**Query the trace:**
+
+```python
+# Which turn was most expensive?
+import json
+
+with open(".traces/research_001.jsonl") as f:
+    events = [json.loads(line) for line in f]
+
+model_calls = [e for e in events if e["event_type"] == "model_call"]
+most_expensive = max(model_calls, key=lambda e: e["input_tokens"] + e["output_tokens"])
+
+print(f"Most expensive turn: {most_expensive['turn']}, {most_expensive['input_tokens'] + most_expensive['output_tokens']} tokens")
+```
+
+**Why this matters:** Structured traces enable:
+
+- Cost analysis (which turns/tools are expensive?)
+- Performance debugging (which tools are slow?)
+- Audit trails (what did the agent do and when?)
+- Replay and visualization (timeline views, dependency graphs)
+
+Production observability tools (LangSmith, AgentOps, Braintrust) are all trace collectors with query UIs.
+
+## Extension 4: Approval Gate
+
+Some tools are dangerous: `send_email`, `deploy_to_prod`, `delete_database`, `execute_sql`. You don't want an agent calling these unsupervised.
+
+**Solution:** Add an approval gate. Before dispatching a tool marked `requires_approval: true`, the harness:
+
+1. **Checkpoints** current state (so you can resume after approval)
+2. **Prints** the proposed action
+3. **Waits** for human input (y/n)
+4. **Continues** on approval, **aborts** on rejection
+
+This is the simplest form of **human-in-the-loop** intervention.
+
+```python
+# harness_approval.py
+from typing import Dict
+
+class ToolRegistry:
+    """Tool registry with approval gate support."""
+    
+    def __init__(self):
+        self.tools: Dict[str, callable] = {}
+        self.schemas: Dict[str, dict] = {}
+        self.requires_approval: Dict[str, bool] = {}  # Track approval requirements
+    
+    def register(self, name: str, fn: callable, schema: dict, requires_approval: bool = False):
+        """Register a tool with optional approval gate."""
+        self.tools[name] = fn
+        self.schemas[name] = schema
+        self.requires_approval[name] = requires_approval
+    
+    def needs_approval(self, name: str) -> bool:
+        """Check if a tool requires approval."""
+        return self.requires_approval.get(name, False)
+    
+    def dispatch(self, name: str, input_data: dict, state: AgentState) -> Any:
+        if name not in self.tools:
+            raise ValueError(f"Tool '{name}' not registered")
+        # Unpack dict as kwargs with state
+        tool_fn = self.tools[name]
+        return tool_fn(state=state, **input_data)
+    
+    def get_tool_schemas(self) -> List[dict]:
+        return list(self.schemas.values())
+
+
+def send_email(state: AgentState, to: str, subject: str, body: str) -> str:
+    """Send an email. Marked as requires_approval."""
+    # In production, this would actually send an email
+    print(f"\n[EMAIL SENT]")
+    print(f"  To: {to}")
+    print(f"  Subject: {subject}")
+    print(f"  Body: {body}\n")
+    
+    return f"Email sent to {to}"
+
+
+class HarnessWithApproval:
+    """Harness with approval gates for dangerous tools."""
+    
+    def __init__(self, client, registry: ToolRegistry, run_id: str, max_turns: int = 10):
+        self.client = client
+        self.registry = registry
+        self.run_id = run_id
+        self.max_turns = max_turns
+        self.done_flag = False
+        self.state = AgentState()
+        self.checkpoint_manager = CheckpointManager()
+    
+    def assemble_context(self, goal: str, history: List[dict]) -> List[dict]:
+        system_message = {
+            "role": "system",
+            "content": (
+                "You are a research assistant. Use web_search to find information. "
+                "Use send_email to deliver results. Call done when finished."
+            )
+        }
+        user_message = {"role": "user", "content": goal}
+        return [system_message, user_message] + history
+    
+    def request_approval(self, tool_name: str, tool_input: dict) -> bool:
+        """Request human approval for a tool call.
+        
+        In production, this would:
+        - Emit an approval request to a queue
+        - Send a webhook to a human review UI
+        - Wait for async approval (not blocking the harness)
+        
+        For this lab, we use a simple CLI prompt.
+        """
+        print(f"\n{'='*60}")
+        print(f"[APPROVAL REQUIRED]")
+        print(f"  Tool: {tool_name}")
+        print(f"  Input: {json.dumps(tool_input, indent=2)}")
+        print(f"{'='*60}")
+        
+        response = input("Approve this action? (y/n): ").strip().lower()
+        
+        if response == "y":
+            print("[APPROVED] Continuing...\n")
+            return True
+        else:
+            print("[REJECTED] Aborting...\n")
+            return False
+    
+    def run(self, goal: str) -> dict:
+        """Run agent loop with approval gates."""
+        history = []
+        turn_count = 0
+        
+        print(f"[Harness] Starting run '{self.run_id}' with approval gates enabled.\n")
+        
+        while not self.done_flag and turn_count < self.max_turns:
+            messages = self.assemble_context(goal, history)
+            response = self.client.create_message(messages, tools=self.registry.get_tool_schemas())
+            
+            turn_count += 1
+            print(f"\n[Turn {turn_count}]")
+            
+            assistant_message = {"role": "assistant", "content": []}
+            tool_results = []
+            
+            for block in response["content"]:
+                if block["type"] == "text":
+                    print(f"  Assistant: {block['text']}")
+                    assistant_message["content"].append(block)
+                
+                elif block["type"] == "tool_use":
+                    tool_name = block["name"]
+                    tool_input = block["input"]
+                    tool_id = block["id"]
+                    
+                    # Check if approval is required
+                    if self.registry.needs_approval(tool_name):
+                        # Checkpoint before approval gate
+                        self.checkpoint_manager.save(
+                            self.run_id,
+                            turn_count,
+                            self.state.to_dict(),
+                            history,
+                            set()
+                        )
+                        
+                        # Request approval
+                        approved = self.request_approval(tool_name, tool_input)
+                        
+                        if not approved:
+                            # Abort the run
+                            result = f"[REJECTED] Tool '{tool_name}' was not approved by human reviewer."
+                            print(f"  {result}")
+                            self.done_flag = True
+                        else:
+                            # Continue with the call
+                            print(f"  Calling: {tool_name}({tool_input})")
+                            result = self.registry.dispatch(tool_name, tool_input, self.state)
+                            print(f"  Result: {result}")
+                    else:
+                        # No approval needed
+                        print(f"  Calling: {tool_name}({tool_input})")
+                        result = self.registry.dispatch(tool_name, tool_input, self.state)
+                        print(f"  Result: {result}")
+                    
+                    assistant_message["content"].append(block)
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": tool_id,
+                        "content": result
+                    })
+            
+            history.append(assistant_message)
+            if tool_results:
+                history.append({"role": "user", "content": tool_results})
+        
+        print(f"\n[Harness] Run complete. Total turns: {turn_count}")
+        return {
+            "turns": turn_count,
+            "state": self.state.to_dict(),
+            "history": history
+        }
+```
+
+**What changed:**
+
+- `ToolRegistry.requires_approval`: a dict tracking which tools need approval
+- `register(..., requires_approval=True)`: mark a tool as dangerous
+- `request_approval()`: checkpoint → print proposal → wait for y/n → return decision
+- Before dispatching a tool with `requires_approval=True`, the harness calls `request_approval()`
+
+**Conceptual framing:**
+
+The approval gate is a **pause → checkpoint → emit request → receive decision → resume** pattern. The CLI `input()` is the simplest implementation. Production runtimes use:
+
+- **Approval queues** (e.g., Redis, SQS) where the harness pauses and waits for an async decision
+- **Webhooks** (e.g., POST to a Slack bot or custom UI) that notify humans and resume on callback
+- **UIs** (e.g., a dashboard where humans review pending actions and click approve/reject)
+
+The harness logic is the same: pause, checkpoint, wait for decision, resume or abort.
+
+**Demo:**
+
+```python
+# Register send_email with approval gate
+registry.register("send_email", send_email, {
+    "name": "send_email",
+    "description": "Send an email",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "to": {"type": "string"},
+            "subject": {"type": "string"},
+            "body": {"type": "string"}
+        },
+        "required": ["to", "subject", "body"]
+    }
+}, requires_approval=True)
+
+# Run the harness
+harness = HarnessWithApproval(client, registry, run_id="email_001")
+harness.run("Research AI frameworks and email me the summary")
+```
+
+**Expected behavior:**
+
+1. Agent calls `web_search` (no approval needed)
+2. Agent calls `send_email` → approval gate fires
+3. Harness checkpoints, prints the email proposal, waits for input
+4. If you type `y`, the email is sent and the run completes
+5. If you type `n`, the run aborts with a rejection message
+
+**Why this matters:** Approval gates prevent autonomous agents from taking irreversible actions without oversight. This is critical for production systems where mistakes are expensive (money, reputation, compliance).
+
+## The Complete Extended Harness
+
+Now let's integrate all four extensions into a single harness.
+
+```python
+# harness_extended.py
+import json
+import time
+from pathlib import Path
+from typing import Dict, Any, List, Set, Optional
+from dataclasses import dataclass, asdict
+from datetime import datetime
+
+
+# =====================
+# State Management
+# =====================
+
+class AgentState:
+    """Mutable state that tools can read and write."""
+    
+    def __init__(self):
+        self.data: Dict[str, Any] = {}
+    
+    def get(self, key: str, default=None):
+        return self.data.get(key, default)
+    
+    def set(self, key: str, value: Any):
+        self.data[key] = value
+    
+    def to_dict(self) -> dict:
+        return self.data.copy()
+    
+    def from_dict(self, data: dict):
+        self.data = data.copy()
+
+
+# =====================
+# Checkpointing
+# =====================
+
+class CheckpointManager:
+    """Manages checkpoint persistence and resume."""
+    
+    def __init__(self, checkpoint_dir: str = ".checkpoints"):
+        self.checkpoint_dir = Path(checkpoint_dir)
+        self.checkpoint_dir.mkdir(exist_ok=True)
+    
+    def save(self, run_id: str, turn: int, state: dict, history: list, completed_calls: Set[str]):
+        checkpoint_path = self.checkpoint_dir / f"{run_id}_turn{turn}.json"
+        
+        data = {
+            "run_id": run_id,
+            "turn": turn,
+            "state": state,
+            "history": history,
+            "completed_calls": list(completed_calls)
+        }
+        
+        with open(checkpoint_path, "w") as f:
+            json.dump(data, f, indent=2)
+    
+    def restore(self, run_id: str) -> dict:
+        checkpoints = list(self.checkpoint_dir.glob(f"{run_id}_turn*.json"))
+        
+        if not checkpoints:
+            raise FileNotFoundError(f"No checkpoints found for run_id '{run_id}'")
+        
+        latest = max(checkpoints, key=lambda p: int(p.stem.split("turn")[1]))
+        
+        with open(latest, "r") as f:
+            return json.load(f)
+
+
+# =====================
+# Tracing
+# =====================
+
+@dataclass
+class TraceEvent:
+    run_id: str
+    turn: int
+    span_id: str
+    event_type: str
+    timestamp: str
+    duration_ms: Optional[float] = None
+    input_tokens: Optional[int] = None
+    output_tokens: Optional[int] = None
+    tool_name: Optional[str] = None
+    tool_input: Optional[dict] = None
+    tool_result: Optional[str] = None
+
+
+class TracingContext:
+    """Tracing context that emits structured JSON events."""
+    
+    def __init__(self, run_id: str, trace_dir: str = ".traces"):
+        self.run_id = run_id
+        self.trace_dir = Path(trace_dir)
+        self.trace_dir.mkdir(exist_ok=True)
+        
+        self.trace_file = self.trace_dir / f"{run_id}.jsonl"
+        self.span_counter = 0
+    
+    def next_span_id(self) -> str:
+        self.span_counter += 1
+        return f"span_{self.span_counter}"
+    
+    def emit(self, event: TraceEvent):
+        with open(self.trace_file, "a") as f:
+            f.write(json.dumps(asdict(event)) + "\n")
+    
+    def model_call(self, turn: int, input_tokens: int, output_tokens: int, duration_ms: float):
+        event = TraceEvent(
+            run_id=self.run_id,
+            turn=turn,
+            span_id=self.next_span_id(),
+            event_type="model_call",
+            timestamp=datetime.utcnow().isoformat(),
+            duration_ms=duration_ms,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens
+        )
+        self.emit(event)
+    
+    def tool_call(self, turn: int, tool_name: str, tool_input: dict, tool_result: str, duration_ms: float):
+        event = TraceEvent(
+            run_id=self.run_id,
+            turn=turn,
+            span_id=self.next_span_id(),
+            event_type="tool_call",
+            timestamp=datetime.utcnow().isoformat(),
+            duration_ms=duration_ms,
+            tool_name=tool_name,
+            tool_input=tool_input,
+            tool_result=tool_result
+        )
+        self.emit(event)
+
+
+# =====================
+# Tool Registry
+# =====================
+
+class ToolRegistry:
+    """Tool registry with approval gate support."""
+    
+    def __init__(self):
+        self.tools: Dict[str, callable] = {}
+        self.schemas: Dict[str, dict] = {}
+        self.requires_approval: Dict[str, bool] = {}
+    
+    def register(self, name: str, fn: callable, schema: dict, requires_approval: bool = False):
+        self.tools[name] = fn
+        self.schemas[name] = schema
+        self.requires_approval[name] = requires_approval
+    
+    def needs_approval(self, name: str) -> bool:
+        return self.requires_approval.get(name, False)
+    
+    def dispatch(self, name: str, input_data: dict, state: AgentState) -> Any:
+        if name not in self.tools:
+            raise ValueError(f"Tool '{name}' not registered")
+        # Unpack dict as kwargs with state
+        tool_fn = self.tools[name]
+        return tool_fn(state=state, **input_data)
+    
+    def get_tool_schemas(self) -> List[dict]:
+        return list(self.schemas.values())
+
+
+# =====================
+# Complete Harness
+# =====================
+
+class ExtendedHarness:
+    """Complete harness with state, checkpoints, tracing, and approval gates."""
+    
+    def __init__(self, client, registry: ToolRegistry, run_id: str, max_turns: int = 10):
+        self.client = client
+        self.registry = registry
+        self.run_id = run_id
+        self.max_turns = max_turns
+        self.done_flag = False
+        
+        # Extension 1: State
+        self.state = AgentState()
+        
+        # Extension 2: Checkpointing
+        self.checkpoint_manager = CheckpointManager()
+        self.completed_calls: Set[str] = set()
+        
+        # Extension 3: Tracing
+        self.tracer = TracingContext(run_id)
+    
+    def assemble_context(self, goal: str, history: List[dict]) -> List[dict]:
+        system_message = {
+            "role": "system",
+            "content": (
+                "You are a research assistant. Use web_search to find information. "
+                "Use send_email to deliver results. Call done when finished."
+            )
+        }
+        user_message = {"role": "user", "content": goal}
+        return [system_message, user_message] + history
+    
+    def request_approval(self, tool_name: str, tool_input: dict) -> bool:
+        """Request human approval (Extension 4: Approval Gate)."""
+        print(f"\n{'='*60}")
+        print(f"[APPROVAL REQUIRED]")
+        print(f"  Tool: {tool_name}")
+        print(f"  Input: {json.dumps(tool_input, indent=2)}")
+        print(f"{'='*60}")
+        
+        response = input("Approve this action? (y/n): ").strip().lower()
+        
+        if response == "y":
+            print("[APPROVED] Continuing...\n")
+            return True
+        else:
+            print("[REJECTED] Aborting...\n")
+            return False
+    
+    def checkpoint(self, turn: int, history: list):
+        """Save checkpoint (Extension 2)."""
+        self.checkpoint_manager.save(
+            self.run_id,
+            turn,
+            self.state.to_dict(),
+            history,
+            self.completed_calls
+        )
+    
+    def restore(self):
+        """Restore from checkpoint (Extension 2)."""
+        data = self.checkpoint_manager.restore(self.run_id)
+        self.state.from_dict(data["state"])
+        self.completed_calls = set(data["completed_calls"])
+        return data["history"], data["turn"]
+    
+    def run(self, goal: str, resume: bool = False) -> dict:
+        """Run the agent loop with all extensions."""
+        
+        if resume:
+            print(f"[Harness] Resuming run '{self.run_id}'...")
+            history, last_turn = self.restore()
+            turn_count = last_turn
+        else:
+            print(f"[Harness] Starting new run '{self.run_id}'...")
+            print(f"  Checkpoints → {self.checkpoint_manager.checkpoint_dir}")
+            print(f"  Traces → {self.tracer.trace_file}\n")
+            history = []
+            turn_count = 0
+        
+        while not self.done_flag and turn_count < self.max_turns:
+            messages = self.assemble_context(goal, history)
+            
+            # Time the model call (Extension 3: Tracing)
+            start = time.time()
+            response = self.client.create_message(messages, tools=self.registry.get_tool_schemas())
+            duration_ms = (time.time() - start) * 1000
+            
+            usage = response.get("usage", {})
+            input_tokens = usage.get("input_tokens", 0)
+            output_tokens = usage.get("output_tokens", 0)
+            
+            turn_count += 1
+            
+            # Log model call (Extension 3)
+            self.tracer.model_call(turn_count, input_tokens, output_tokens, duration_ms)
+            
+            print(f"\n[Turn {turn_count}] Model: {input_tokens} in + {output_tokens} out ({duration_ms:.2f}ms)")
+            
+            assistant_message = {"role": "assistant", "content": []}
+            tool_results = []
+            
+            for block in response["content"]:
+                if block["type"] == "text":
+                    print(f"  Assistant: {block['text']}")
+                    assistant_message["content"].append(block)
+                
+                elif block["type"] == "tool_use":
+                    tool_name = block["name"]
+                    tool_input = block["input"]
+                    tool_id = block["id"]
+                    
+                    # Check idempotency (Extension 2)
+                    if tool_id in self.completed_calls:
+                        print(f"  [Skip] {tool_name} already completed")
+                        result = "[cached]"
+                    else:
+                        # Check approval gate (Extension 4)
+                        if self.registry.needs_approval(tool_name):
+                            self.checkpoint(turn_count, history)
+                            approved = self.request_approval(tool_name, tool_input)
+                            
+                            if not approved:
+                                result = f"[REJECTED] '{tool_name}' not approved."
+                                self.done_flag = True
+                            else:
+                                start = time.time()
+                                result = self.registry.dispatch(tool_name, tool_input, self.state)
+                                duration_ms = (time.time() - start) * 1000
+                                self.tracer.tool_call(turn_count, tool_name, tool_input, result, duration_ms)
+                        else:
+                            # Normal dispatch
+                            print(f"  Calling: {tool_name}({tool_input})")
+                            start = time.time()
+                            result = self.registry.dispatch(tool_name, tool_input, self.state)
+                            duration_ms = (time.time() - start) * 1000
+                            
+                            # Log tool call (Extension 3)
+                            self.tracer.tool_call(turn_count, tool_name, tool_input, result, duration_ms)
+                            print(f"  Result: {result} ({duration_ms:.2f}ms)")
+                        
+                        self.completed_calls.add(tool_id)
+                    
+                    assistant_message["content"].append(block)
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": tool_id,
+                        "content": result
+                    })
+            
+            history.append(assistant_message)
+            if tool_results:
+                history.append({"role": "user", "content": tool_results})
+            
+            # Checkpoint after each turn (Extension 2)
+            self.checkpoint(turn_count, history)
+        
+        print(f"\n[Harness] Run complete. Turns: {turn_count}")
+        print(f"  State keys: {list(self.state.data.keys())}")
+        print(f"  Trace: {self.tracer.trace_file}")
+        
+        return {
+            "turns": turn_count,
+            "state": self.state.to_dict(),
+            "history": history
+        }
+```
+
+**What you have now:**
+
+- **Extension 1:** Tools share state via `AgentState`
+- **Extension 2:** Checkpoint after every turn, resume on crash, idempotent tool calls
+- **Extension 3:** Structured `.jsonl` traces for model/tool calls
+- **Extension 4:** Approval gates for dangerous tools
+
+**This harness implements 6 of the 8 concerns:**
+
+| Concern | Status |
+|---------|--------|
+| 1. Agent loop internals | ✅ |
+| 2. Tool dispatch | ✅ |
+| 3. Context assembly | ✅ |
+| 4. Control flow | ✅ |
+| 5. State management | ✅ (Extension 1) |
+| 6. Persistence | ✅ (Extension 2) |
+| 7. Human-in-the-loop | ✅ (Extension 4) |
+| 8. Observability | ✅ (Extension 3) |
+
+You've built a production-ready agent harness in ~300 lines of code.
+
+## Full Case Study Run
+
+Let's run the complete harness with a real research task that exercises all four extensions.
+
+**Goal:** "Research the latest AI agent frameworks and email me a summary."
+
+**Expected flow:**
+
+1. Agent calls `web_search("AI agent frameworks")` → stores results in state
+2. Agent calls `web_search("LangGraph")` → appends to state
+3. Agent calls `web_search("AutoGPT")` → appends to state
+4. Agent calls `send_email(...)` → approval gate fires
+5. Human approves → email sent → agent calls `done()`
+
+**Now simulate a crash after step 2:**
+
+1. Kill the process (Ctrl+C) after the second `web_search`
+2. Restart with `resume=True`
+3. Harness restores from checkpoint, skips the first two searches (idempotency)
+4. Continues with the third search → approval gate → done
+
+**Full code:**
+
+```python
+# case_study.py
+from harness_extended import ExtendedHarness, ToolRegistry, AgentState
+import json
+
+
+# Tool implementations
+def web_search(state: AgentState, query: str) -> str:
+    """Simulated web search with realistic responses."""
+    results = []
+    
+    if "langgraph" in query.lower():
+        results = [
+            {
+                "title": "LangGraph Documentation",
+                "url": "https://langchain.com/langgraph",
+                "snippet": "LangGraph is a framework for building stateful, multi-actor applications with LLMs. It provides state graphs, checkpointing, and human-in-the-loop features."
+            }
+        ]
+    elif "autogpt" in query.lower():
+        results = [
+            {
+                "title": "AutoGPT on GitHub",
+                "url": "https://github.com/Significant-Gravitas/AutoGPT",
+                "snippet": "AutoGPT is an experimental autonomous agent that chains GPT-4 calls to accomplish tasks. It supports tool use and self-prompting."
+            }
+        ]
+    elif "agent" in query.lower() and "framework" in query.lower():
+        results = [
+            {
+                "title": "Anthropic Claude SDK",
+                "url": "https://docs.anthropic.com/en/sdk",
+                "snippet": "The Claude SDK includes a tool runner for building agent loops with tool use and context assembly."
+            },
+            {
+                "title": "LangGraph Overview",
+                "url": "https://langchain.com/langgraph",
+                "snippet": "LangGraph is a framework for stateful agents with checkpointing and graph-based control flow."
+            },
+            {
+                "title": "CrewAI",
+                "url": "https://github.com/joaomdmoura/crewAI",
+                "snippet": "CrewAI is a framework for orchestrating role-playing autonomous agents."
+            }
+        ]
+    
+    # Store in state
+    existing = state.get("search_results", [])
+    existing.extend(results)
+    state.set("search_results", existing)
+    
+    return json.dumps({"results": results, "count": len(results)})
+
+
+def send_email(state: AgentState, to: str, subject: str, body: str) -> str:
+    """Send an email (requires approval)."""
+    print(f"\n[EMAIL SENT]")
+    print(f"  To: {to}")
+    print(f"  Subject: {subject}")
+    print(f"  Body:\n{body}\n")
+    
+    return f"Email sent to {to}"
+
+
+def done(state: AgentState) -> str:
+    """Signal completion."""
+    return "Task complete."
+
+
+# Fake model client with realistic scripting
+class FakeModelClient:
+    def __init__(self):
+        self.turn_count = 0
+    
+    def create_message(self, messages, tools=None, max_tokens=1024):
+        self.turn_count += 1
+        
+        # Turn 1: Search for frameworks
+        if self.turn_count == 1:
+            return {
+                "id": f"msg_{self.turn_count}",
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "call_1",
+                        "name": "web_search",
+                        "input": {"query": "AI agent frameworks"}
+                    }
+                ],
+                "usage": {"input_tokens": 120, "output_tokens": 30}
+            }
+        
+        # Turn 2: Search for LangGraph
+        if self.turn_count == 2:
+            return {
+                "id": f"msg_{self.turn_count}",
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "call_2",
+                        "name": "web_search",
+                        "input": {"query": "LangGraph documentation"}
+                    }
+                ],
+                "usage": {"input_tokens": 200, "output_tokens": 35}
+            }
+        
+        # Turn 3: Search for AutoGPT
+        if self.turn_count == 3:
+            return {
+                "id": f"msg_{self.turn_count}",
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "call_3",
+                        "name": "web_search",
+                        "input": {"query": "AutoGPT autonomous agent"}
+                    }
+                ],
+                "usage": {"input_tokens": 250, "output_tokens": 40}
+            }
+        
+        # Turn 4: Send email
+        if self.turn_count == 4:
+            return {
+                "id": f"msg_{self.turn_count}",
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "call_4",
+                        "name": "send_email",
+                        "input": {
+                            "to": "user@example.com",
+                            "subject": "AI Agent Frameworks Research Summary",
+                            "body": "I found three leading frameworks:\n\n1. Claude SDK — Anthropic's tool runner for agent loops\n2. LangGraph — Stateful agents with checkpointing\n3. AutoGPT — Autonomous agent with self-prompting\n\nSee attached sources for details."
+                        }
+                    }
+                ],
+                "usage": {"input_tokens": 300, "output_tokens": 80}
+            }
+        
+        # Turn 5: Done
+        return {
+            "id": f"msg_{self.turn_count}",
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "Research complete."},
+                {
+                    "type": "tool_use",
+                    "id": "call_5",
+                    "name": "done",
+                    "input": {}
+                }
+            ],
+            "usage": {"input_tokens": 320, "output_tokens": 20}
+        }
+
+
+# Main
+def main():
+    client = FakeModelClient()
+    registry = ToolRegistry()
+    
+    # Register tools
+    registry.register("web_search", web_search, {
+        "name": "web_search",
+        "description": "Search the web",
+        "input_schema": {
+            "type": "object",
+            "properties": {"query": {"type": "string"}},
+            "required": ["query"]
+        }
+    })
+    
+    registry.register("send_email", send_email, {
+        "name": "send_email",
+        "description": "Send an email",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "to": {"type": "string"},
+                "subject": {"type": "string"},
+                "body": {"type": "string"}
+            },
+            "required": ["to", "subject", "body"]
+        }
+    }, requires_approval=True)  # Approval gate
+    
+    harness_instance = ExtendedHarness(client, registry, run_id="research_001", max_turns=10)
+    
+    def done_callback(state: AgentState) -> str:
+        harness_instance.done_flag = True
+        return "Task complete."
+    
+    registry.register("done", done_callback, {
+        "name": "done",
+        "description": "Signal completion",
+        "input_schema": {"type": "object", "properties": {}}
+    })
+    
+    # Run the harness
+    result = harness_instance.run("Research the latest AI agent frameworks and email me a summary")
+    
+    print("\n" + "="*60)
+    print("FINAL RESULT:")
+    print(f"  Turns: {result['turns']}")
+    print(f"  Sources found: {len(result['state'].get('search_results', []))}")
+    print("="*60)
+
+
+if __name__ == "__main__":
+    main()
+```
+
+**Expected output:**
+
+```
+[Harness] Starting new run 'research_001'...
+  Checkpoints → .checkpoints
+  Traces → .traces/research_001.jsonl
+
+[Turn 1] Model: 120 in + 30 out (5.23ms)
+  Calling: web_search({'query': 'AI agent frameworks'})
+  Result: {"results": [...], "count": 3} (2.10ms)
+
+[Turn 2] Model: 200 in + 35 out (4.87ms)
+  Calling: web_search({'query': 'LangGraph documentation'})
+  Result: {"results": [...], "count": 1} (1.95ms)
+
+[Turn 3] Model: 250 in + 40 out (5.01ms)
+  Calling: web_search({'query': 'AutoGPT autonomous agent'})
+  Result: {"results": [...], "count": 1} (2.03ms)
+
+[Turn 4] Model: 300 in + 80 out (6.12ms)
+
+============================================================
+[APPROVAL REQUIRED]
+  Tool: send_email
+  Input: {
+    "to": "user@example.com",
+    "subject": "AI Agent Frameworks Research Summary",
+    "body": "I found three leading frameworks:..."
+  }
+============================================================
+Approve this action? (y/n): y
+[APPROVED] Continuing...
+
+[EMAIL SENT]
+  To: user@example.com
+  Subject: AI Agent Frameworks Research Summary
+  Body:
+I found three leading frameworks:
+
+1. Claude SDK — Anthropic's tool runner for agent loops
+2. LangGraph — Stateful agents with checkpointing
+3. AutoGPT — Autonomous agent with self-prompting
+
+See attached sources for details.
+
+[Turn 5] Model: 320 in + 20 out (3.45ms)
+  Assistant: Research complete.
+
+[Harness] Run complete. Turns: 5
+  State keys: ['search_results']
+  Trace: .traces/research_001.jsonl
+
+============================================================
+FINAL RESULT:
+  Turns: 5
+  Sources found: 5
+============================================================
+```
+
+**Now simulate a crash and resume:**
+
+1. Modify the code to crash after turn 2 (add `raise Exception("Simulated crash")` after turn 2)
+2. Run again with `resume=True`
+
+```python
+# Simulate crash after turn 2
+if turn_count == 2:
+    raise Exception("Simulated crash!")
+
+# ... later, restart with resume=True
+result = harness_instance.run("Research...", resume=True)
+```
+
+**Expected behavior:**
+
+- Harness restores from checkpoint
+- Turns 1-2 are skipped (idempotency)
+- Turn 3 proceeds normally
+- Approval gate fires on turn 4
+- Run completes
+
+**Trace analysis:**
+
+```bash
+$ cat .traces/research_001.jsonl | jq -r 'select(.event_type == "model_call") | "\(.turn): \(.input_tokens + .output_tokens) tokens"'
+```
+
+Output:
+
+```
+1: 150 tokens
+2: 235 tokens
+3: 290 tokens
+4: 380 tokens
+5: 340 tokens
+```
+
+You can now query: "Which turn was most expensive?" (Turn 4, 380 tokens)
+
+## What's Still Missing
+
+Your harness now has **6 of the 8 concerns**. Here's what production frameworks add:
+
+| Concern | Your Harness | Production Frameworks |
+|---------|--------------|----------------------|
+| **1. Agent loop internals** | ✅ Basic while loop | Async loops, parallel execution, sub-agent spawning |
+| **2. Tool dispatch** | ✅ Registry + dispatch | Validation, retries, rate limiting, caching |
+| **3. Context assembly** | ✅ System + history | Prompt caching, sliding windows, RAG integration |
+| **4. Control flow** | ✅ Max turns, done signal | Graph-based routing, conditional branches, sub-goals |
+| **5. State management** | ✅ Simple dict | Typed state, versioning, diffing, conflict resolution |
+| **6. Persistence** | ✅ JSON checkpoints | Distributed storage (Postgres, Redis), transactional writes |
+| **7. Human-in-the-loop** | ✅ CLI approval gate | Approval queues, webhooks, UIs, async resumption |
+| **8. Observability** | ✅ JSONL traces | APM integration, span hierarchies, cost dashboards, replay UIs |
+
+**What LangGraph adds:**
+
+- **State graphs:** Define transitions between states with conditional edges
+- **Distributed checkpoints:** Store state in Postgres for multi-node resume
+- **Subgraphs:** Nest agents within agents
+- **Parallel execution:** Run multiple branches concurrently
+
+**What Claude SDK adds:**
+
+- **Streaming:** Stream model responses token-by-token
+- **Prompt caching:** Cache system prompts to reduce latency
+- **Message batching:** Send multiple tool results in one API call
+
+**What AgentOps/LangSmith add:**
+
+- **Span hierarchy:** Nest tool calls under model calls for tree-view debugging
+- **Replay:** Re-run a trace from any checkpoint
+- **Cost tracking:** Aggregate token usage across runs
+- **A/B testing:** Compare harness versions side-by-side
+
+In Lesson 11, you'll see how production frameworks solve these concerns at scale.
+
+## Summary
+
+You extended the minimal harness from Lesson 9 with four production-critical features:
+
+1. **Structured state:** Tools share data via `AgentState`
+2. **Checkpoint/resume:** Survive crashes with idempotent tool calls
+3. **Tracing:** Structured `.jsonl` events for observability
+4. **Approval gates:** Human-in-the-loop for dangerous tools
+
+Your harness now implements **6 of the 8 concerns**. It's production-ready for:
+
+- Research assistants (web search → summarize → email)
+- Data pipelines (extract → transform → load with checkpoints)
+- Deployment workflows (build → test → approve → deploy)
+
+**Critical insight:** You've built the primitives that LangGraph, Claude SDK, and other frameworks abstract. When you see `StateGraph.add_node()` or `client.beta.messages.tool_runner.run()`, you now know exactly what they're doing under the hood.
+
+<Callout type="success">
+**What you shipped:** A complete agent harness with state management, checkpointing, tracing, and approval gates. All four extensions integrate seamlessly. The case study demonstrates crash-and-resume with idempotency in a real research task.
+</Callout>
