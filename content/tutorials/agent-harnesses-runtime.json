@@ -521,7 +521,7 @@
       "artifacts": {
         "mdxPath": "content/module-5/11-ecosystem-map.mdx"
       },
-      "dependsOnLessonIds": ["lesson-what-is-harness", "lesson-agent-loop-internals", "lesson-tool-dispatch", "lesson-context-goals-state", "lesson-control-flow", "lesson-persistence-checkpointing", "lesson-human-in-the-loop", "lesson-observability"],
+      "dependsOnLessonIds": ["lesson-extend-harness"],
       "multimediaPlan": {
         "recommendations": [
           {

@@ -33,9 +33,9 @@ quiz:
 
 ## Overview
 
-At the end of Module 4, you built a decision framework for choosing agent architectures. You know when to reach for ReAct, Plan-and-Execute, Self-Reflection, Routing, or Workflow patterns. You can pick the right architecture for a given problem.
+At the end of Module 4, you built a decision framework for choosing agent architectures. You know when to reach for ReAct, Plan-and-Execute, Self-Reflection, Routing, or Workflow patterns. You can pick the right architecture for a given problem. Module 5 then showed how the harness layer executes these architectures at runtime — the agent loop, tool dispatch, state management, persistence, and observability concerns that turn a design into a running system.
 
-But here is a question Module 4 did not answer: once you choose an architecture, how do you *build* it cleanly?
+But here is a question those modules did not answer: once you choose an architecture and understand its runtime, how do you *build* it cleanly?
 
 If you have been following along with the code exercises, you have probably noticed something. Your ReAct agent works, but adding logging meant sprinkling `print()` statements through three functions. Your Plan-and-Execute agent works, but when you wanted to swap in a different search tool, you had to change code in four places. Your Routing agent works, but adding a new handler required copying boilerplate from an existing one and hoping you did not forget anything.
 

@@ -353,6 +353,28 @@ A2A is early-stage (2026). No production framework has full A2A support yet, but
 - **LangGraph and CrewAI communities** have early reference implementations of A2A message adapters, demonstrating cross-framework agent communication in experimental settings.
 - **No production-grade A2A runtime** exists as of mid-2026 — current implementations are proofs-of-concept without authentication, durable delivery, or error recovery primitives.
 
+## Exercise: Match the Framework
+
+For each scenario below, identify which harness category (Agent SDK, Graph Runtime, Workflow Runtime, or Multi-Agent Runtime) is the best starting point, and name a specific framework.
+
+> **Scenario 1:** You are building a chatbot that helps users navigate a documentation site. The agent needs to search docs, answer questions, and occasionally call a code execution tool. Sessions are short (under 5 minutes) and conversations are independent.
+
+> **Scenario 2:** You are building a content pipeline that receives user requests, assigns research to one agent, writing to another, and editing to a third. Each agent has a specialized system prompt and tools. The pipeline runs for 30+ minutes per request.
+
+> **Scenario 3:** You are building an order fulfillment agent that processes returns. It must check inventory, issue refunds (with human approval for amounts over $200), update the database, and send confirmation emails. If any step fails, prior steps must be rolled back.
+
+> **Scenario 4:** You are building a code review agent that reads a pull request, checks multiple files, runs static analysis, and generates a structured report. The agent's behavior branches based on the type of changes detected (new feature vs. bug fix vs. refactor).
+
+**Suggested answers:**
+
+> **Scenario 1:** Agent SDK — specifically Anthropic Messages API or Claude Agent SDK. Short sessions, no persistence needed, simple tool integration. A graph runtime would be over-engineering.
+
+> **Scenario 2:** Multi-Agent Runtime — specifically CrewAI. Multiple specialized agents with delegation, role-based task assignment, and sequential handoffs. The pipeline benefits from explicit role definitions and task routing.
+
+> **Scenario 3:** Workflow Runtime — specifically Temporal. Durable execution with exactly-once semantics, compensation logic for rollbacks, human approval as a workflow signal, and cross-service orchestration. An agent SDK cannot provide the transactional guarantees this use case demands.
+
+> **Scenario 4:** Graph Runtime — specifically LangGraph. Conditional branching based on state (change type), checkpointing for long runs, and explicit state transitions. The graph structure makes the branching logic visible and debuggable.
+
 ## Summary
 
 You now have a map of the agent harness landscape:

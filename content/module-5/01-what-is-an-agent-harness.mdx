@@ -31,6 +31,13 @@ quiz:
     correctIndex: 1
 ---
 
+<LearningObjectives items={[
+  "Define the harness as a distinct layer in the agent stack and distinguish it from adjacent layers.",
+  "List and describe the eight operational concerns every production harness must solve.",
+  "Classify agent failures as harness-layer, model-layer, or tool-layer problems.",
+  "Evaluate when a task requires a harness versus when a raw API loop is sufficient."
+]} />
+
 ## Overview
 
 The harness is invisible when things work and the first thing you debug when they don't. It is the runtime layer between agent architectures and execution — the operational machinery that turns a clever design into a running system. When a production agent crashes halfway through a 30-step research task, when it calls the same failing API in an infinite loop, or when you cannot trace why it chose tool X over tool Y, you are debugging the harness, not the model.
@@ -172,11 +179,48 @@ You define the agent as a workflow with explicit checkpoints, retries, and compe
 **Full Agent Platform — Production Harness**  
 The platform manages everything: loop, tools, state, control flow, persistence, tracing, cost tracking, approval gates, and deployment. You define the agent's behavior; the platform runs it safely. Examples include Claude Code, Devin, and enterprise agent platforms. These address all eight concerns but at the cost of flexibility.
 
+The following table summarizes what each level of the spectrum provides:
+
+| Level | Concerns Covered | You Still Own | Best For |
+|-------|-----------------|---------------|----------|
+| No Harness | None | Everything | Quick prototypes, scripts |
+| Thin SDK | Message formatting | Loop, state, persistence, observability, HITL | Simple single-turn agents |
+| Agent Loop SDK | 1-2 (loop, dispatch) | State, control flow, persistence, observability, HITL | Multi-turn agents with simple flow |
+| Graph Runtime | 1-5 (loop through control flow) | Full persistence, advanced observability | Complex agents with branching logic |
+| Workflow Runtime | 1-7 (loop through observability) | Human intervention patterns | Long-running, fault-tolerant agents |
+| Full Platform | All 8 | Application-level customization | Production agents with all requirements |
+
 Where you land on this spectrum depends on your constraints: How critical is reliability? How long do runs take? Do you need human oversight? Can you afford to debug opaque failures?
 
 ## When You Need a Harness
 
-Not every agent needs a harness. The decision depends on the task's complexity, duration, risk, and reliability requirements. Here are four scenarios across the spectrum:
+Not every agent needs a harness. The decision depends on the task's complexity, duration, risk, and reliability requirements. A quick decision framework:
+
+<MermaidDiagram chart={`graph TD
+    Q1{"Does the agent run<br/>for more than 60 seconds?"}
+    Q2{"Does the agent take<br/>consequential actions?"}
+    Q3{"Do you need to debug<br/>failures post-hoc?"}
+    Q4{"Can the user cheaply<br/>retry on failure?"}
+
+    RAW["Raw API loop is fine"]
+    SDK["Use an Agent Loop SDK"]
+    HARNESS["You need a harness"]
+
+    Q1 -->|No| Q2
+    Q1 -->|Yes| HARNESS
+    Q2 -->|Yes| HARNESS
+    Q2 -->|No| Q3
+    Q3 -->|Yes| SDK
+    Q3 -->|No| Q4
+    Q4 -->|Yes| RAW
+    Q4 -->|No| SDK
+
+    style HARNESS fill:#9f7aea,stroke:#6b46c1,color:#fff
+    style RAW fill:#68d391,stroke:#38a169,color:#000
+    style SDK fill:#fbbf24,stroke:#f59e0b,color:#000
+`} />
+
+The key signals that push you toward a harness are **duration** (long runs need persistence), **risk** (consequential actions need approval gates), and **debuggability** (complex workflows need observability). Here are four scenarios that illustrate the spectrum:
 
 **Scenario 1: FAQ Chatbot — No harness needed**  
 You are building a chatbot that answers frequently asked questions from a company knowledge base. Each query is independent, responses take 2-3 seconds, and the agent has read-only access to a vector store. A raw API loop is fine here. If the agent crashes, the user retries. No state to lose, no long-running tasks, no risky actions. The absence of harness concerns is acceptable because failures are cheap and recovery is instant.
@@ -189,6 +233,8 @@ You are building an agent that handles refund requests. It reads the user's acco
 
 **Scenario 4: Research Agent — Needs harness (context management, state tracking, error recovery)**  
 You are building an agent that researches a question by searching 20+ sources, extracting key facts, cross-referencing claims, and synthesizing a report with citations. This involves 50+ tool calls, takes 5-10 minutes, and accumulates a large context of intermediate findings. Without context management, the agent will exceed token limits after 30 sources. Without state tracking, it cannot remember which sources it has already checked or what facts it has found. Without error recovery, a single search API timeout crashes the entire run. The harness provides context management (prune old search results, keep only key facts), state tracking (maintain a list of sources checked and facts extracted), and tool dispatch error handling (retry failed searches with exponential backoff).
+
+**The pattern:** notice that each scenario adds more concerns. The FAQ bot needs zero. The code reviewer needs three. The support agent needs three different ones. The research agent needs four. Production agents almost always need a harness — the question is which concerns matter most for your use case.
 
 ## Case Study: The Missing Concerns
 
@@ -269,6 +315,42 @@ For each scenario below, identify whether the failure is a **harness-layer**, **
 
 Notice how most failures are harness failures, not model or tool failures. The model reasoned correctly. The tools executed correctly. But the runtime layer failed to manage execution safely.
 
+## Module Roadmap
+
+This lesson introduced the harness layer and its eight concerns. The rest of this module builds on this foundation in three phases:
+
+**Phase 1: Deep Dives (Lessons 2–8)** — One lesson per concern area. You will trace the agent loop step-by-step (Lesson 2), implement tool dispatch with validation and error handling (Lesson 3), design context assembly strategies (Lesson 4), model control flow from loops to graphs (Lesson 5), build checkpoint-based persistence (Lesson 6), design human-in-the-loop intervention patterns (Lesson 7), and instrument agents with structured traces and cost tracking (Lesson 8).
+
+**Phase 2: Build Labs (Lessons 9–10)** — You will build a complete harness from scratch using a deterministic model stub called `FakeModelClient` that makes tests reproducible without real API calls. Lesson 9 builds the minimal harness (loop + dispatch + context). Lesson 10 extends it with persistence, human intervention, observability, and MCP tool discovery. By the end, you will have a working harness that addresses all eight concerns.
+
+**Phase 3: Ecosystem and Selection (Lessons 11–12)** — With your custom harness as a reference point, you will compare it against production frameworks (LangGraph, Temporal, CrewAI, Claude Agent SDK, and others) using the eight-concern framework as your evaluation lens. You will learn a decision framework for choosing the right harness for your use case, and explore frontier developments like MCP-native runtimes and agent-to-agent protocols.
+
+<MermaidDiagram chart={`graph LR
+    subgraph Phase1["Phase 1: Deep Dives"]
+        L2["L2: Loop"] --> L3["L3: Tools"]
+        L3 --> L4["L4: Context"]
+        L4 --> L5["L5: Control"]
+        L5 --> L6["L6: Persist"]
+        L6 --> L7["L7: HITL"]
+        L7 --> L8["L8: Observe"]
+    end
+
+    subgraph Phase2["Phase 2: Build Labs"]
+        L9["L9: Build"] --> L10["L10: Extend"]
+    end
+
+    subgraph Phase3["Phase 3: Ecosystem"]
+        L11["L11: Compare"] --> L12["L12: Choose"]
+    end
+
+    L8 --> L9
+    L10 --> L11
+
+    style Phase1 fill:#e9d5ff,stroke:#9f7aea
+    style Phase2 fill:#fef3c7,stroke:#f59e0b
+    style Phase3 fill:#d1fae5,stroke:#10b981
+`} />
+
 ## Summary
 
 The harness is the runtime layer between agent architectures and execution. It is responsible for eight critical concerns:
@@ -283,5 +365,13 @@ The harness is the runtime layer between agent architectures and execution. It i
 8. Human intervention — approval gates, escalation, overrides
 
 Raw API loops skip all eight. Thin SDKs solve one or two. Graph runtimes handle five. Full platforms address all eight. Choosing a harness means evaluating how well it solves these concerns for your use case.
+
+<KeyTerms terms={[
+  { term: "Harness", definition: "The runtime layer that manages an agent's execution lifecycle — loop, tools, state, control flow, persistence, observability, and human intervention." },
+  { term: "Run", definition: "A complete agent execution from start to finish, potentially spanning multiple turns." },
+  { term: "Turn", definition: "One model invocation within a run — the agent sends context, the model responds." },
+  { term: "Step", definition: "One discrete action within a turn — a tool call, a state update, a routing decision." },
+  { term: "Checkpoint", definition: "A serialized snapshot of agent state that enables resumption after interruption." }
+]} />
 
 In the next lesson, **The Agent Loop Internals**, we will open the loop and trace a single turn through all decision points: when does the harness call the model? How does it decide what to do next? Where do errors surface? You will see runs, turns, steps, and the control flow decisions that determine agent behavior.
