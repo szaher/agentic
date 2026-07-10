@@ -1,0 +1,566 @@
+---
+title: "Context, Goals, Memory, and State"
+quiz:
+  - question: "What is the key distinction between state and context in an agent harness?"
+    options:
+      - "State is what the harness stores; context is what the harness sends to the model"
+      - "State is temporary data for one turn; context is persistent across sessions"
+      - "State is the model's output; context is the user's input"
+      - "State and context are interchangeable terms for the same concept"
+    correctIndex: 0
+    explanation: "State persists across turns and sessions in the harness. Context is assembled fresh each turn from state, new inputs, and retrieved knowledge, then sent to the model."
+  - question: "In the OpenAI Agents SDK, what is the RunContextWrapper used for?"
+    options:
+      - "To store data that should be passed directly to the LLM in the context window"
+      - "To store harness-internal data that is NOT passed to the LLM but persists across turns"
+      - "To wrap the model's completion response before returning it to the caller"
+      - "To compress conversation history when the context budget is exceeded"
+    correctIndex: 1
+    explanation: "RunContextWrapper holds harness-internal state (routing data, tool configs, debug flags) that persists across turns but is not sent to the model. The LLM sees the conversation history, not the wrapper."
+  - question: "When a context budget is exhausted, which strategy preserves the most semantic fidelity?"
+    options:
+      - "Drop the oldest messages from conversation history"
+      - "Summarize tool results and keep all goals and system prompts intact"
+      - "Truncate each message to 50 tokens and concatenate them"
+      - "Remove all tool results and keep only user messages"
+    correctIndex: 1
+    explanation: "Summarization preserves semantic content in compressed form. Dropping messages loses information entirely. Truncating mid-message creates broken fragments. Removing tool results breaks the agent's ability to ground its reasoning in observed facts."
+  - question: "What happens if tool results are dropped from the context window to save tokens?"
+    options:
+      - "The model will infer the tool results from the conversation history"
+      - "The harness will automatically re-run the tools on the next turn"
+      - "The model may hallucinate outputs or repeat tool calls it already made"
+      - "The context budget will automatically expand to accommodate the results"
+    correctIndex: 2
+    explanation: "Without tool results in context, the model doesn't know what the tools returned. It may fabricate plausible-sounding outputs (hallucination) or re-invoke tools it already called, wasting turns and resources."
+---
+
+## Overview
+
+The loop executes. The dispatcher routes tool calls. But before any of that happens, the harness makes a critical decision: **what does the model see?**
+
+The model doesn't choose its own context. It receives a carefully assembled window of information — system instructions, conversation history, tool results, retrieved knowledge — and generates a response based only on what it can see in that moment. The harness controls what goes into that window, what gets left out, and how much space each piece is allowed to occupy.
+
+This lesson explores the four state domains that agent harnesses manage, how context is assembled from those domains, and the tradeoffs harnesses make when the context budget runs out.
+
+## The Four State Domains
+
+Every agent harness manages four distinct categories of state. Some persist across turns. Some are assembled fresh each time. Understanding the boundaries between them is essential to understanding how agents maintain coherence, track goals, and avoid repeating themselves.
+
+### 1. Context Window
+
+**What the model sees now.**
+
+This is the assembled input sent to the model on a single turn. It includes:
+
+- System prompt and role instructions
+- Current goal or task
+- Recent conversation history
+- Tool results from this turn
+- Retrieved knowledge (RAG, citations, attached files)
+- Structured outputs or schemas (if the model supports them)
+
+The context window is **ephemeral**. It's rebuilt from scratch on every turn. The harness decides what goes in, in what order, and how much space each piece gets.
+
+### 2. Goals
+
+**What the agent is trying to achieve.**
+
+Goals can be represented as:
+
+- Natural language instructions ("Summarize this document")
+- Structured task objects (`{"type": "search", "query": "climate models", "max_results": 5}`)
+- Hierarchical goal trees (parent goal → sub-goals → completion criteria)
+
+Goals flow through the loop:
+
+1. **Initial goal** — user provides a high-level objective.
+2. **Sub-goal decomposition** — the harness or model breaks it into steps.
+3. **Tracking** — the harness monitors which sub-goals are complete.
+4. **Completion signals** — the harness stops the loop when the top-level goal is satisfied.
+
+### 3. Conversation Memory
+
+**History of the interaction.**
+
+This includes:
+
+- User messages
+- Assistant messages
+- Tool calls and results
+- Timestamps, turn IDs, metadata
+
+Conversation memory is **persistent across turns** but not always fully loaded into the context window. When the budget is tight, the harness may truncate, summarize, or drop older messages.
+
+### 4. Agent State
+
+**Structured data that persists across turns and sessions.**
+
+Examples:
+
+- Tool configurations (API keys, rate limit counters)
+- Routing state (which specialist agent is active)
+- Debugging flags or logs
+- Checkpoints for long-running tasks
+- Custom application data (e.g., a shopping cart, a document outline)
+
+Agent state is **invisible to the model**. It lives in the harness. The model only sees what the harness chooses to include in the context window.
+
+<MermaidDiagram
+  chart={`graph TD
+    A[Agent State<br/>Persistent, invisible to model] --> E[Context Assembly]
+    B[Conversation Memory<br/>Persistent, selectively loaded] --> E
+    C[Goals<br/>Persistent until complete] --> E
+    D[New Inputs<br/>User message, tool results] --> E
+    E --> F[Context Window<br/>Ephemeral, sent to model]
+    F --> G[Model]
+    G --> H[Assistant Message]
+    H --> B
+    H --> I[Tool Calls]
+    I --> J[Tool Results]
+    J --> D`}
+  fallback="Agent state, conversation memory, goals, and new inputs feed into context assembly. The context window is sent to the model. The model returns an assistant message (which updates conversation memory) and tool calls (which produce tool results for the next turn)."
+  caption="The four state domains and how they flow into the context window each turn."
+/>
+
+**Key distinction:** State persists. Context is assembled.
+
+## Context Assembly
+
+Before the model generates a response, the harness assembles the context window from multiple sources. This is not a simple concatenation — it's a **priority-ranked, budget-constrained pipeline**.
+
+### The Pipeline
+
+1. **Gather sources** — system prompt, goals, conversation history, tool results, retrieved knowledge.
+2. **Prioritize** — some pieces are required (system prompt, current user message); others are optional (old history, tangential tool results).
+3. **Allocate budget** — assign token budgets to each source based on importance.
+4. **Truncate or summarize** — if a source exceeds its budget, compress it or drop it.
+5. **Assemble final window** — concatenate the selected pieces in the correct order (system prompt first, user message last).
+
+<MermaidDiagram
+  chart={`graph LR
+    A[System Prompt<br/>Fixed] --> F[Budget Allocator]
+    B[Goals<br/>High priority] --> F
+    C[Conversation History<br/>Variable priority] --> F
+    D[Tool Results<br/>High priority] --> F
+    E[Retrieved Knowledge<br/>Medium priority] --> F
+    F --> G{Fits in<br/>budget?}
+    G -->|Yes| H[Include in context]
+    G -->|No| I[Truncate or Summarize]
+    I --> H
+    H --> J[Final Context Window]`}
+  fallback="Sources (system prompt, goals, conversation history, tool results, retrieved knowledge) flow into a budget allocator. Each source is checked against the token budget. If it fits, it's included. If not, it's truncated or summarized. The final context window is assembled from the selected pieces."
+  caption="Context assembly pipeline: sources are prioritized, allocated token budgets, and truncated or summarized as needed."
+/>
+
+### Example: Context Builder Function
+
+Here's a simplified Python implementation of a context builder:
+
+```python
+from typing import List, Dict, Any
+
+def assemble_context(
+    system_prompt: str,
+    goals: List[str],
+    history: List[Dict[str, Any]],
+    tool_results: List[Dict[str, Any]],
+    max_tokens: int = 8000
+) -> str:
+    """
+    Assemble a context window from multiple sources, respecting a token budget.
+    
+    Priority order:
+    1. System prompt (required)
+    2. Current goals (required)
+    3. Tool results from this turn (required)
+    4. Recent conversation history (best-effort)
+    
+    If the budget is exceeded, truncate history from the oldest messages first.
+    """
+    pieces = []
+    tokens_used = 0
+    
+    # 1. System prompt (always include)
+    pieces.append(system_prompt)
+    tokens_used += estimate_tokens(system_prompt)
+    
+    # 2. Goals (always include)
+    goals_text = "\n".join(f"- {goal}" for goal in goals)
+    pieces.append(f"Current goals:\n{goals_text}")
+    tokens_used += estimate_tokens(goals_text)
+    
+    # 3. Tool results (always include)
+    for result in tool_results:
+        result_text = format_tool_result(result)
+        pieces.append(result_text)
+        tokens_used += estimate_tokens(result_text)
+    
+    # 4. Conversation history (include as much as fits)
+    remaining_budget = max_tokens - tokens_used
+    selected_history = []
+    
+    # Start from the most recent messages and work backwards
+    for message in reversed(history):
+        message_text = format_message(message)
+        message_tokens = estimate_tokens(message_text)
+        
+        if tokens_used + message_tokens <= max_tokens:
+            selected_history.insert(0, message_text)
+            tokens_used += message_tokens
+        else:
+            # Budget exhausted; stop including history
+            break
+    
+    pieces.extend(selected_history)
+    
+    # 5. Assemble final context
+    context = "\n\n".join(pieces)
+    return context
+
+def estimate_tokens(text: str) -> int:
+    """Rough estimate: 1 token per 4 characters."""
+    return len(text) // 4
+
+def format_tool_result(result: Dict[str, Any]) -> str:
+    """Format a tool result for inclusion in the context."""
+    return f"Tool: {result['tool_name']}\nResult: {result['output']}"
+
+def format_message(message: Dict[str, Any]) -> str:
+    """Format a conversation message for inclusion in the context."""
+    role = message['role']
+    content = message['content']
+    return f"{role.upper()}: {content}"
+```
+
+**What this code does:**
+
+- Always includes system prompt, goals, and tool results.
+- Includes as much recent conversation history as fits in the remaining budget.
+- Drops the oldest messages first when the budget is tight.
+
+**Real harnesses** use more sophisticated strategies (summarization, priority scoring, semantic compression), but the logic is the same: required pieces go in first, optional pieces fill the remaining space.
+
+## The Context Budget
+
+Every model has a maximum context window size. GPT-4 Turbo: 128K tokens. Claude Opus 4.8: 200K tokens. Open-source models: often 8K to 32K tokens.
+
+But the harness doesn't get to use the full window. Some of it is reserved for the **model's output**.
+
+### Token Arithmetic
+
+If the model has a 128K context window and we want it to generate up to 4K tokens of output, we can use at most **124K tokens** for input.
+
+That 124K budget gets divided:
+
+- **System prompt:** 1K tokens (fixed)
+- **Goals:** 200 tokens (variable, but usually small)
+- **Tool results:** 10K tokens (variable, can be large if tools return long documents)
+- **Conversation history:** 112.8K tokens (remaining budget)
+
+If tool results from a web search return 50K tokens of scraped text, the conversation history budget shrinks to **62.8K tokens**.
+
+### Strategies When Budget is Exceeded
+
+1. **Truncation** — drop the oldest messages from conversation history.
+   - **Pros:** Fast, deterministic.
+   - **Cons:** Loses information. The model might forget earlier context.
+
+2. **Summarization** — compress old messages into a summary.
+   - **Pros:** Preserves semantic content in less space.
+   - **Cons:** Requires a separate summarization pass (costs time and tokens). Summaries lose detail.
+
+3. **Sliding window** — keep the most recent N messages and the first M messages (to preserve the initial goal).
+   - **Pros:** Balances recency with goal retention.
+   - **Cons:** Loses the middle of the conversation.
+
+4. **Priority ranking** — assign each message a relevance score and keep the highest-scoring messages.
+   - **Pros:** Keeps the most important context.
+   - **Cons:** Requires a scoring model (embedding similarity, keyword matching, or heuristic rules). More complex.
+
+5. **Drop least relevant tool results** — if multiple tools were called, drop the ones least relevant to the current goal.
+   - **Pros:** Preserves conversation flow.
+   - **Cons:** Requires semantic understanding of tool output relevance.
+
+**Most harnesses** use a combination: truncate history, summarize if needed, always keep the system prompt and current goal.
+
+## Goal Representations
+
+Goals can take many forms. The harness chooses a representation that fits the task complexity.
+
+### Natural Language Instructions
+
+Simplest form. The user provides a sentence or paragraph describing what they want.
+
+```
+"Summarize the top 5 climate research papers published in 2025."
+```
+
+The harness includes this in the system prompt or as a user message. The model interprets it and decides what steps to take.
+
+**Pros:** Flexible, easy for users to provide.
+**Cons:** Ambiguous. The model might misinterpret the goal or stop too early.
+
+### Structured Task Objects
+
+The harness defines a schema for tasks. The model (or the harness) fills in the fields.
+
+```json
+{
+  "type": "research_summary",
+  "query": "climate research papers 2025",
+  "max_results": 5,
+  "output_format": "bullet_points",
+  "completion_criteria": "all 5 papers summarized"
+}
+```
+
+The harness can inspect this object to:
+
+- Track progress (how many papers have been summarized?)
+- Validate constraints (did we get exactly 5 results?)
+- Stop the loop when `completion_criteria` is met.
+
+**Pros:** Unambiguous, machine-readable, trackable.
+**Cons:** Requires upfront schema design. Less flexible for open-ended tasks.
+
+### Hierarchical Goal Trees
+
+For complex tasks, the harness can represent goals as a tree:
+
+- **Parent goal:** "Research climate papers and write a report"
+  - **Sub-goal 1:** "Search for papers" → **COMPLETE**
+  - **Sub-goal 2:** "Summarize each paper" → **IN PROGRESS (3/5 done)**
+  - **Sub-goal 3:** "Write introduction" → **NOT STARTED**
+  - **Sub-goal 4:** "Compile final report" → **NOT STARTED**
+
+The harness tracks completion state for each sub-goal and only allows the model to work on goals whose dependencies are satisfied.
+
+**Pros:** Handles complex, multi-step workflows. Clear progress tracking.
+**Cons:** Requires explicit decomposition (either by the harness or by the model in a planning phase).
+
+### Goal Flow
+
+Regardless of representation, goals flow through the same lifecycle:
+
+1. **Receive initial goal** — user provides the top-level objective.
+2. **Decompose (if needed)** — harness or model breaks it into sub-goals.
+3. **Include in context** — the harness adds the current goal(s) to the context window.
+4. **Track progress** — the harness monitors which goals are complete (by checking tool results, model outputs, or explicit completion signals).
+5. **Completion** — when the top-level goal is satisfied, the harness stops the loop.
+
+## State vs Context
+
+This distinction is central to understanding how agents work.
+
+**State** is what the harness **remembers**.
+
+- Conversation history (all messages, all turns)
+- Tool configurations
+- Goal trees
+- Checkpoints
+- Application data
+
+State persists across turns and sessions. It's stored in memory, databases, or files. The model never sees the raw state.
+
+**Context** is what the harness **shows to the model**.
+
+- A carefully selected subset of conversation history
+- The current goal
+- Tool results from this turn
+- System instructions
+
+Context is assembled fresh on each turn from state, new inputs, and retrieved knowledge. It's ephemeral. Once the model generates a response, the context is discarded (though the response is added to the state as a new message).
+
+**Why the distinction matters:**
+
+- The model can only reason about what's in the context. If a tool result is in state but not in context, the model won't see it.
+- The harness can use state to make decisions (routing, stopping criteria) without putting that state in the context.
+- Keeping state and context separate allows the harness to manage context budget intelligently.
+
+## How Harnesses Expose State
+
+Different frameworks expose state in different ways. Here's how three major harnesses handle it.
+
+### OpenAI Agents SDK: RunContextWrapper
+
+OpenAI's Agents SDK uses **sessions** to store conversation history and **RunContextWrapper** to store harness-internal state.
+
+```python
+from openai import OpenAI
+from openai.lib import RunContextWrapper
+
+client = OpenAI()
+
+# RunContextWrapper holds harness-internal state
+# This is NOT passed to the LLM
+run_context = RunContextWrapper(
+    routing_state={"active_specialist": "researcher"},
+    debug_flags={"verbose_logging": True},
+    custom_data={"user_preferences": {"theme": "dark"}}
+)
+
+# The session stores conversation history
+# This IS passed to the LLM (subject to context budget)
+response = client.chat.completions.create(
+    model="gpt-4-turbo",
+    messages=[
+        {"role": "system", "content": "You are a research assistant."},
+        {"role": "user", "content": "Find papers on climate models."}
+    ],
+    # RunContextWrapper is passed here for harness use only
+    run_context=run_context
+)
+```
+
+**Key point:** `RunContextWrapper` is for the harness. The LLM sees the `messages` array, not the wrapper.
+
+### LangGraph: State Channels and Checkpointers
+
+LangGraph uses **state channels** (typed fields that persist across nodes) and **checkpointers** (snapshots of state at each step).
+
+```python
+from langgraph.graph import StateGraph
+from langgraph.checkpoint import MemorySaver
+
+class AgentState(TypedDict):
+    messages: List[dict]  # Conversation history (sent to model)
+    goals: List[str]  # Current goals (sent to model)
+    tool_results: List[dict]  # Tool outputs (sent to model)
+    routing_state: dict  # Harness-internal (NOT sent to model)
+
+graph = StateGraph(AgentState)
+
+# Define nodes that update state
+def research_node(state: AgentState) -> AgentState:
+    # This node sees the full state, but only includes
+    # messages, goals, and tool_results in the context
+    # sent to the model
+    return state
+
+# Checkpointer saves state after each node
+checkpointer = MemorySaver()
+app = graph.compile(checkpointer=checkpointer)
+```
+
+**Key point:** State channels can hold both model-visible data (`messages`, `goals`) and harness-internal data (`routing_state`). The harness decides what goes into the context window.
+
+### Claude Agent SDK: Conversation History and MCP Context
+
+The Claude Agent SDK uses **conversation history** (a list of message blocks) and **MCP context** (resources provided by MCP servers).
+
+```python
+import anthropic
+
+client = anthropic.Anthropic()
+
+# Conversation history is stored as a list of messages
+conversation_history = [
+    {"role": "user", "content": [{"type": "text", "text": "Search for climate papers"}]},
+    {"role": "assistant", "content": [
+        {"type": "text", "text": "I'll search for recent climate research."},
+        {"type": "tool_use", "id": "call_1", "name": "search", "input": {"query": "climate models 2025"}}
+    ]},
+    {"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": "call_1", "content": "Found 5 papers..."}
+    ]}
+]
+
+# MCP context is provided by MCP servers and injected by the harness
+# It includes retrieved knowledge, file contents, etc.
+response = client.messages.create(
+    model="claude-opus-4",
+    max_tokens=4096,
+    messages=conversation_history,
+    # The harness can add MCP context here
+    # (not shown in this code; handled by the MCP integration layer)
+)
+```
+
+**Key point:** The Claude API takes a `messages` array. The harness (if using MCP) injects additional context (retrieved knowledge, file contents) before sending the messages to the API.
+
+## Case Study: Context Pressure in a Research Assistant
+
+**Scenario:** A research assistant has been asked to summarize 5 climate papers. It has searched for papers, fetched the full text of 4 of them, and is now preparing to search for the 5th.
+
+**Context budget:** 128K tokens (GPT-4 Turbo)
+**Current usage:**
+- System prompt: 1K tokens
+- Goal ("Summarize 5 climate papers"): 100 tokens
+- Conversation history (10 turns): 5K tokens
+- Tool results (full text of 4 papers): 120K tokens
+
+**Total:** 126.1K tokens. **Remaining budget:** 1.9K tokens (not enough for the next user message and model output).
+
+**Problem:** The context is full. The harness must make a decision.
+
+### Strategy 1: Truncate History
+
+Drop the oldest conversation messages, keeping only the most recent 2 turns.
+
+**Result:**
+- The model forgets the initial goal context (why we're searching for these papers).
+- If the user asked for "papers about temperature anomalies," the model might search for a different topic.
+- **Context saved:** ~3K tokens (by dropping 3K tokens of old messages).
+
+**Consequence:** The model loses coherence. It might repeat questions or misinterpret the goal.
+
+### Strategy 2: Summarize Tool Results
+
+Compress each paper's full text into a 500-token summary.
+
+**Result:**
+- The 4 papers that took 120K tokens now take 2K tokens.
+- The model can still reference the key findings of each paper, but loses fine-grained details.
+- **Context saved:** 118K tokens.
+
+**Consequence:** The model can't quote specific paragraphs or check precise data points. But it retains the high-level findings and can proceed with the 5th search.
+
+### Strategy 3: Drop Least Relevant Tool Result
+
+If one of the 4 papers is off-topic, drop its full text from the context.
+
+**Result:**
+- The model only sees 3 papers in the context.
+- **Context saved:** ~30K tokens (by dropping 1 paper).
+
+**Consequence:** The model might mention that it "found 4 papers but only summarized 3," or it might re-search for the 4th paper, wasting a turn.
+
+### Which Strategy is Best?
+
+**It depends on the goal.**
+
+- If the user needs verbatim quotes, **summarization** loses too much.
+- If the user only needs high-level summaries, **summarization** is ideal.
+- If one of the papers is clearly off-topic, **dropping it** is reasonable.
+- **Truncating history** should be a last resort, because it breaks the agent's memory of the conversation.
+
+**Most harnesses** use a hybrid approach:
+
+1. Always keep system prompt and current goal.
+2. Summarize tool results if they're very large.
+3. Truncate the oldest conversation messages if still over budget.
+4. Drop tool results only if they're irrelevant to the current goal.
+
+## Summary
+
+The harness controls what the model sees. State persists across turns; context is assembled fresh each turn from state, new inputs, and retrieved knowledge.
+
+The four state domains are:
+
+1. **Context window** — what the model sees now (ephemeral).
+2. **Goals** — what the agent is trying to achieve (persistent until complete).
+3. **Conversation memory** — history of the interaction (persistent, selectively loaded).
+4. **Agent state** — harness-internal data (persistent, invisible to the model).
+
+Context assembly is a priority-ranked, budget-constrained pipeline. When the budget is exceeded, the harness truncates, summarizes, or drops content based on priority.
+
+Different frameworks expose state differently:
+
+- **OpenAI Agents SDK:** Sessions + RunContextWrapper (harness-internal state).
+- **LangGraph:** State channels + checkpointers.
+- **Claude Agent SDK:** Conversation history + MCP context.
+
+Understanding context assembly and state management is essential for debugging agents that "forget" information, repeat themselves, or hallucinate outputs.
+
+**Next:** You know what's in the context and state. In Lesson 5, you'll learn how the harness controls **what happens next** — loops, branches, and control flow.
