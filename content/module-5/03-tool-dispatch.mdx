@@ -209,7 +209,7 @@ class ToolRegistry:
             raise ValueError(f"Parameter validation failed: {e.message}")
         
         # Execute the tool
-        return tool["fn"](\*\*params)
+        return tool["fn"](**params)
 
 # Example usage
 registry = ToolRegistry()
