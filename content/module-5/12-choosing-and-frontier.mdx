@@ -1,0 +1,404 @@
+---
+title: "Choosing a Harness + Frontier Appendix"
+quiz:
+  - question: "Which harness type is most appropriate for a long-running workflow with human approval gates and durable execution?"
+    options:
+      - "Simple library like LangChain LCEL"
+      - "Orchestration framework like LangGraph or CrewAI"
+      - "Raw Claude API calls with custom state management"
+      - "Single-agent harness like Claude Agent SDK"
+    correctIndex: 1
+    explanation: "Long-running workflows with human approval gates require durable execution, state persistence, and orchestration — features provided by orchestration frameworks like LangGraph or CrewAI."
+  - question: "What is the over-engineering anti-pattern?"
+    options:
+      - "Using raw API calls for a 20-step workflow with approval gates"
+      - "Using LangGraph for a 3-turn single-tool agent"
+      - "Building a custom harness when an existing framework fits"
+      - "Using a multi-agent framework for a simple task"
+    correctIndex: 1
+    explanation: "Using a heavyweight orchestration framework like LangGraph for a simple 3-turn single-tool agent is over-engineering. The complexity overhead doesn't justify the minimal orchestration needs."
+  - question: "What is the current maturity level of MCP (Model Context Protocol) as a runtime primitive?"
+    options:
+      - "Research stage with no production usage"
+      - "Experimental with reference implementations only"
+      - "Production-adopted but hardening required for security, permissions, and observability"
+      - "Fully mature with standardized runtime implementations"
+    correctIndex: 2
+    explanation: "MCP is production-adopted (used in Claude Desktop, Zed, etc.) but requires hardening in security, permissions, identity, observability, and server quality before reaching full maturity."
+  - question: "Which frontier direction involves agents decomposing high-level goals into goal trees without human task breakdowns?"
+    options:
+      - "Protocol-native runtimes"
+      - "Autonomous goal decomposition"
+      - "Long-running agent operating systems"
+      - "MCP as first-class runtime primitive"
+    correctIndex: 1
+    explanation: "Autonomous goal decomposition involves agents that break down high-level goals into goal trees, track progress, and re-plan without requiring human-authored task breakdowns."
+---
+
+## Overview
+
+This lesson serves two purposes:
+
+**Part 1** provides a production-grounded framework for choosing agent harnesses. You'll learn decision criteria, anti-patterns to avoid, and how to match runtime requirements to harness capabilities.
+
+**Part 2** is an optional frontier appendix covering emerging runtime directions: protocol-native runtimes (MCP, A2A), autonomous goal decomposition, and long-running agent operating systems. These topics are experimental and not required for the capstone project.
+
+<LearningObjectives items={[
+  "Apply a decision framework to select appropriate harnesses for production use cases",
+  "Identify and avoid common harness selection anti-patterns",
+  "Assess the maturity and runtime implications of emerging agent runtime directions"
+]} />
+
+<Prerequisites items={[
+  "Module 5 Lessons 1-11 (all eight runtime concerns plus ecosystem map)",
+  "Module 4 (Agent Architectures) for context on what architectures the runtime executes"
+]} />
+
+---
+
+## Part 1: Choosing a Harness
+
+Module 5 Lesson 11 (Ecosystem Map) showed you the landscape of available harnesses. Now you need a systematic way to choose.
+
+### Decision Framework
+
+The flowchart below walks through five decision points that map to harness categories. Start at the top and follow the branches based on your requirements.
+
+<MermaidDiagram
+  chart={`flowchart TD
+    Start[Agent Runtime Selection] --> Q1{How many agents?}
+    Q1 -->|Single agent| Q2A{How complex is<br/>the control flow?}
+    Q1 -->|Multiple agents<br/>with coordination| Q2B{Do you need<br/>durable execution?}
+    
+    Q2A -->|Simple:<br/>3-5 turns,<br/>few tools| Simple[Simple Library<br/>e.g., LangChain LCEL,<br/>Claude Agent SDK]
+    Q2A -->|Complex:<br/>branching,<br/>loops,<br/>state transitions| Orchestration[Orchestration Framework<br/>e.g., LangGraph,<br/>Temporal]
+    
+    Q2B -->|Yes:<br/>long-running,<br/>approval gates,<br/>resumability| OrchestrationMulti[Orchestration Framework<br/>e.g., LangGraph,<br/>CrewAI,<br/>Temporal]
+    Q2B -->|No:<br/>short-lived,<br/>synchronous| Q3{What does your<br/>team know?}
+    
+    Q3 -->|LangChain ecosystem| LangChainMulti[LangGraph<br/>or CrewAI]
+    Q3 -->|Claude SDK /<br/>Anthropic API| ClaudeTeam[Claude Team SDK<br/>or Agent SDK<br/>multi-agent mode]
+    Q3 -->|Other framework| FrameworkChoice[Framework matching<br/>team expertise]
+    
+    Orchestration --> Q4{What are the<br/>deployment constraints?}
+    OrchestrationMulti --> Q4
+    Simple --> Q4
+    LangChainMulti --> Q4
+    ClaudeTeam --> Q4
+    FrameworkChoice --> Q4
+    
+    Q4 -->|Serverless,<br/>stateless| Serverless[Use stateless harness<br/>or checkpoint to external store]
+    Q4 -->|Long-running<br/>server,<br/>container| LongRunning[Use harness with<br/>native state persistence]
+    Q4 -->|Enterprise:<br/>compliance,<br/>air-gap,<br/>audit| Enterprise[Use harness with<br/>enterprise features<br/>or build custom]
+    
+    Serverless --> End[Selected Harness]
+    LongRunning --> End
+    Enterprise --> End
+  `}
+  fallback="Decision tree with 5 decision points: (1) agent count, (2) control flow complexity or durable execution, (3) team knowledge, (4) deployment constraints. Each path leads to recommended harness categories."
+  caption="Production harness selection framework. Start at the top and follow decision branches."
+/>
+
+#### Decision Point 1: How Many Agents?
+
+- **Single agent**: Most use cases start here. A single agent with tools can handle complex tasks if the control flow is clear.
+- **Multiple agents with coordination**: Only needed when you have genuinely distinct roles (e.g., researcher agent + code reviewer agent) or when parallelizing independent subtasks.
+
+**Heuristic**: If you can describe the task without mentioning multiple personas, you probably need a single agent.
+
+#### Decision Point 2: Control Flow Complexity or Durable Execution
+
+For **single agents**:
+- **Simple control flow** (3-5 turns, few tools, no branching): Use a simple library or single-agent SDK.
+- **Complex control flow** (branching, loops, state transitions): Use an orchestration framework.
+
+For **multiple agents**:
+- **Durable execution required** (long-running, approval gates, resumability): Use an orchestration framework with state persistence.
+- **Short-lived, synchronous**: Proceed to team knowledge assessment.
+
+#### Decision Point 3: Team Knowledge
+
+If you don't need durable multi-agent execution, choose based on what your team already knows:
+
+- **LangChain ecosystem**: LangGraph or CrewAI for multi-agent coordination.
+- **Claude SDK / Anthropic API**: Claude Team SDK or Agent SDK multi-agent mode.
+- **Other framework**: Match the harness to your team's existing expertise (e.g., if you already use Temporal for workflows, extend it for agents).
+
+#### Decision Point 4: Deployment Constraints
+
+- **Serverless, stateless**: Use a stateless harness (function-based) or checkpoint state to an external store (S3, database).
+- **Long-running server, container**: Use a harness with native state persistence (e.g., LangGraph with PostgreSQL checkpointer, Temporal).
+- **Enterprise (compliance, air-gap, audit)**: Use a harness with enterprise features (audit logs, role-based access, air-gap deployment) or build a custom solution if no harness meets your constraints.
+
+<Callout type="info" title="Example Walkthrough">
+**Scenario**: You need a code review agent that analyzes PRs, runs static analysis tools, and posts review comments. The workflow is synchronous (triggered by PR webhook), uses 5 tools, and runs in a Kubernetes cluster.
+
+**Decision path**:
+1. **Agent count**: Single agent (one reviewer role).
+2. **Control flow**: Simple (linear: fetch PR → run tools → post comments).
+3. **Deployment**: Long-running server (Kubernetes).
+
+**Recommendation**: Claude Agent SDK or LangChain LCEL with tool binding. No orchestration framework needed because control flow is linear and synchronous.
+</Callout>
+
+### Anti-Patterns
+
+Avoid these common selection mistakes:
+
+#### 1. Over-Engineering
+
+**Example**: Using LangGraph for a 3-turn single-tool agent that just answers customer questions.
+
+**Why it's wrong**: The complexity overhead (graph definition, checkpointing, state management) doesn't justify the minimal orchestration needs. A simple library or Claude Agent SDK is sufficient.
+
+**Heuristic**: If your agent can be described as "call tool, read result, respond," you don't need an orchestration framework.
+
+#### 2. Under-Engineering
+
+**Example**: Using raw Claude API calls with custom state management for a 20-step workflow with approval gates, error recovery, and resumability.
+
+**Why it's wrong**: You'll end up rebuilding features that orchestration frameworks already provide (checkpointing, state transitions, retry logic). The initial simplicity becomes technical debt.
+
+**Heuristic**: If you're writing `if state == "waiting_approval": handle_approval()` in multiple places, you need an orchestration framework.
+
+#### 3. Hype-Driven Selection
+
+**Example**: Choosing AutoGen because it was mentioned in a blog post, without assessing whether multi-agent coordination is actually needed.
+
+**Why it's wrong**: Framework selection should be driven by requirements (agent count, control flow, durability), not by trending frameworks.
+
+**Heuristic**: Write down your requirements first. Then map them to harness capabilities. Don't start with "I want to use X."
+
+#### 4. Building Custom When Framework Fits
+
+**Example**: Building a custom orchestration layer because you want "full control," when LangGraph or Temporal already handles your use case.
+
+**Why it's wrong**: Custom solutions require ongoing maintenance, testing, and feature development. Unless you have unique requirements that no framework addresses, you're creating avoidable technical debt.
+
+**Heuristic**: Only build custom if you can articulate a requirement that no existing harness meets. "I want control" is not a requirement.
+
+#### 5. Multi-Agent When Single Agent Suffices
+
+**Example**: Creating separate "planner," "executor," and "critic" agents when a single agent with a planning tool and reflection prompt would work.
+
+**Why it's wrong**: Multi-agent systems add coordination overhead (message passing, state synchronization, failure handling). Most tasks don't need the complexity.
+
+**Heuristic**: Can a single agent with tools and a good system prompt do the job? If yes, start there. Only add agents when you need genuine role separation or parallelization.
+
+<WorkedExample
+  title="Harness Selection for a Customer Support Bot"
+  problem="Select a harness for a customer support bot that (1) answers FAQs from a knowledge base, (2) escalates to human support if needed, (3) logs all conversations for compliance, (4) runs in AWS Lambda."
+  solution={`
+**Decision path**:
+
+1. **Agent count**: Single agent (one support role).
+2. **Control flow**: Simple (answer question or escalate).
+3. **Deployment**: Serverless (AWS Lambda).
+
+**Requirements**:
+- Stateless execution (Lambda has ephemeral state).
+- Compliance logging (write conversation logs to external store).
+- Tool use (knowledge base search, escalation API).
+
+**Recommendation**: Claude Agent SDK with:
+- Tool definitions for knowledge base search and escalation.
+- Middleware for logging conversations to S3 or DynamoDB.
+- Stateless execution (no checkpointing needed).
+
+**Why not LangGraph**: Control flow is too simple to justify graph orchestration. Lambda's stateless nature makes checkpointing overkill.
+
+**Why not raw API calls**: Claude Agent SDK provides tool use, streaming, and error handling out of the box. Building this with raw API calls is under-engineering.
+  `}
+/>
+
+<Exercise
+  title="Harness Selection Practice"
+  tasks={[
+    "Scenario: A data analysis agent that (1) queries databases, (2) generates visualizations, (3) sends reports via email, (4) runs nightly in a Kubernetes CronJob. Which harness category is most appropriate? Why?",
+    "Scenario: A multi-step workflow where Agent A researches a topic, Agent B drafts content, and Agent C reviews for quality. The workflow can pause for human approval between steps and must resume from the last checkpoint. Which harness category is most appropriate? Why?",
+    "Anti-pattern identification: A developer chooses AutoGen for a single-agent chatbot because \"multi-agent systems are the future.\" Which anti-pattern is this? How would you advise them?"
+  ]}
+/>
+
+---
+
+## Part 2: Frontier Appendix
+
+> **Note**: This section covers emerging runtime directions. These topics are experimental and not required for the capstone project. Maturity levels are assessed as of July 2026 and may change rapidly.
+
+The agent runtime landscape is evolving beyond the production harnesses covered in Lessons 1-11. This appendix introduces three frontier directions: protocol-native runtimes, autonomous goal decomposition, and long-running agent operating systems.
+
+### Protocol-Native Runtimes
+
+Traditional harnesses treat tools and resources as static configuration: you define tools upfront, bind them to agents, and the agent uses them.
+
+**Protocol-native runtimes** reverse this: tools and resources are discovered dynamically via protocols, and the runtime adapts to what's available.
+
+#### MCP (Model Context Protocol) as First-Class Runtime Primitive
+
+**What it is**: MCP defines a standard protocol for exposing tools, resources, and prompts to LLMs. Instead of hardcoding tool definitions in your agent code, the agent connects to MCP servers that advertise their capabilities.
+
+**Runtime implications**:
+- **Dynamic tool discovery**: Agents can discover and use tools at runtime without code changes.
+- **Composability**: Multiple MCP servers can be combined to create rich tool environments.
+- **Versioning and evolution**: MCP servers can add, remove, or change tools without breaking agent code.
+
+**Maturity (July 2026)**:
+- **Adoption**: Production-adopted in Claude Desktop, Zed, and other IDEs. Growing ecosystem of MCP servers.
+- **Hardening required**: Security (untrusted server isolation), permissions (user consent for sensitive tools), identity (authenticating servers), observability (debugging tool calls across servers), and server quality (reliability and error handling).
+
+**Example**: An agent running in Claude Desktop can use the filesystem MCP server to read files, the GitHub MCP server to create issues, and a custom database MCP server — all without the agent code knowing these tools exist ahead of time.
+
+#### A2A (Agent-to-Agent Protocol) as Runtime Fabric
+
+**What it is**: A2A defines a standard protocol for agents to discover, message, and coordinate with other agents. Instead of hardcoding multi-agent workflows, agents discover peers via a registry and negotiate coordination.
+
+**Runtime implications**:
+- **Decentralized multi-agent systems**: Agents can be deployed independently and discover each other at runtime.
+- **Protocol-driven coordination**: Agents use A2A messages (task delegation, status updates, results) instead of framework-specific APIs.
+- **Federation**: Agents from different organizations can collaborate if they speak A2A.
+
+**Maturity (July 2026)**:
+- **Adoption**: Early-stage. Reference implementations exist (e.g., AutoGen Studio's A2A support), but no production-scale deployments.
+- **Challenges**: Discovery at scale, identity and trust (authenticating peer agents), message semantics (interpreting task delegation), and debugging multi-agent flows.
+
+**Example**: A research agent delegates a subtask to a code-generation agent running in a different cluster. The delegation happens via A2A messages, not framework-specific APIs.
+
+<Callout type="warning" title="Maturity Warning">
+MCP is production-ready for single-user, local-first environments (e.g., Claude Desktop). Using MCP in multi-user, server-side, or untrusted-server scenarios requires additional security and permission infrastructure.
+
+A2A is experimental. Do not use it in production without understanding the federation, identity, and debugging challenges.
+</Callout>
+
+### Autonomous Goal Decomposition
+
+**What it is**: Agents that take high-level goals (e.g., "Build a web scraper for product prices") and autonomously decompose them into subtasks, execute them, track progress, and re-plan when blocked — without requiring human-authored task breakdowns.
+
+**Runtime implications**:
+- **Goal trees**: The runtime must track a tree of goals and subgoals, not just a linear task sequence.
+- **Progress tracking**: The runtime must know which goals are completed, in progress, blocked, or abandoned.
+- **Re-planning**: When a subgoal fails or becomes infeasible, the agent must re-plan and update the goal tree.
+
+**Maturity (July 2026)**:
+- **Demonstrated capabilities**: Research systems (e.g., Voyager, Reflexion) and early products (e.g., Devin, AutoGPT) show agents decomposing goals and executing multi-step plans.
+- **Open challenges**:
+  - **Reliability**: Agents can hallucinate infeasible plans or get stuck in loops.
+  - **Controllability**: Users need guardrails to prevent agents from pursuing unintended subgoals.
+  - **Cost**: Autonomous decomposition requires many LLM calls. Budgeting and early stopping are essential.
+
+**Example**: An agent given the goal "Migrate the user service from REST to GraphQL" might decompose it into:
+1. Analyze current REST endpoints.
+2. Design GraphQL schema.
+3. Implement resolvers.
+4. Write tests.
+5. Update client code.
+
+The agent executes these subtasks, re-plans if step 2 reveals unexpected complexity, and reports progress.
+
+<VerifyClaim status="verify">
+Autonomous goal decomposition reliability in production contexts requires recent benchmark or case-study evidence. Maturity claims are based on public demos and research papers as of mid-2026.
+</VerifyClaim>
+
+### Long-Running Agent Operating Systems
+
+**What it is**: Agent runtimes that support agents persisting across days or weeks, maintaining session state, consolidating memory, managing credentials, and operating within cost budgets.
+
+**Runtime implications**:
+- **Session management at scale**: The runtime must persist sessions across restarts, handle session expiration, and resume paused sessions.
+- **Memory consolidation**: Long-running agents accumulate conversation history. The runtime must summarize, archive, or forget old context to stay within token limits.
+- **Credential management**: Agents need durable access to APIs, databases, and filesystems. The runtime must securely store and refresh credentials.
+- **Cost budgeting**: Long-running agents can rack up API costs. The runtime must enforce budgets and alert when thresholds are crossed.
+
+**Maturity (July 2026)**:
+- **Experiments**: Platforms like Agent Protocol and emerging agent IDEs (e.g., Replit Agent, Cursor with long-running mode) are exploring this space.
+- **No standardized runtime**: Each platform handles session persistence, memory, and credentials differently. No cross-platform standard exists.
+
+**Example**: A developer uses an agent to refactor a large codebase over three days. The agent persists its session, consolidates findings from day 1, resumes on day 2, and completes the refactor on day 3 — without re-reading the entire codebase each time.
+
+<Callout type="info" title="Memory Consolidation Techniques">
+Long-running agents face the same token limit challenges as chatbots with long conversations. Techniques include:
+
+- **Summarization**: Periodically summarize old conversation turns and replace them with summaries.
+- **Forgetting**: Drop irrelevant context (e.g., exploratory dead-ends).
+- **External memory**: Store facts in a vector database or knowledge graph and retrieve them as needed.
+
+Module 5 Lesson 3 (Memory and Context Management) covers these techniques in detail.
+</Callout>
+
+### Frontier Maturity Radar
+
+The diagram below shows where each frontier direction sits on the maturity spectrum (as of July 2026).
+
+<MermaidDiagram
+  chart={`%%{init: {'theme': 'base', 'themeVariables': { 'primaryColor': '#e3f2fd', 'primaryTextColor': '#1e40af', 'primaryBorderColor': '#1e40af', 'lineColor': '#64748b', 'secondaryColor': '#f1f5f9', 'tertiaryColor': '#fef3c7'}}}%%
+graph LR
+    Research[Research<br/>Stage] --> Experimental[Experimental<br/>Reference Impls]
+    Experimental --> EarlyProd[Early Production<br/>Adoption]
+    EarlyProd --> Mature[Mature<br/>Standardized]
+    
+    A2A[A2A Protocol] -.-> Experimental
+    GoalDecomp[Autonomous Goal<br/>Decomposition] -.-> Experimental
+    LongRunning[Long-Running<br/>Agent OS] -.-> Research
+    MCP[MCP Protocol] -.-> EarlyProd
+    
+    style A2A fill:#fef3c7,stroke:#d97706
+    style GoalDecomp fill:#fef3c7,stroke:#d97706
+    style LongRunning fill:#fee2e2,stroke:#dc2626
+    style MCP fill:#dbeafe,stroke:#1e40af
+  `}
+  fallback="Maturity radar showing four stages: Research → Experimental → Early Production → Mature. MCP is at Early Production. A2A and Autonomous Goal Decomposition are at Experimental. Long-Running Agent OS is at Research."
+  caption="Frontier maturity assessment (July 2026). Colors: red = research, yellow = experimental, blue = early production."
+/>
+
+**Interpretation**:
+- **MCP**: Safe to use in local-first, single-user contexts. Requires hardening for server-side, multi-user, or untrusted-server scenarios.
+- **A2A**: Experimental. Suitable for research and prototypes, but not production multi-agent systems.
+- **Autonomous goal decomposition**: Demonstrated in research and early products, but reliability and controllability remain open challenges.
+- **Long-running agent OS**: Early experiments. No standardized runtime yet.
+
+<Exercise
+  title="Frontier Assessment"
+  tasks={[
+    "Which frontier direction would most benefit a use case where an agent needs to integrate with 10+ external services (databases, APIs, SaaS tools) without hardcoding tool definitions?",
+    "What are the two main challenges preventing A2A from reaching production maturity?",
+    "Why does a long-running agent (persisting across days) need memory consolidation? What happens if the runtime doesn't consolidate memory?"
+  ]}
+/>
+
+---
+
+## Module Closing
+
+This module taught you how the **runtime layer** executes agent architectures.
+
+**Connecting back to Module 4**: Module 4 (Agent Architectures) taught you *what* architectures exist — single-agent, multi-agent, supervisor, pipeline. This module taught you *how* the runtime executes them: how state is managed, how errors are handled, how agents coordinate, how tools are invoked, and how the system is monitored.
+
+**Connecting forward**:
+- **Module 6 (Agent Design Patterns)**: The runtime is the platform. Design patterns are the reusable solutions built *on* that platform. You'll learn patterns for tool use, memory management, error recovery, and human-in-the-loop workflows.
+- **Module 8 (Agent Frameworks & SDKs)**: Module 8 gives you hands-on experience with the harnesses you just compared. You'll build agents with Claude Agent SDK, LangGraph, CrewAI, and compare their runtime characteristics in practice.
+
+<KeyTerms terms={[
+  { term: "Decision framework", definition: "A systematic method for choosing agent harnesses based on agent count, control flow complexity, durable execution needs, team knowledge, and deployment constraints." },
+  { term: "Over-engineering anti-pattern", definition: "Using a heavyweight orchestration framework for simple use cases that don't justify the complexity overhead." },
+  { term: "Under-engineering anti-pattern", definition: "Using raw API calls or minimal libraries for complex workflows that need orchestration features like checkpointing, state management, and retry logic." },
+  { term: "Protocol-native runtime", definition: "A runtime where tools and resources are discovered dynamically via protocols (e.g., MCP, A2A) instead of being statically configured." },
+  { term: "MCP (Model Context Protocol)", definition: "A protocol for exposing tools, resources, and prompts to LLMs via servers that advertise capabilities dynamically." },
+  { term: "A2A (Agent-to-Agent Protocol)", definition: "A protocol for agents to discover, message, and coordinate with other agents in a decentralized multi-agent system." },
+  { term: "Autonomous goal decomposition", definition: "Agents that take high-level goals and autonomously decompose them into subtasks, execute them, and re-plan when blocked." },
+  { term: "Long-running agent OS", definition: "A runtime that supports agents persisting across days or weeks, with session management, memory consolidation, credential management, and cost budgeting." }
+]} />
+
+## Summary
+
+**Part 1: Choosing a Harness**
+- Use the five-decision-point framework: agent count, control flow complexity, durable execution, team knowledge, and deployment constraints.
+- Avoid anti-patterns: over-engineering (complex framework for simple tasks), under-engineering (raw API calls for complex workflows), hype-driven selection, building custom when a framework fits, and multi-agent when single agent suffices.
+
+**Part 2: Frontier Appendix**
+- **Protocol-native runtimes**: MCP is production-adopted but hardening required; A2A is experimental.
+- **Autonomous goal decomposition**: Demonstrated in research and early products; reliability and controllability remain open.
+- **Long-running agent OS**: Early experiments; no standardized runtime yet.
+
+**Module closing**: Module 4 taught architectures. Module 5 taught how the runtime executes them. Module 6 (Design Patterns) teaches reusable patterns on the runtime platform. Module 8 (Frameworks & SDKs) gives you hands-on practice.
+
+**Next**: Module 6 (Agent Design Patterns) — reusable solutions for tool use, memory management, error recovery, and human-in-the-loop workflows.
