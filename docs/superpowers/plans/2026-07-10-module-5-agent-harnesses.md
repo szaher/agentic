@@ -1,8 +1,8 @@
-# Module 5: Agent Harnesses and Runtime Systems — Implementation Plan
+# Module 6: Agent Harnesses and Runtime Systems — Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Insert a new Module 5 (Agent Harnesses and Runtime Systems) into the LLM Agents Academy, renumber existing modules 5–12 to 6–13, and create 12 MDX lessons covering the agent harness as a runtime layer.
+**Goal:** Insert a new Module 6 (Agent Harnesses and Runtime Systems) into the LLM Agents Academy, renumber existing modules 5–12 to 6–13, and create 12 MDX lessons covering the agent harness as a runtime layer.
 
 **Architecture:** The module teaches the harness as a stack of eight runtime concerns (loop → tools → context/state → control flow → persistence → observability → human intervention). Lessons 1–8 are conceptual with code examples, lessons 9–10 are hands-on build labs, and lessons 11–12 cover ecosystem comparison and selection. A recurring "research assistant" case study threads through lessons 1–10. All content follows existing MDX patterns: `##` headings only, `<MermaidDiagram>` for diagrams, `<CodeBlock>` for code, prose-based with blockquote callouts, 4-question frontmatter quizzes (except lab lessons).
 
@@ -122,24 +122,24 @@ perl -i -pe 's/"id": 5/"id": 6/'   content/module-6/meta.json
 
 - [ ] **Step 3: Update cross-references in all MDX files**
 
-Uses temporary `§` markers to prevent double-replacement (e.g., "Module 5" → "Module 6" then "Module 6" → "Module 7" would corrupt the original "Module 5" reference). The `\b` word boundary ensures "Module 10" is not confused with "Module 1".
+Uses temporary `` markers to prevent double-replacement (e.g., "Module 6" → "Module 7" then "Module 7" → "Module 8" would corrupt the original "Module 6" reference). The `\b` word boundary ensures "Module 11" is not confused with "Module 1".
 
 Process from highest to lowest number, then strip markers:
 
 ```bash
 cd /Users/szaher/go/src/github.com/szaher/saad/learn/agents
 find content/ -name "*.mdx" -exec perl -i -pe '
-  s/Module 12\b/Module §13§/g;
-  s/Module 11\b/Module §12§/g;
-  s/Module 10\b/Module §11§/g;
-  s/Module 9\b/Module §10§/g;
-  s/Module 8\b/Module §9§/g;
-  s/Module 7\b/Module §8§/g;
-  s/Module 6\b/Module §7§/g;
-  s/Module 5\b/Module §6§/g;
+  s/Module 13\b/Module 13/g;
+  s/Module 12\b/Module 12/g;
+  s/Module 11\b/Module 11/g;
+  s/Module 10\b/Module 10/g;
+  s/Module 9\b/Module 9/g;
+  s/Module 8\b/Module 8/g;
+  s/Module 7\b/Module 7/g;
+  s/Module 6\b/Module 6/g;
 ' {} \;
 
-find content/ -name "*.mdx" -exec perl -i -pe 's/§//g' {} \;
+find content/ -name "*.mdx" -exec perl -i -pe 's///g' {} \;
 ```
 
 - [ ] **Step 4: Update cross-references beyond MDX**
@@ -151,14 +151,14 @@ cd /Users/szaher/go/src/github.com/szaher/saad/learn/agents
 grep -RIn "Module [5-9]\b\|Module 1[0-2]\b" content/ docs/ --include="*.mdx" --include="*.md" --include="*.json" | grep -v "node_modules" | head -100
 ```
 
-Inspect results. Apply the same `§`-marker replacement to any non-MDX files that contain stale module numbers. Meta.json `description` fields and doc files are the most likely locations.
+Inspect results. Apply the same ``-marker replacement to any non-MDX files that contain stale module numbers. Meta.json `description` fields and doc files are the most likely locations.
 
 - [ ] **Step 5: Verify no stale references remain**
 
 ```bash
 cd /Users/szaher/go/src/github.com/szaher/saad/learn/agents
-# Check that no old "Module 5" references exist outside the future module-5
-grep -rn "Module 5" content/module-{1,2,3,4,6,7,8,9,10,11,12,13}/ --include="*.mdx" | head -20
+# Check that no old "Module 6" references exist outside the future module-5
+grep -rn "Module 6" content/module-{1,2,3,4,6,7,8,9,10,11,12,13}/ --include="*.mdx" | head -20
 # Should return 0 results
 ```
 
@@ -170,7 +170,7 @@ The existing array has 12 entries. Add a 13th using `#ed8936` (continuing the re
 // Before (12 entries):
 moduleColors: ["#68d391", "#4fd1c5", "#63b3ed", "#b794f4", "#ed8936", "#fc8181", "#ecc94b", "#68d391", "#4fd1c5", "#63b3ed", "#b794f4", "#ed8936"]
 
-// After (13 entries — insert "#9f7aea" at index 4 for the new Module 5):
+// After (13 entries — insert "#9f7aea" at index 4 for the new Module 6):
 moduleColors: ["#68d391", "#4fd1c5", "#63b3ed", "#b794f4", "#9f7aea", "#ed8936", "#fc8181", "#ecc94b", "#68d391", "#4fd1c5", "#63b3ed", "#b794f4", "#ed8936"]
 ```
 
@@ -187,7 +187,7 @@ for d in content/module-*/; do
   fi
 done
 
-# Should have no output (all match). Module 5 dir doesn't exist yet — that's expected.
+# Should have no output (all match). Module 6 dir doesn't exist yet — that's expected.
 ```
 
 - [ ] **Step 8: Commit the renumbering**
@@ -195,7 +195,7 @@ done
 ```bash
 cd /Users/szaher/go/src/github.com/szaher/saad/learn/agents
 git add content/ academy.config.ts
-git commit -m "Renumber modules 5-12 to 6-13 for new Module 5 insertion
+git commit -m "Renumber modules 5-12 to 6-13 for new Module 6 insertion
 
 Rename directories, update meta.json ids, update all cross-references
 in MDX lesson text, and add 13th moduleColors entry."
@@ -203,15 +203,15 @@ in MDX lesson text, and add 13th moduleColors entry."
 
 ---
 
-### Task 2: Create Module 5 Scaffold and Lesson 1 (What Is an Agent Harness?)
+### Task 2: Create Module 6 Scaffold and Lesson 1 (What Is an Agent Harness?)
 
 **Files:**
 - Create: `content/module-5/meta.json`
 - Create: `content/module-5/01-what-is-an-agent-harness.mdx`
 
 **Interfaces:**
-- Consumes: Renumbered modules from Task 1 (Module 5 directory slot is now available)
-- Produces: Module 5 meta.json with all 12 lesson entries. Lesson 1 MDX introducing the harness concept, eight concerns, and layer boundaries.
+- Consumes: Renumbered modules from Task 1 (Module 6 directory slot is now available)
+- Produces: Module 6 meta.json with all 12 lesson entries. Lesson 1 MDX introducing the harness concept, eight concerns, and layer boundaries.
 
 - [ ] **Step 1: Create the module-5 directory and meta.json**
 
@@ -491,13 +491,13 @@ cd /Users/szaher/go/src/github.com/szaher/saad/learn/agents
 pnpm validate
 ```
 
-Expected: Module 5 appears in validation output. No errors for meta.json or lesson 01.
+Expected: Module 6 appears in validation output. No errors for meta.json or lesson 01.
 
 - [ ] **Step 4: Commit**
 
 ```bash
 git add content/module-5/
-git commit -m "Add Module 5 scaffold and Lesson 1: What Is an Agent Harness?"
+git commit -m "Add Module 6 scaffold and Lesson 1: What Is an Agent Harness?"
 ```
 
 ---
@@ -1291,7 +1291,7 @@ Target: 400–500 lines. Required sections:
 
 ## Module Closing
 - Connect back: "Module 4 taught what architectures exist. This module taught how the runtime layer executes them."
-- Connect forward: "Module 6 (Agent Design Patterns) teaches reusable patterns inside the runtime. Module 8 (Agent Frameworks & SDKs) gives you hands-on experience with the harnesses you just compared."
+- Connect forward: "Module 7 (Agent Design Patterns) teaches reusable patterns inside the runtime. Module 9 (Agent Frameworks & SDKs) gives you hands-on experience with the harnesses you just compared."
 
 ## Summary
 ```
@@ -1383,10 +1383,10 @@ cd /Users/szaher/go/src/github.com/szaher/saad/learn/agents
 # Check that no orphan references to "Module 14" or higher exist
 grep -rn "Module 14\|Module 15" content/ --include="*.mdx"
 
-# Check that new Module 5 references in other modules don't exist yet
-# (no other module should reference "Module 5" with the harness title, since the content is new)
-grep -rn "Module 5" content/module-{1,2,3,4,6,7,8,9,10,11,12,13}/ --include="*.mdx" | head -10
-# This should return 0 results — no old module references Module 5 as "Harnesses"
+# Check that new Module 6 references in other modules don't exist yet
+# (no other module should reference "Module 6" with the harness title, since the content is new)
+grep -rn "Module 6" content/module-{1,2,3,4,6,7,8,9,10,11,12,13}/ --include="*.mdx" | head -10
+# This should return 0 results — no old module references Module 6 as "Harnesses"
 
 # Check consecutive IDs
 for d in content/module-*/; do
@@ -1404,7 +1404,7 @@ If any quality gate fails, fix the issue and commit:
 
 ```bash
 git add -A
-git commit -m "Fix quality gate issues in Module 5 content"
+git commit -m "Fix quality gate issues in Module 6 content"
 ```
 
 - [ ] **Step 8: Final commit if all gates pass**
@@ -1412,7 +1412,7 @@ git commit -m "Fix quality gate issues in Module 5 content"
 ```bash
 git add -A
 git status  # Verify nothing unexpected is staged
-git commit -m "Complete Module 5: Agent Harnesses and Runtime Systems
+git commit -m "Complete Module 6: Agent Harnesses and Runtime Systems
 
 12 lessons covering agent harness runtime concepts, two build labs,
 ecosystem comparison, and frontier appendix. All quality gates pass."

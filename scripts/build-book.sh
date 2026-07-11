@@ -99,7 +99,7 @@ echo "Scanning content..."
 MODULES=()
 while IFS= read -r meta_file; do
   MODULES+=("$meta_file")
-done < <(find "$CONTENT_DIR" -name "meta.json" -path "*/module-*/meta.json" | sort -t- -k2 -n)
+done < <(find "$CONTENT_DIR" -name "meta.json" -path "*/module-*/meta.json" | sort)
 
 if [[ ${#MODULES[@]} -eq 0 ]]; then
   echo "ERROR: No modules found in $CONTENT_DIR"

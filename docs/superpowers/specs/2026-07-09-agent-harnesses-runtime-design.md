@@ -1,4 +1,4 @@
-# Module 5: Agent Harnesses and Runtime Systems — Design Spec
+# Module 6: Agent Harnesses and Runtime Systems — Design Spec
 
 **Date:** 2026-07-09
 **Status:** Draft
@@ -6,7 +6,7 @@
 
 ## Overview
 
-A new Module 5 covering the agent harness as a runtime layer — the execution substrate that turns agent architectures into running systems. This module fills a gap between Module 4 (Agent Architectures) and the current Module 5 (Design Patterns), creating the curriculum spine:
+A new Module 6 covering the agent harness as a runtime layer — the execution substrate that turns agent architectures into running systems. This module fills a gap between Module 4 (Agent Architectures) and the current Module 6 (Design Patterns), creating the curriculum spine:
 
 **architecture → runtime → patterns → frameworks → orchestration → production**
 
@@ -27,18 +27,18 @@ Module 4: Agent Architectures. Students need to know what ReAct, plan-and-execut
 
 ### Renumbering Impact
 
-Inserting this module as Module 5 requires renumbering all subsequent modules:
+Inserting this module as Module 6 requires renumbering all subsequent modules:
 
 | Current | New | Title |
 |---------|-----|-------|
-| Module 5 | Module 6 | Agent Design Patterns |
-| Module 6 | Module 7 | Memory & Knowledge |
-| Module 7 | Module 8 | Agent Frameworks & SDKs |
-| Module 8 | Module 9 | Multi-Modal Agents |
-| Module 9 | Module 10 | Multi-Agent Systems |
-| Module 10 | Module 11 | Evaluation & Testing |
-| Module 11 | Module 12 | Production, Deployment & Safety |
-| Module 12 | Module 13 | Advanced Patterns & Real-World Applications |
+| Module 6 | Module 7 | Agent Design Patterns |
+| Module 7 | Module 8 | Memory & Knowledge |
+| Module 8 | Module 9 | Agent Frameworks & SDKs |
+| Module 9 | Module 10 | Multi-Modal Agents |
+| Module 10 | Module 11 | Multi-Agent Systems |
+| Module 11 | Module 12 | Evaluation & Testing |
+| Module 12 | Module 13 | Production, Deployment & Safety |
+| Module 13 | Module 13 | Advanced Patterns & Real-World Applications |
 
 ### The Eight Harness Concerns
 
@@ -610,7 +610,7 @@ The approval gate is conceptually: **pause → checkpoint → emit approval requ
 
 **Module closing:**
 
-- Connect forward to Module 8 (Frameworks & SDKs) where students will use these harnesses hands-on.
+- Connect forward to Module 9 (Frameworks & SDKs) where students will use these harnesses hands-on.
 - Connect back to Module 4 (Architectures): "You now know what architectures exist and how the runtime layer executes them. Next, you'll learn the design patterns that make them maintainable."
 
 ---
@@ -746,11 +746,11 @@ The approval gate is conceptually: **pause → checkpoint → emit approval requ
 
 ### Forward references (other modules reference this):
 
-- **Module 6** (Design Patterns, renumbered): Tool registry, middleware/hooks, context management, checkpointing patterns plug into the harness layer taught here.
-- **Module 8** (Frameworks & SDKs, renumbered): Hands-on framework walkthroughs build on the runtime mental model from this module. Students know what to look for in each framework.
-- **Module 10** (Multi-Agent Systems, renumbered): Multi-agent orchestration patterns are runtime-level coordination concerns.
-- **Module 11** (Evaluation & Testing, renumbered): Evaluation harnesses use the tracing and observability concepts from Lesson 8.
-- **Module 12** (Production, Deployment & Safety, renumbered): Production reliability patterns (retries, circuit breakers, monitoring) extend the harness-level concerns from Lessons 6–8.
+- **Module 7** (Design Patterns, renumbered): Tool registry, middleware/hooks, context management, checkpointing patterns plug into the harness layer taught here.
+- **Module 9** (Frameworks & SDKs, renumbered): Hands-on framework walkthroughs build on the runtime mental model from this module. Students know what to look for in each framework.
+- **Module 11** (Multi-Agent Systems, renumbered): Multi-agent orchestration patterns are runtime-level coordination concerns.
+- **Module 12** (Evaluation & Testing, renumbered): Evaluation harnesses use the tracing and observability concepts from Lesson 8.
+- **Module 13** (Production, Deployment & Safety, renumbered): Production reliability patterns (retries, circuit breakers, monitoring) extend the harness-level concerns from Lessons 6–8.
 
 ## Implementation Notes
 

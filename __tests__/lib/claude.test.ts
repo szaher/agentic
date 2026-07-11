@@ -4,12 +4,12 @@ import { buildSystemPrompt } from "@/lib/claude";
 describe("buildSystemPrompt", () => {
   it("includes tutor role", () => {
     const prompt = buildSystemPrompt();
-    expect(prompt).toContain("Ray Data tutor");
+    expect(prompt).toContain("expert tutor");
   });
 
-  it("includes Ray version", () => {
+  it("includes academy topic guidance", () => {
     const prompt = buildSystemPrompt();
-    expect(prompt).toContain("2.55.1");
+    expect(prompt).toContain("LLM agents");
   });
 
   it("includes mermaid instruction", () => {
@@ -18,8 +18,8 @@ describe("buildSystemPrompt", () => {
   });
 
   it("includes module context when provided", () => {
-    const prompt = buildSystemPrompt({ moduleTitle: "Ray Core", lessonTitle: "Tasks" });
-    expect(prompt).toContain("Ray Core");
-    expect(prompt).toContain("Tasks");
+    const prompt = buildSystemPrompt({ moduleTitle: "Foundations of LLM Agents", lessonTitle: "The Agent Loop" });
+    expect(prompt).toContain("Foundations of LLM Agents");
+    expect(prompt).toContain("The Agent Loop");
   });
 });
