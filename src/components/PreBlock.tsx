@@ -1,6 +1,6 @@
 "use client";
 
-import React from "react";
+import React, { useState, useEffect } from "react";
 import CodeBlock from "./CodeBlock";
 
 function extractText(node: unknown): string {
@@ -14,7 +14,13 @@ function extractText(node: unknown): string {
 }
 
 export default function PreBlock({ children, ...props }: React.ComponentPropsWithoutRef<"pre">) {
-  if (React.isValidElement(children)) {
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  if (mounted && React.isValidElement(children)) {
     const childProps = children.props as Record<string, unknown>;
     const className = (childProps?.className as string) || "";
     if (className.startsWith("language-")) {

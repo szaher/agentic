@@ -1,10 +1,9 @@
 import type { Metadata } from "next";
-import Script from "next/script";
 import "./globals.css";
 import Header from "@/components/Header";
 import Sidebar from "@/components/Sidebar";
 import { getCurriculum } from "@/lib/curriculum";
-import { academy, storageKeys } from "../../academy.config";
+import { academy } from "../../academy.config";
 
 export const metadata: Metadata = {
   title: academy.name,
@@ -21,11 +20,9 @@ export default async function RootLayout({
   return (
     <html lang="en" suppressHydrationWarning>
       <head>
-        <Script
-          id="theme-init"
-          strategy="beforeInteractive"
+        <script
           dangerouslySetInnerHTML={{
-            __html: `(function(){try{var t=localStorage.getItem("${storageKeys.theme}")||"system";var d=t==="system"?window.matchMedia("(prefers-color-scheme:dark)").matches?"dark":"light":t;document.documentElement.setAttribute("data-theme",d)}catch(e){document.documentElement.setAttribute("data-theme","dark")}})()`,
+            __html: `(function(){try{var t=localStorage.getItem("llm-agents-theme")||"system";var d=t==="system"?window.matchMedia("(prefers-color-scheme:dark)").matches?"dark":"light":t;document.documentElement.setAttribute("data-theme",d)}catch{document.documentElement.setAttribute("data-theme","dark")}})()`,
           }}
         />
       </head>
