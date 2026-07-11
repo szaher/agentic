@@ -54,7 +54,8 @@ We will apply each pattern in order, testing at each step. This is how real refa
 
 Here is the Module 3 research agent, condensed to the parts we will refactor. If you completed the Module 3 lab, this is your code. If not, use this as the starting point.
 
-<CodeBlock code={`"""Module 3 Research Agent -- the monolithic version."""
+```python
+"""Module 3 Research Agent -- the monolithic version."""
 
 import json
 import datetime
@@ -843,7 +844,8 @@ These four patterns are not just independent additions -- they **reinforce each 
 
     Loop->>Chk: save(iteration, messages, metrics)
     Note over Loop: Next iteration
-`} />
+
+```
 
 The sequence matters: context management happens *before* the LLM call (so the model sees a clean, right-sized history), middleware wraps *around* tool execution (so every call is logged and timed), and checkpointing happens *after* tool results are collected (so the saved state includes the latest results). This ordering is not accidental -- it follows the data flow of the agent loop.
 

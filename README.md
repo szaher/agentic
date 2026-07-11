@@ -1,105 +1,71 @@
-# AI Tutorial Template
+# LLM Agents Academy
 
-A production-grade Next.js template for AI-generated, end-to-end educational tutorials. It combines typed tutorial specifications, structured prompt contracts, reusable MDX learning components, deterministic quality gates, and human-review checkpoints.
+A comprehensive, interactive tutorial on building LLM-powered agents — from foundations through production deployment. 13 modules, 94 lessons, built with Next.js 16, MDX, and Monaco Editor.
 
-## Quick Start
+**Live site:** [szaher.github.io/agentic](https://szaher.github.io/agentic/)
+
+## Curriculum
+
+| Module | Title | Lessons |
+|--------|-------|---------|
+| 1 | Foundations of LLM Agents | 7 |
+| 2 | Prompting & Reasoning | 6 |
+| 3 | Tool Use & Function Calling | 7 |
+| 4 | Agent Architectures | 7 |
+| 5 | Agent Harnesses and Runtime Systems | 12 |
+| 6 | Agent Design Patterns | 7 |
+| 7 | Memory & Knowledge | 7 |
+| 8 | Agent Frameworks & SDKs | 7 |
+| 9 | Multi-Modal Agents | 7 |
+| 10 | Multi-Agent Systems | 7 |
+| 11 | Evaluation & Testing | 6 |
+| 12 | Production, Deployment & Safety | 7 |
+| 13 | Advanced Patterns & Real-World Applications | 7 |
+
+## Getting Started
 
 ```bash
 pnpm install
-cp .env.example .env.local
-pnpm validate
-pnpm test
 pnpm dev
 ```
 
-## What This Provides
-
-- Typed tutorial specification in `src/types/tutorial.ts`.
-- Runtime schema and cross-reference validation in `src/lib/tutorialSpec.ts`.
-- Staged generation pipeline in `src/lib/generationPipeline.ts`.
-- JSON-first prompt templates in `prompts/`.
-- MDX learning components for objectives, prerequisites, terms, callouts, diagrams, flashcards, quizzes, worked examples, exercises, citations, source labels, verification states, narration hooks, mind maps, infographics, and slide embeds.
-- Automated gates for schema validation, MDX compilation, links, citations, accessibility basics, duplicate content, and unsupported-claim signals.
-- GitHub Actions CI in `.github/workflows/ci.yml`.
-
-## Project Structure
-
-```text
-content/
-  module-1/                 # Sample rendered lessons
-  tutorials/                # TutorialSpec JSON fixtures
-docs/                       # Architecture and authoring flow
-prompts/                    # JSON-first generation and repair prompts
-prompts/schemas/            # JSON Schema contracts
-scripts/validate.mjs        # Local quality gates
-src/components/learning.tsx # Reusable MDX education components
-src/lib/                    # Curriculum, MDX, validation, pipeline helpers
-```
+Open [localhost:3000](http://localhost:3000) to browse lessons.
 
 ## Commands
 
 | Command | Description |
-| --- | --- |
-| `pnpm dev` | Start the Next.js dev server |
-| `pnpm preview` | Alias for local preview |
-| `pnpm update:template` | Sync template changes into another instance |
-| `pnpm validate` | Run deterministic content quality gates |
-| `pnpm test` | Run Vitest tests |
+|---------|-------------|
+| `pnpm dev` | Start dev server |
+| `pnpm build` | Production build (standalone server) |
+| `pnpm validate` | Content quality gates (specs, MDX, links, accessibility) |
+| `pnpm test` | Run tests |
 | `pnpm lint` | Run ESLint |
-| `pnpm build` | Build the app |
 
-## Updating From The Template
+## Tech Stack
 
-From an academy instance, call the script in your template checkout:
+- **Next.js 16** with Turbopack and App Router
+- **MDX** lessons with 18+ reusable learning components
+- **Monaco Editor** for syntax-highlighted code blocks
+- **Mermaid** diagrams (flowcharts, sequence diagrams, concept maps)
+- **Tailwind CSS v4** with dark/light theme support
+- **AI Tutor** chat (requires server deployment with Vertex AI credentials)
 
-```bash
-/path/to/learn-template/scripts/update-template.sh
-```
+## Deployment
 
-Or run it from the template checkout and pass the instance path:
+The site deploys to **GitHub Pages** automatically on push to `main` via `.github/workflows/deploy.yml`. The static export excludes server-only features (AI chat tutor, API routes).
 
-```bash
-scripts/update-template.sh --target /path/to/my-academy
-```
-
-The script syncs template-owned files into the target while preserving
-academy-owned files by default:
-
-- `.env*`
-- `academy.config.ts`
-- `content/`
-- `presentations/`
-- `docker-compose.yml`
-- build output and dependency directories
-
-It also preserves the target `package.json` `name` field while still allowing
-dependency and script updates from the template.
-
-Preview changes without writing files:
+For server deployment with AI tutor support, use the standalone build:
 
 ```bash
-scripts/update-template.sh --target /path/to/my-academy --dry-run
+pnpm build
+pnpm start
 ```
 
-If you call the copied script from inside an instance, pass the template source:
+## Authoring
 
-```bash
-pnpm update:template -- --source /path/to/learn-template
-```
-
-## Authoring Flow
-
-1. Create or repair a `TutorialSpec` JSON file with `prompts/01-curriculum-design.md`.
-2. Plan sources and claim coverage before writing lessons.
-3. Generate lesson, assessment, and artifact JSON with the staged prompts.
-4. Move approved MDX into `content/module-N/`.
-5. Run `pnpm validate`, `pnpm test`, `pnpm lint`, and `pnpm build`.
-6. Complete human review for subject matter, accessibility, localization, and any `verify` claims.
-
-See [docs/architecture.md](docs/architecture.md) and [docs/authoring-flow.md](docs/authoring-flow.md) for details.
+Content lives in `content/module-N/` as MDX files. See [CLAUDE.md](CLAUDE.md) for the full authoring guide, component catalog, and quality gate requirements.
 
 ## Requirements
 
 - Node.js 22+
 - pnpm
-- Optional Google Cloud credentials for the AI chat tutor

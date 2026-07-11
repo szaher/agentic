@@ -52,7 +52,8 @@ Each stage builds on the previous one. The vision analysis produces a natural la
 
 The first stage sends an image to Claude's vision API and asks for a detailed analysis. This is the foundation that everything else builds on. If the vision analysis misses something, no downstream stage can recover it.
 
-<CodeBlock code={`import anthropic
+```python
+import anthropic
 import base64
 import json
 from pathlib import Path
@@ -438,7 +439,8 @@ Now we combine all four stages into a single **pipeline orchestrator** that runs
     P->>T: narrate_report(report)
     T-->>P: audio file path
     P->>U: {report, findings, audio_path}
-`} />
+
+```
 
 <CodeBlock code={`@dataclass
 class AnalysisResult:

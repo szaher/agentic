@@ -1,7 +1,11 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useSyncExternalStore } from "react";
 import CodeBlock from "./CodeBlock";
+
+const subscribe = () => () => {};
+const getSnapshot = () => true;
+const getServerSnapshot = () => false;
 
 function extractText(node: unknown): string {
   if (typeof node === "string") return node;
@@ -14,13 +18,9 @@ function extractText(node: unknown): string {
 }
 
 export default function PreBlock({ children, ...props }: React.ComponentPropsWithoutRef<"pre">) {
-  const [mounted, setMounted] = useState(false);
+  const isClient = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
 
-  useEffect(() => {
-    setMounted(true);
-  }, []);
-
-  if (mounted && React.isValidElement(children)) {
+  if (isClient && React.isValidElement(children)) {
     const childProps = children.props as Record<string, unknown>;
     const className = (childProps?.className as string) || "";
     if (className.startsWith("language-")) {

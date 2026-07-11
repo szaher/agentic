@@ -88,7 +88,8 @@ For agent systems, the key fields to include in every log entry are:
 - **status** -- success, failure, or timeout
 - **operation** -- what the agent was doing (e.g., `llm_call`, `tool_execution`, `planning`)
 
-<CodeBlock code={`import json
+```python
+import json
 import logging
 import time
 from datetime import datetime, timezone
@@ -212,7 +213,8 @@ There are three primary strategies for reducing agent costs without sacrificing 
     style T2 fill:#fefcbf,stroke:#d69e2e
     style T3 fill:#fed7d7,stroke:#fc8181
     style CACHED fill:#f0fff4,stroke:#68d391
-`} />
+
+```
 
 **Caching** is the highest-impact optimization. Many agent requests are similar or identical -- a customer asking "what is your return policy?" will hit the same knowledge base and produce the same answer every time. By caching responses keyed on a semantic hash of the input, you can serve repeat requests at near-zero cost. Even a modest cache hit rate of 30% translates to a 30% reduction in LLM spend.
 
@@ -226,7 +228,8 @@ In multi-tenant systems, you need to know not just *how much* you are spending, 
 
 The following code implements a monitoring middleware that tracks both performance metrics and costs, combining structured logging, metrics collection, and cost attribution into a single composable layer.
 
-<CodeBlock code={`import time
+```python
+import time
 import uuid
 from dataclasses import dataclass, field
 from collections import defaultdict
@@ -388,7 +391,8 @@ class MonitoringMiddleware:
 class BudgetExceededError(Exception):
     """Raised when a tenant exceeds their token/cost budget."""
     pass
-`} language="python" filename="monitoring_middleware.py" />
+
+```
 
 This middleware connects several patterns from earlier in the course:
 

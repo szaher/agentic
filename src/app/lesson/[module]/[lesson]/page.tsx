@@ -5,6 +5,19 @@ import { parseMDX } from "@/lib/mdx";
 import { MDXRemote } from "@/components/MDXRemote";
 import type { QuizQuestion } from "@/types";
 
+export const dynamicParams = false;
+
+export async function generateStaticParams() {
+  const curriculum = await getCurriculum();
+  const params: { module: string; lesson: string }[] = [];
+  for (const mod of curriculum.modules) {
+    for (const lesson of mod.lessons) {
+      params.push({ module: String(mod.id), lesson: lesson.slug });
+    }
+  }
+  return params;
+}
+
 interface LessonPageProps {
   params: Promise<{ module: string; lesson: string }>;
 }

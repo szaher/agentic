@@ -1,4 +1,4 @@
-# AI Tutorial Template - Content Author Guide
+# LLM Agents Academy - Content Author Guide
 
 You are building an interactive educational tutorial repository. Prefer structured JSON, deterministic validation, and human-review checkpoints over uncontrolled prose generation.
 
