@@ -589,6 +589,19 @@ response = client.messages.create(
 
 **Problem:** The context is full. The harness must make a decision.
 
+### Context Pressure in Data Agents
+
+Data agents face particularly acute context pressure. When querying enterprise data warehouses, the agent must load:
+
+- **Database schema definitions** — table names, column names, data types, relationships (often 10K-50K tokens for a moderately complex schema)
+- **Metric glossaries** — business definitions for calculated metrics like "Monthly Recurring Revenue" or "Customer Lifetime Value" (5K-20K tokens)
+- **Business rules** — constraints, data quality notes, access policies (3K-10K tokens)
+- **Query result sets** — large result tables from SQL queries (10K-100K+ tokens depending on row count and column width)
+
+A data agent querying a warehouse with hundreds of tables must selectively load only the relevant schema information for the current question, summarize large result sets before adding them to context, and manage the tradeoff between schema breadth (loading many table definitions to avoid missing the right one) and result depth (showing enough rows to answer the question accurately). The harness might allocate 30K tokens for schema, 10K for business context, 60K for query results, and 20K for conversation history, leaving barely enough headroom for the model's reasoning and output.
+
+> Module 14, Lesson 2 covers how data agents manage context assembly with schema definitions, semantic layers, and result summarization to stay within token budgets.
+
 ### Strategy 1: Truncate History
 
 Drop the oldest conversation messages, keeping only the most recent 2 turns.

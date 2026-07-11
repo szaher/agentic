@@ -780,6 +780,10 @@ This pipeline is the practical realization of the defense-in-depth architecture.
 
 **No logging or alerting.** Guardrails that silently block requests without logging make it impossible to detect attack patterns, tune thresholds, or investigate incidents. Every guardrail action -- pass, warn, reject -- should be logged with the relevant context.
 
+## Guardrails in Enterprise Verticals
+
+> The guardrail and safety patterns in this lesson — input validation, output filtering, human-in-the-loop gates, and blast-radius controls — become critical when deploying agents in enterprise verticals. Module 14 applies these production controls to data agents, knowledge agents, DevOps agents, and workflow agents, adding enterprise-specific concerns like identity-based access control, PII masking, regulatory compliance, and audit trails.
+
 ## Summary
 
 **Guardrails** are the safety infrastructure that keeps agent systems operating within acceptable boundaries. A production guardrail pipeline runs in stages: input validation and prompt injection detection *before* the agent, then output filtering, PII redaction, and hallucination checks *after*. **Defense in depth** layers these checks so that no single point of failure exposes the system.

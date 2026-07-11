@@ -180,6 +180,57 @@ tools = [{
 
 The bad definition has 12 parameters with single-word descriptions. The LLM must guess what "Type" means, what valid values for "Format" are, and whether "Limit" refers to results or characters. The good definition has two parameters, both with clear descriptions and a sensible default for the optional one.
 
+### Data Agent Tool Design Example
+
+The same interface design principles apply when building tools for specialized domains. Consider a **data agent** that queries enterprise data warehouses. A well-designed database query tool might look like this:
+
+<CodeBlock code={`tools = [{
+    "name": "query_database",
+    "description": (
+        "Execute a read-only SQL query against the analytics data warehouse. "
+        "Use when the user asks for metrics, reports, or analytics questions "
+        "that require structured data. Returns up to max_rows results. "
+        "DO NOT use this for transactional databases or write operations."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "SQL SELECT query to execute (SELECT statements only)"
+            },
+            "schema_name": {
+                "type": "string",
+                "enum": ["sales", "marketing", "product", "finance"],
+                "description": "Database schema to query - grounds the agent in the right context"
+            },
+            "max_rows": {
+                "type": "integer",
+                "description": "Maximum number of rows to return (default: 100)",
+                "default": 100,
+                "minimum": 1,
+                "maximum": 1000
+            },
+            "read_only": {
+                "type": "boolean",
+                "description": "Enforce read-only mode - rejects UPDATE/DELETE/DROP",
+                "default": true
+            }
+        },
+        "required": ["query", "schema_name"]
+    }
+}]
+`} language="python" filename="data_agent_tool.py" />
+
+Notice the design choices that make this tool safe and effective:
+
+- **Schema grounding** — the `schema_name` enum constrains the agent to known schemas, preventing it from hallucinating table names or accessing unauthorized data.
+- **Cost control** — `max_rows` prevents runaway queries from consuming excessive memory or API quotas.
+- **Safety enforcement** — `read_only` mode prevents accidental data modifications. The tool implementation validates that the query contains only SELECT statements.
+- **Clear scope** — the description explicitly states this is for analytics queries, not transactional operations, helping the agent route requests correctly when multiple database tools are available.
+
+> Module 14 explores data agents in depth, including how tool interface design choices like schema grounding and read-only enforcement shape agent reliability and safety.
+
 **Rule of thumb:** if a parameter can be handled server-side with a reasonable default, do not expose it to the LLM. You can always add parameters later if the agent genuinely needs them.
 
 ## Principle 4: Constrained Types

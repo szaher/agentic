@@ -636,6 +636,20 @@ def run_evaluation(
 
 The `run_evaluation` function supports two modes. In **baseline mode** (`save_baseline=True`), it runs the full pipeline and saves the resulting scores as the baseline for future comparisons. You do this once when your agent reaches a quality level you are satisfied with. In **regression mode** (`baseline_path="baseline.json"`), it runs the pipeline, compares against the saved baseline, and returns `False` if any category dropped below the failure threshold. In CI/CD, a `False` return triggers `sys.exit(1)`, blocking the merge.
 
+## Domain-Specific Evaluation Challenges: Data Agents
+
+Data-agent evaluation is one of the hardest evaluation domains for LLM agents. Unlike general question-answering, data agent evaluation requires **execution-based testing**: run the generated SQL query against a test database and compare the results to known-good answers. This introduces evaluation dimensions that general-purpose benchmarks do not cover:
+
+**Permission compliance testing** — Did the agent only access permitted tables and schemas? A correct answer derived from unauthorized data is a failure, not a success. Your evaluation dataset needs to include test cases where the correct answer requires data the agent should not access, and verify that the agent refuses rather than proceeds.
+
+**Hallucinated-column detection** — Did the agent reference columns that do not exist in the schema? SQL agents frequently hallucinate plausible-sounding column names (`customer_name` instead of `cust_full_name`) that fail at execution time. This is a structural correctness failure distinct from semantic correctness.
+
+**Metric-definition correctness** — Did "revenue" mean gross revenue or net revenue after refunds? Did "active users" mean users who logged in this month or users with non-cancelled subscriptions? The same natural-language question can map to multiple correct SQL queries depending on business definitions. Your golden answers must encode which definition applies, and your judge must understand metric semantics, not just SQL syntax.
+
+The 2026 Data Agent Benchmark (arXiv:2603.20576) found that the best tested frontier model reached only **38% pass@1** on complex enterprise data-agent tasks — a reminder that specialized domains expose capability gaps that general benchmarks miss.
+
+> Module 14, Lesson 2 covers data-agent evaluation in depth, including the semantic layer, evidence trail quality, and write-action autonomy tiers.
+
 ## Integrating the Harness Into Your Workflow
 
 Building the harness is the first step. Making it part of your development workflow is what makes it valuable. The following diagram shows where the evaluation harness fits in a typical agent development cycle.

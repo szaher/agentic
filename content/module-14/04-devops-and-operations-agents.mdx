@@ -1,0 +1,391 @@
+---
+title: "DevOps and Software Operations Agents"
+quiz:
+  - question: "What is the primary difference between read-only and irreversible runbook actions?"
+    options:
+      - "Read-only actions require human approval while irreversible actions do not"
+      - "Read-only actions can be auto-executed while irreversible actions require human approval"
+      - "Read-only actions modify state while irreversible actions only observe"
+      - "Read-only actions are faster while irreversible actions are slower"
+    correctIndex: 1
+    explanation: "Read-only actions (querying logs, checking metrics) can be auto-executed because they don't change state. Irreversible actions (deleting resources, DB schema changes) require human approval because they cannot be undone."
+  - question: "In incident response, what is the purpose of the alert classification step?"
+    options:
+      - "To automatically fix the issue without human intervention"
+      - "To determine severity level (P1-P4) and appropriate response urgency"
+      - "To generate detailed metrics for performance reporting"
+      - "To notify all team members regardless of severity"
+    correctIndex: 1
+    explanation: "Alert classification determines the severity level (P1-P4), which dictates response urgency, escalation paths, and whether automated remediation should proceed or require human approval."
+  - question: "How do enterprise code review agents differ from simple linters?"
+    options:
+      - "They only check syntax errors while linters check style"
+      - "They understand business context, internal API conventions, and organization-specific security policies"
+      - "They run faster than linters on large codebases"
+      - "They replace human code reviewers entirely"
+    correctIndex: 1
+    explanation: "Enterprise code review agents go beyond syntax and style checks to understand business context, internal API conventions, and security policies specific to the organization—context that generic linters cannot capture."
+  - question: "What is the key function of CI/CD agents in build failure triage?"
+    options:
+      - "Automatically deploying code to production after every commit"
+      - "Identifying which test failed, why it failed, and suggesting fixes"
+      - "Deleting failed builds to keep the CI system clean"
+      - "Disabling all tests that fail more than once"
+    correctIndex: 1
+    explanation: "CI/CD triage agents analyze build failures to identify which test failed, understand the failure pattern, and suggest actionable fixes—reducing developer context-switching and debugging time."
+---
+
+## Overview
+
+In Lesson 03, you explored knowledge and support agents that help users find information and resolve issues. This lesson covers DevOps and software operations agents—where agent autonomy is most consequential because a wrong action can take down production systems.
+
+Module 13 introduced computer use agents and coding agents for general automation. This lesson goes deeper into enterprise DevOps, where agents must balance operational efficiency with safety controls. You'll learn how incident response, code review, CI/CD, and runbook automation agents operate within safety tiers that match the blast radius of their actions.
+
+> DevOps agents operate in production environments where errors have real consequences: downtime, data loss, security breaches, and revenue impact.
+
+## Incident Response Agents
+
+Incident response agents automate the initial triage and remediation steps when alerts fire. Their goal is to reduce mean time to resolution (MTTR) by handling routine incidents autonomously and escalating complex issues to human operators with full context.
+
+### The Incident Response Flow
+
+When an alert fires, the incident response agent follows this sequence:
+
+1. **Alert Classification** — Determine severity (P1 critical outage, P2 major degradation, P3 minor issue, P4 informational) based on service impact, affected users, and business hours.
+
+2. **Context Gathering** — Collect logs from affected services, metrics (CPU, memory, request latency, error rates), recent deployment history, and known issues.
+
+3. **Runbook Matching** — Match the alert type and context to known remediation procedures. For example, "high memory usage on service X" maps to "check for memory leaks, restart if OOM, scale replicas if sustained load."
+
+4. **Remediation Execution** — Execute runbook steps within the agent's safety tier. Read-only actions (check logs, list resources) proceed automatically. Reversible actions (scale replicas, toggle feature flags) proceed with logging. Irreversible actions (delete resources, rollback deployments) require human approval.
+
+5. **Escalation** — If remediation fails or the issue is unrecognized, escalate to the on-call engineer with all gathered context.
+
+<MermaidDiagram chart={`sequenceDiagram
+    participant Monitor as Monitoring System
+    participant Agent as Incident Response Agent
+    participant Runbook as Runbook Database
+    participant Infra as Infrastructure
+    participant Human as On-Call Engineer
+
+    Monitor->>Agent: Alert fired (high memory usage)
+    Agent->>Agent: Classify severity (P2)
+    Agent->>Infra: Get logs, metrics, deployment history
+    Infra-->>Agent: Context data
+    Agent->>Runbook: Match alert to remediation procedure
+    Runbook-->>Agent: Runbook: "Check for leaks, restart if OOM, scale if sustained"
+    Agent->>Infra: Execute read-only checks (query memory stats)
+    Infra-->>Agent: Memory usage sustained for 20 minutes
+    Agent->>Infra: Execute reversible action (scale replicas 3→5)
+    Infra-->>Agent: Scaled successfully
+    Agent->>Monitor: Monitor resolution
+    alt Issue resolved
+        Monitor-->>Agent: Memory usage normalized
+        Agent->>Agent: Close incident, log resolution
+    else Issue persists
+        Agent->>Human: Escalate with full context
+        Human->>Infra: Manual investigation
+    end
+
+    style Agent fill:#68d391,stroke:#2f855a,stroke-width:2px
+    style Human fill:#fc8181,stroke:#c53030,stroke-width:2px
+    style Infra fill:#90cdf4,stroke:#2c5282,stroke-width:2px
+`} />
+
+> Incident response agents reduce MTTR by automating routine steps, gathering context before escalation, and executing safe remediation within defined safety tiers.
+
+### Alert Triage and Classification
+
+Alert classification determines how the agent proceeds. High-severity alerts (P1, P2) trigger immediate action and human notification. Lower-severity alerts (P3, P4) may be queued for business hours or handled entirely by the agent.
+
+Classification criteria include:
+
+- **Service Impact** — Is a customer-facing service down? Are internal tools affected?
+- **Affected Users** — How many users are impacted? Are they external customers or internal employees?
+- **Business Hours** — Is this during peak traffic or off-hours?
+- **Known Issues** — Does this match a recent deployment or a known bug?
+
+## Code Review Agents
+
+Code review agents augment human reviewers by automating mechanical checks and surfacing issues that require domain expertise. They integrate with version control systems to analyze pull requests before they merge.
+
+### Beyond Simple Linters
+
+While linters check syntax and style, enterprise code review agents understand:
+
+- **Business Context** — "This API endpoint handles payment processing, so it must include fraud detection checks per our security policy."
+- **Internal API Conventions** — "This service uses our internal RPC framework, which requires request IDs for tracing. This call is missing one."
+- **Organization-Specific Security Policies** — "This function logs user data, which violates our PII retention policy. Use the sanitized logging wrapper instead."
+
+Code review agents also perform static analysis (null pointer risks, resource leaks), security scanning (dependency vulnerabilities, hardcoded secrets), and style enforcement (naming conventions, documentation requirements).
+
+### Integration with Human Review
+
+Code review agents do not replace human reviewers. They handle mechanical checks so humans can focus on design decisions, algorithmic correctness, and maintainability. The typical flow:
+
+1. Developer opens pull request.
+2. Agent runs automated checks (tests, linters, security scans, policy validation).
+3. Agent posts inline comments on specific lines that violate policies or conventions.
+4. Developer addresses agent feedback.
+5. Human reviewer evaluates design, logic, and context that agents cannot assess.
+
+## CI/CD Agents
+
+Continuous Integration and Continuous Deployment (CI/CD) agents automate build, test, and deployment workflows. They triage failures, detect flaky tests, and manage deployment gates.
+
+### Build Failure Triage
+
+When a build fails, the CI/CD agent:
+
+1. **Identifies the Failing Test** — Parse build logs to locate the test name, failure message, and stack trace.
+2. **Analyzes the Failure Pattern** — Is this a new failure or a known flaky test? Did it fail on one platform but pass on others?
+3. **Searches for Related Code** — Locate the test file, the code under test, and recent changes that might have caused the failure.
+4. **Suggests Fixes** — Propose a fix based on the failure type (assertion mismatch, timeout, dependency issue).
+
+This reduces developer context-switching: instead of manually digging through logs, the developer receives a summary with suggested next steps.
+
+### Flaky Test Detection
+
+Flaky tests pass or fail non-deterministically, often due to race conditions, timing dependencies, or environmental state. CI/CD agents detect flaky tests by tracking test results across multiple runs:
+
+- A test that fails 30% of the time is flaky.
+- A test that fails consistently after a specific commit is a real regression.
+
+Once detected, flaky tests are flagged, quarantined (run separately to avoid blocking CI), or automatically retried.
+
+### Deployment Gate Management
+
+Before deploying to production, CI/CD agents check deployment gates:
+
+- **Test Coverage** — Does the new code meet the required coverage threshold (e.g., 80% line coverage)?
+- **Performance Benchmarks** — Do response times stay within acceptable bounds?
+- **Security Scans** — Are there known vulnerabilities in dependencies?
+- **Manual Approval** — For high-risk changes, does a human need to approve?
+
+The agent makes automated go/no-go decisions for routine deployments and escalates risky deployments to human operators.
+
+## Runbook Automation with Safety Tiers
+
+Runbooks are documented procedures for handling operational tasks: restarting a service, scaling infrastructure, rolling back a deployment. DevOps agents automate runbook execution, but not all runbook actions are equally safe.
+
+### Three Safety Tiers
+
+DevOps actions fall into three tiers based on reversibility and blast radius:
+
+1. **Read-Only** — Querying logs, checking metrics, listing pods, inspecting configurations. These actions observe state without modifying it. **Auto-execute.**
+
+2. **Reversible** — Scaling replicas (can scale back down), toggling feature flags (can toggle back), restarting services (service recovers). These actions modify state but can be undone. **Execute with logging.**
+
+3. **Irreversible** — Deleting resources (cannot restore deleted data), database schema changes (migrations are hard to reverse), rollback deployments (can cause data inconsistency). These actions cannot be undone or have severe consequences. **Require human approval.**
+
+This is the blast radius pattern from Module 12 (Production, Deployment and Safety): match autonomy to the reversibility of the action.
+
+<DataTable 
+  headers={["Safety Tier", "Example Actions", "Autonomy Level", "Rationale"]}
+  rows={[
+    ["Read-Only", "Query logs, check metrics, list pods, inspect config", "Auto-execute", "No state modification, no risk"],
+    ["Reversible", "Scale replicas, toggle feature flags, restart services", "Execute with logging", "Can be undone, low blast radius"],
+    ["Irreversible", "Delete resources, DB schema changes, rollback deployments", "Human approval required", "Cannot be undone, high blast radius"]
+  ]}
+/>
+
+> Safety tiers ensure that DevOps agents operate autonomously within safe boundaries and escalate risky actions to humans.
+
+## Code Example: CI/CD Triage Agent
+
+This example demonstrates a CI/CD triage agent that analyzes build failures and suggests fixes. The agent uses four tools: `get_build_logs`, `get_test_results`, `search_code`, and `suggest_fix`.
+
+<CodeBlock code={`import anthropic
+import json
+
+# Tool definitions
+tools = [
+    {
+        "name": "get_build_logs",
+        "description": "Retrieve build logs for a specific build ID. Returns the full log output from the CI system.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "build_id": {
+                    "type": "string",
+                    "description": "The unique identifier for the build"
+                }
+            },
+            "required": ["build_id"]
+        }
+    },
+    {
+        "name": "get_test_results",
+        "description": "Retrieve detailed test results for a build, including which tests passed, failed, or were skipped.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "build_id": {
+                    "type": "string",
+                    "description": "The unique identifier for the build"
+                }
+            },
+            "required": ["build_id"]
+        }
+    },
+    {
+        "name": "search_code",
+        "description": "Search the codebase for files, functions, or symbols. Returns file paths and line numbers.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "The search query (file name, function name, or keyword)"
+                },
+                "file_type": {
+                    "type": "string",
+                    "description": "Optional file extension to filter results (e.g., 'py', 'js')"
+                }
+            },
+            "required": ["query"]
+        }
+    },
+    {
+        "name": "suggest_fix",
+        "description": "Generate a fix suggestion based on test failure information and code context.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "test_name": {
+                    "type": "string",
+                    "description": "The name of the failing test"
+                },
+                "failure_message": {
+                    "type": "string",
+                    "description": "The error message or assertion failure"
+                },
+                "code_context": {
+                    "type": "string",
+                    "description": "Relevant code snippets from the test and implementation"
+                }
+            },
+            "required": ["test_name", "failure_message", "code_context"]
+        }
+    }
+]
+
+# Mock tool execution (replace with real implementations)
+def execute_tool(tool_name, tool_input):
+    if tool_name == "get_build_logs":
+        return "Build log snippet: Error in test_payment_processing.py::test_fraud_detection\\nAssertionError: expected True, got False"
+    elif tool_name == "get_test_results":
+        return json.dumps({
+            "total": 145,
+            "passed": 143,
+            "failed": 2,
+            "skipped": 0,
+            "failures": [
+                {
+                    "name": "test_fraud_detection",
+                    "file": "test_payment_processing.py",
+                    "message": "AssertionError: expected True, got False"
+                }
+            ]
+        })
+    elif tool_name == "search_code":
+        return "Found: src/payment/fraud_detection.py:42 - def check_fraud_score(transaction)"
+    elif tool_name == "suggest_fix":
+        return "The test expects check_fraud_score to return True for transactions with score < 50. Review the logic at line 42."
+    return "Tool execution failed"
+
+# System prompt with safety-tier awareness
+system_prompt = """You are a CI/CD triage agent that analyzes build failures and suggests fixes.
+
+Your workflow:
+1. Retrieve build logs and test results
+2. Identify which test failed and why
+3. Search the codebase for relevant files
+4. Suggest a fix based on the failure pattern
+
+Safety tier awareness:
+- You can read logs, test results, and code (read-only tier)
+- You can suggest fixes (advisory output)
+- You cannot modify code or restart builds (requires human action)
+
+Be concise and actionable. Focus on the failure, the likely cause, and the next step for the developer."""
+
+# Agentic loop
+client = anthropic.Anthropic()
+
+def run_triage_agent(build_id):
+    messages = [{
+        "role": "user",
+        "content": f"Analyze build {build_id} and suggest a fix for any failures."
+    }]
+    
+    while True:
+        response = client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=4096,
+            system=system_prompt,
+            tools=tools,
+            messages=messages
+        )
+        
+        # Append assistant response
+        messages.append({
+            "role": "assistant",
+            "content": response.content
+        })
+        
+        # Check if done
+        if response.stop_reason == "end_turn":
+            final_text = next(
+                (block.text for block in response.content if hasattr(block, "text")),
+                None
+            )
+            return final_text
+        
+        # Execute tool calls
+        if response.stop_reason == "tool_use":
+            tool_results = []
+            for block in response.content:
+                if block.type == "tool_use":
+                    result = execute_tool(block.name, block.input)
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": result
+                    })
+            
+            # Append tool results
+            messages.append({
+                "role": "user",
+                "content": tool_results
+            })
+
+# Example usage
+result = run_triage_agent("build-12345")
+print(result)
+`} language="python" filename="cicd_triage_agent.py" />
+
+This agent demonstrates:
+
+- **Safety tier compliance** — The agent can read logs and suggest fixes but cannot modify code or restart builds.
+- **Multi-step reasoning** — The agent retrieves logs, identifies failures, searches code, and proposes fixes across multiple tool calls.
+- **Actionable output** — The final response tells the developer what failed, where to look, and what to fix.
+
+## Enterprise Controls Used in This Vertical
+
+DevOps agents operate in high-stakes environments where errors can cause outages, data loss, or security breaches. Enterprise controls ensure agents operate safely:
+
+- **Blast-Radius Limits** — Actions are categorized by safety tier (read-only, reversible, irreversible). High-risk actions require human approval.
+- **Change Management Approval Gates** — Deployments to production, schema changes, and infrastructure modifications go through approval workflows.
+- **Incident Audit Trail** — Every action the agent takes is logged with timestamp, user context, and outcome. Logs are immutable and retained for compliance.
+- **Rollback Authorization** — Only authorized users (e.g., on-call engineers, release managers) can approve rollbacks or irreversible operations.
+
+These controls mirror the production safety patterns from Module 12: start with restrictive defaults, expand autonomy incrementally, and always maintain an audit trail.
+
+## Summary
+
+DevOps and software operations agents automate incident response, code review, CI/CD workflows, and runbook execution. They reduce toil and improve reliability, but they operate in environments where mistakes have real consequences.
+
+The key to safe DevOps automation is safety tiers: read-only actions proceed automatically, reversible actions execute with logging, and irreversible actions require human approval. This ensures agents stay within safe boundaries while maximizing operational efficiency.
+
+In Lesson 05, you'll explore workflow and back-office agents—the engines behind document processing, approval chains, and structured business processes.

@@ -1,0 +1,450 @@
+---
+title: "Workflow and Back-Office Agents"
+quiz:
+  - question: "How do workflow agents differ from research or coding agents?"
+    options:
+      - "Workflow agents follow structured processes while research agents reason open-endedly"
+      - "Workflow agents are faster than research agents"
+      - "Workflow agents require more memory than research agents"
+      - "Workflow agents only work with text while research agents work with code"
+    correctIndex: 0
+    explanation: "Workflow agents follow well-defined, structured processes with known steps and error-handling paths. Research and coding agents reason open-endedly to solve novel problems. The workflow agent's value is reliable execution, not creative problem-solving."
+  - question: "What is the purpose of segregation of duties in approval workflows?"
+    options:
+      - "To ensure the person who submits a request cannot also approve it"
+      - "To allow anyone to approve any request for efficiency"
+      - "To reduce the number of approval steps in a workflow"
+      - "To prevent agents from accessing any approval workflows"
+    correctIndex: 0
+    explanation: "Segregation of duties prevents conflicts of interest by ensuring that the person who submits a request cannot approve it themselves. This control is fundamental to financial and procurement processes."
+  - question: "In document processing, what is the purpose of validation after extraction?"
+    options:
+      - "To convert the document to a different format"
+      - "To verify that extracted data is internally consistent and meets business rules"
+      - "To delete the original document after processing"
+      - "To send the document to all stakeholders"
+    correctIndex: 1
+    explanation: "Validation checks that extracted data is internally consistent (e.g., invoice totals match line items) and meets business rules (e.g., dates are valid, vendor IDs exist). This prevents downstream errors from bad data."
+  - question: "What is the highest autonomy tier for workflow agents in write-action operations?"
+    options:
+      - "Read-only lookup"
+      - "Field update"
+      - "Bulk operations"
+      - "Approval/rejection"
+    correctIndex: 2
+    explanation: "Bulk operations (batch processing, mass updates) are the highest autonomy tier because they affect many records at once and have the largest blast radius. They require the most careful authorization and auditing."
+---
+
+## Overview
+
+In Lesson 04, you explored DevOps agents that automate incident response, code review, and CI/CD workflows. This lesson covers workflow and back-office agents—the engines behind document processing, approval chains, procurement, and structured business processes.
+
+These agents handle high-volume, repetitive tasks where manual processing is slow and error-prone. Unlike research or coding agents that reason open-endedly, workflow agents follow structured processes with well-defined steps, error handling at each step, and human escalation when the process breaks down.
+
+This lesson draws on control flow patterns from Module 5 (conditional branching, loops, error handling) and multi-agent coordination from Module 10 (delegation, handoffs, shared state).
+
+> Workflow agents deliver value through reliable execution of known processes, not creative problem-solving.
+
+## Structured Process Execution vs Free-Form Reasoning
+
+Workflow agents differ fundamentally from research, coding, or analysis agents:
+
+| Dimension | Workflow Agents | Research/Coding Agents |
+|-----------|-----------------|------------------------|
+| **Problem Type** | Well-defined, repeatable processes | Novel, open-ended problems |
+| **Value Proposition** | Reliable execution, error handling, audit trail | Creative solutions, synthesis, code generation |
+| **Success Metric** | Process completion rate, error rate, cycle time | Solution quality, correctness, user satisfaction |
+| **Failure Mode** | Process breaks down, data invalid, rule violated | Incorrect reasoning, wrong solution, hallucination |
+| **Human Role** | Define rules, approve exceptions, resolve errors | Provide goals, evaluate solutions, refine requirements |
+
+A workflow agent's value is in consistent, auditable execution of structured steps—not in discovering new solutions or reasoning about ambiguous situations.
+
+### When Workflows Break Down
+
+Workflow agents escalate to humans when:
+
+- **Data Does Not Match Rules** — An invoice amount exceeds the budget, a vendor is not in the approved list, a date is invalid.
+- **External System Failure** — The ERP system is down, the approval API times out, the document storage is unavailable.
+- **Ambiguous Input** — The document format is unrecognized, multiple vendors match the extracted name, the request type is unclear.
+- **Policy Exception** — A purchase request needs executive approval outside the normal chain, a contract requires legal review, a refund exceeds standard limits.
+
+In these cases, the agent hands off to a human with full context: the original request, attempted steps, error details, and recommended next actions.
+
+## Document Processing
+
+Document processing agents ingest, extract, classify, and validate structured information from unstructured documents: invoices, purchase orders, contracts, receipts, forms.
+
+### The Document Processing Pipeline
+
+1. **Ingestion** — Receive document (PDF, image, email attachment) and convert to processable format (text extraction, OCR for scanned images).
+
+2. **Classification** — Determine document type (invoice, purchase order, receipt, contract amendment) to apply the correct extraction template.
+
+3. **Extraction** — Extract named entities: vendor name, invoice number, line items, amounts, dates, tax IDs, purchase order references.
+
+4. **Validation** — Check internal consistency (does the total match the sum of line items?) and business rules (is the date within fiscal year? is the vendor approved? does the amount require VP approval?).
+
+5. **Routing** — Send the document to the next step in the workflow (approval, payment processing, archive) or flag for human review if validation fails.
+
+This pipeline combines structured output patterns from Module 2 (extraction with JSON schemas) with domain-specific validation logic.
+
+### Example: Invoice Processing
+
+An invoice processing agent extracts:
+
+- Vendor name and ID
+- Invoice number
+- Invoice date
+- Due date
+- Line items (description, quantity, unit price, total)
+- Subtotal, tax, total amount
+- Payment terms
+- Purchase order reference (if present)
+
+It then validates:
+
+- Total = subtotal + tax
+- Line item totals = sum of (quantity × unit price)
+- Vendor ID exists in approved vendor list
+- Invoice date ≤ today
+- Due date > invoice date
+- Purchase order reference exists (if required)
+
+If validation passes, the invoice moves to approval routing. If validation fails, the agent flags specific errors (e.g., "Total mismatch: expected $1,234.56, got $1,235.00") and escalates to accounts payable.
+
+## Approval Chain Orchestration
+
+Approval workflows route requests through a chain of approvers based on business rules. Workflow agents automate routing, delegation, escalation, and segregation of duties.
+
+### Approval Routing Rules
+
+Common routing patterns:
+
+- **Amount Thresholds** — Purchases under $1,000: auto-approve. $1,000–$10,000: manager approval. Over $10,000: VP approval.
+- **Requester Role** — Requests from executives: expedited approval. Requests from contractors: additional verification.
+- **Category-Specific Rules** — IT purchases: CTO approval. Marketing spend: CMO approval. Legal services: General Counsel approval.
+- **Segregation of Duties** — The requester cannot approve their own request. The approver cannot be the requester's direct report.
+
+### Delegation and Escalation
+
+Delegation handles temporary unavailability:
+
+- Approver is out of office → route to designated delegate
+- Approver does not respond within 48 hours → escalate to their manager
+- Request is urgent → notify approver and escalate in parallel
+
+Escalation ensures requests do not stall:
+
+- Pending for more than 2 business days → remind approver
+- Pending for more than 5 business days → escalate to next level
+- Pending for more than 10 business days → route to executive oversight
+
+<MermaidDiagram chart={`flowchart TD
+    Start[Purchase Request Submitted] --> Check{Amount?}
+    Check -->|< $1K| AutoApprove[Auto-Approve]
+    Check -->|$1K - $10K| Manager[Route to Manager]
+    Check -->|> $10K| VP[Route to VP]
+    
+    Manager --> ManagerAvail{Manager Available?}
+    ManagerAvail -->|Yes| ManagerReview[Manager Reviews]
+    ManagerAvail -->|No| Delegate[Route to Delegate]
+    
+    ManagerReview --> ManagerDecision{Approved?}
+    Delegate --> ManagerDecision
+    ManagerDecision -->|Yes| Process[Process Purchase]
+    ManagerDecision -->|No| Reject[Reject Request]
+    ManagerDecision -->|No Response 48h| EscalateVP[Escalate to VP]
+    
+    VP --> VPReview[VP Reviews]
+    VPReview --> VPDecision{Approved?}
+    VPDecision -->|Yes| Process
+    VPDecision -->|No| Reject
+    VPDecision -->|No Response 48h| EscalateExec[Escalate to Executive]
+    
+    EscalateVP --> VPReview
+    EscalateExec --> ExecReview[Executive Reviews]
+    ExecReview --> Process
+    
+    AutoApprove --> Process
+    Process --> Done[Request Complete]
+    Reject --> Done
+
+    style Start fill:#68d391,stroke:#2f855a,stroke-width:2px
+    style Process fill:#68d391,stroke:#2f855a,stroke-width:2px
+    style Reject fill:#fc8181,stroke:#c53030,stroke-width:2px
+    style Done fill:#90cdf4,stroke:#2c5282,stroke-width:2px
+`} />
+
+> Approval chain orchestration ensures requests move through the correct sequence of reviewers while handling delegation, escalation, and exceptions.
+
+### Segregation of Duties
+
+Segregation of duties prevents conflicts of interest. Common controls:
+
+- **Requester ≠ Approver** — The person who submits the request cannot approve it.
+- **Approver ≠ Processor** — The person who approves the payment cannot process the payment.
+- **Dual Approval** — High-value transactions require two independent approvals.
+
+Workflow agents enforce these rules automatically, rejecting or rerouting requests that violate segregation policies.
+
+## Integration Patterns
+
+Workflow agents integrate with enterprise systems through APIs, webhooks, or MCP servers:
+
+- **Ticketing Systems** — Jira, ServiceNow, Zendesk — create tickets, update status, assign to users, close tickets.
+- **ERP (Enterprise Resource Planning)** — SAP, Oracle, Microsoft Dynamics — read vendor records, create purchase orders, update inventory, post journal entries.
+- **CRM (Customer Relationship Management)** — Salesforce, HubSpot, Zoho — read account data, update contact records, log interactions.
+- **Email and Calendaring** — Outlook, Gmail, Google Calendar — send notifications, schedule approvals, parse inbound requests.
+- **HRIS (Human Resources Information System)** — Workday, BambooHR — verify employee records, check manager hierarchy, enforce approval chains based on org structure.
+
+Each integration requires:
+
+- **Authentication** — API keys, OAuth tokens, service accounts.
+- **Rate Limiting** — Respect API quotas, batch requests, retry with exponential backoff.
+- **Error Handling** — Handle timeouts, invalid responses, partial failures.
+- **Audit Logging** — Record every API call for compliance and debugging.
+
+For systems without APIs, agents may use email parsing (extract structured data from email requests), web scraping (read data from internal portals), or RPA (robotic process automation) to interact with legacy UIs.
+
+## Write-Action Autonomy Tiers for Workflow Agents
+
+Workflow agents perform write operations (create, update, approve) on business records. Autonomy tiers match the blast radius of each operation:
+
+<DataTable 
+  headers={["Tier", "Operations", "Blast Radius", "Autonomy Level"]}
+  rows={[
+    ["Read-Only Lookup", "View records, query databases, retrieve documents", "None (no state change)", "Auto-execute"],
+    ["Record Creation", "Create new ticket, add document entry, log interaction", "Single record", "Auto-execute with validation"],
+    ["Field Update", "Change status, update metadata, add comment", "Single record field", "Auto-execute with audit log"],
+    ["Approval/Rejection", "Approve purchase request, reject refund, sign-off on review", "Workflow state + downstream effects", "Conditional auto-execute (within policy) or human approval (exception)"],
+    ["Bulk Operations", "Batch status updates, mass reassignment, bulk import", "Many records", "Human approval required"]
+  ]}
+/>
+
+> Higher autonomy tiers require stronger controls: validation, audit logging, human approval for exceptions, and rollback capability.
+
+### Autonomy Level Guidelines
+
+- **Auto-Execute** — Actions that follow strict validation rules and have low blast radius (single record, reversible, no financial impact).
+- **Auto-Execute with Audit Log** — Actions that modify important fields but are reversible and within normal business operations.
+- **Conditional Auto-Execute** — Actions that follow policy within normal parameters (e.g., auto-approve purchases under $1,000) but require human approval for exceptions (e.g., purchases over threshold, unapproved vendors).
+- **Human Approval Required** — Actions with high blast radius (affect many records), irreversible consequences (financial commitments, legal obligations), or policy exceptions.
+
+## Code Example: Procurement Approval Agent
+
+This example demonstrates a procurement approval agent that routes purchase requests through a multi-step workflow based on amount and requester role.
+
+<CodeBlock code={`import anthropic
+import json
+
+# Tool definitions
+tools = [
+    {
+        "name": "get_purchase_request",
+        "description": "Retrieve details of a purchase request by ID.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "request_id": {
+                    "type": "string",
+                    "description": "The unique identifier for the purchase request"
+                }
+            },
+            "required": ["request_id"]
+        }
+    },
+    {
+        "name": "check_budget",
+        "description": "Check if the requested amount is within the department's available budget.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "department": {
+                    "type": "string",
+                    "description": "The department code (e.g., 'ENG', 'MKT', 'SALES')"
+                },
+                "amount": {
+                    "type": "number",
+                    "description": "The requested purchase amount"
+                }
+            },
+            "required": ["department", "amount"]
+        }
+    },
+    {
+        "name": "route_for_approval",
+        "description": "Route the purchase request to the appropriate approver based on amount and policy.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "request_id": {
+                    "type": "string",
+                    "description": "The purchase request ID"
+                },
+                "approver_role": {
+                    "type": "string",
+                    "description": "The approver role: 'auto', 'manager', 'vp', 'cfo'"
+                },
+                "reason": {
+                    "type": "string",
+                    "description": "The reason for this routing decision"
+                }
+            },
+            "required": ["request_id", "approver_role", "reason"]
+        }
+    },
+    {
+        "name": "update_request_status",
+        "description": "Update the status of a purchase request (pending, approved, rejected, escalated).",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "request_id": {
+                    "type": "string",
+                    "description": "The purchase request ID"
+                },
+                "status": {
+                    "type": "string",
+                    "description": "The new status",
+                    "enum": ["pending", "approved", "rejected", "escalated"]
+                },
+                "note": {
+                    "type": "string",
+                    "description": "Optional note explaining the status change"
+                }
+            },
+            "required": ["request_id", "status"]
+        }
+    }
+]
+
+# Mock tool execution (replace with real implementations)
+def execute_tool(tool_name, tool_input):
+    if tool_name == "get_purchase_request":
+        return json.dumps({
+            "request_id": tool_input["request_id"],
+            "requester": "alice@example.com",
+            "department": "ENG",
+            "amount": 8500.00,
+            "description": "5 developer laptops",
+            "vendor": "Acme Tech Supplies",
+            "submitted_date": "2026-07-10"
+        })
+    elif tool_name == "check_budget":
+        # Simulate budget check
+        available = 50000.00
+        requested = tool_input["amount"]
+        return json.dumps({
+            "available": available,
+            "requested": requested,
+            "sufficient": requested <= available
+        })
+    elif tool_name == "route_for_approval":
+        return f"Request {tool_input['request_id']} routed to {tool_input['approver_role']}: {tool_input['reason']}"
+    elif tool_name == "update_request_status":
+        note = tool_input.get("note", "")
+        return f"Request {tool_input['request_id']} status updated to {tool_input['status']}. Note: {note}"
+    return "Tool execution failed"
+
+# System prompt with approval policy
+system_prompt = """You are a procurement approval agent that routes purchase requests through the approval workflow.
+
+Approval Policy:
+- Amounts under $1,000: Auto-approve (no human review needed)
+- Amounts $1,000 - $10,000: Manager approval required
+- Amounts over $10,000: VP approval required
+- Amounts over $50,000: CFO approval required
+
+Segregation of Duties:
+- The requester cannot approve their own request
+- Verify budget availability before routing
+
+Workflow:
+1. Retrieve the purchase request details
+2. Check budget availability
+3. Apply routing rules based on amount
+4. Route to appropriate approver or auto-approve
+5. Update request status
+
+Be concise and follow the policy exactly. Log your reasoning for each routing decision."""
+
+# Agentic loop
+client = anthropic.Anthropic()
+
+def run_procurement_agent(request_id):
+    messages = [{
+        "role": "user",
+        "content": f"Process purchase request {request_id} and route it appropriately."
+    }]
+    
+    while True:
+        response = client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=4096,
+            system=system_prompt,
+            tools=tools,
+            messages=messages
+        )
+        
+        # Append assistant response
+        messages.append({
+            "role": "assistant",
+            "content": response.content
+        })
+        
+        # Check if done
+        if response.stop_reason == "end_turn":
+            final_text = next(
+                (block.text for block in response.content if hasattr(block, "text")),
+                None
+            )
+            return final_text
+        
+        # Execute tool calls
+        if response.stop_reason == "tool_use":
+            tool_results = []
+            for block in response.content:
+                if block.type == "tool_use":
+                    result = execute_tool(block.name, block.input)
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": result
+                    })
+            
+            # Append tool results
+            messages.append({
+                "role": "user",
+                "content": tool_results
+            })
+
+# Example usage
+result = run_procurement_agent("PR-2026-00123")
+print(result)
+`} language="python" filename="procurement_approval_agent.py" />
+
+This agent demonstrates:
+
+- **Policy Enforcement** — The system prompt encodes approval thresholds ($1K, $10K, $50K) and segregation-of-duty rules.
+- **Multi-Step Workflow** — The agent retrieves the request, checks budget, applies routing rules, and updates status across multiple tool calls.
+- **Audit Trail** — Each routing decision includes a reason (e.g., "Amount $8,500 requires manager approval per policy"), creating an audit trail.
+- **Autonomy Tiers** — Auto-approval for amounts under $1,000 (low blast radius), human approval for higher amounts (higher blast radius).
+
+## Enterprise Controls Used in This Vertical
+
+Workflow and back-office agents handle sensitive business processes: financial transactions, legal agreements, employee data. Enterprise controls ensure agents operate within policy boundaries:
+
+- **Segregation of Duties** — Prevents conflicts of interest by enforcing role separation (requester ≠ approver, approver ≠ processor).
+- **Approval Chain Integrity** — Routes requests through the correct sequence of approvers based on amount, category, and organizational hierarchy. Escalates when approvers are unavailable or unresponsive.
+- **Document Retention** — Archives all processed documents (invoices, contracts, forms) with metadata (processing date, extracted fields, validation results) for compliance and audit.
+- **Regulatory Audit** — Maintains immutable logs of every agent action (what was processed, when, by which agent, with what outcome) to satisfy financial, legal, and industry-specific regulations (SOX, GDPR, HIPAA).
+
+These controls mirror the production safety patterns from Module 12: explicit authorization, comprehensive audit trails, and fail-safe defaults.
+
+## Summary
+
+Workflow and back-office agents automate document processing, approval chains, procurement, and structured business processes. They deliver value through reliable, auditable execution of well-defined workflows—not through creative problem-solving.
+
+The key to safe workflow automation is autonomy tiers matched to blast radius: read-only operations auto-execute, single-record writes proceed with validation, approvals follow policy rules, and bulk operations require human approval. Segregation of duties, approval chain integrity, and comprehensive audit trails ensure agents operate within enterprise policy boundaries.
+
+In Lesson 06, you'll explore Governance, Risk, and Compliance (GRC) agents—how agents support regulatory compliance, risk assessment, and audit workflows.

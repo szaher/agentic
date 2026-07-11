@@ -1,6 +1,6 @@
 # LLM Agents Academy
 
-A comprehensive, interactive tutorial on building LLM-powered agents — from foundations through production deployment. 13 modules, 94 lessons, built with Next.js 16, MDX, and Monaco Editor.
+A comprehensive, interactive tutorial on building LLM-powered agents — from foundations through production deployment. 14 modules, 101 lessons, built with Next.js 16, MDX, and Monaco Editor.
 
 **Live site:** [szaher.github.io/agentic](https://szaher.github.io/agentic/)
 
@@ -21,6 +21,7 @@ A comprehensive, interactive tutorial on building LLM-powered agents — from fo
 | 11 | Evaluation & Testing | 6 |
 | 12 | Production, Deployment & Safety | 7 |
 | 13 | Advanced Patterns & Real-World Applications | 7 |
+| 14 | Enterprise Agent Applications | 7 |
 
 ## Getting Started
 

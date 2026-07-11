@@ -1,5 +1,5 @@
 ---
-title: "Domain-Specific Agents"
+title: "Domain-Specific Agent Design Template"
 quiz:
   - question: "What is the primary purpose of a compliance layer in a domain-specific agent architecture?"
     options:
@@ -105,46 +105,21 @@ The four layers work together in every request:
 - **Compliance & Guardrails Layer** enforces the rules of the domain. Every vertical has constraints that the agent must respect -- regulatory requirements, internal policies, escalation thresholds. Module 11 (Guardrails) introduced these patterns; domain-specific agents make them non-negotiable.
 - **Domain-Specific Evaluation** measures success in the domain's own terms. A customer support agent is measured by resolution rate and customer satisfaction, not by generic LLM benchmarks. Module 12 (Evaluation) gave you the evaluation framework; here you fill it with domain-relevant metrics.
 
-## Four Domains Compared
+## Applying the Template Across Verticals
 
-Before diving into each domain, here is a side-by-side comparison of how the template instantiates differently across verticals.
+The same four-layer architecture applies to any domain. The template is reusable; the domain knowledge is not. This is the central insight: **you do not need to invent a new agent architecture for every vertical -- you need to deeply understand each domain's knowledge, tools, constraints, and success metrics**.
 
-<MermaidDiagram chart={`graph LR
-    subgraph CS["Customer Support"]
-        CS1["Knowledge: FAQs,<br/>product docs, ticket history"]
-        CS2["Tools: Ticketing API,<br/>CRM lookup, KB search"]
-        CS3["Compliance: SLA timers,<br/>escalation policies,<br/>tone guidelines"]
-        CS4["Eval: Resolution rate,<br/>CSAT, escalation %"]
-    end
+The table below previews how the template instantiates across enterprise verticals. Module 14 applies this template in depth to each of these domains.
 
-    subgraph DA["Data Analysis"]
-        DA1["Knowledge: Schema docs,<br/>metric definitions,<br/>past queries"]
-        DA2["Tools: SQL engine,<br/>charting library,<br/>data catalog"]
-        DA3["Compliance: Data access<br/>controls, PII masking,<br/>query cost limits"]
-        DA4["Eval: Query correctness,<br/>insight relevance,<br/>execution time"]
-    end
-
-    subgraph DO["DevOps"]
-        DO1["Knowledge: Runbooks,<br/>architecture docs,<br/>incident history"]
-        DO2["Tools: Log aggregator,<br/>metrics API, CI/CD,<br/>alerting system"]
-        DO3["Compliance: Change mgmt<br/>approval, blast radius<br/>limits, rollback rules"]
-        DO4["Eval: MTTR, false positive<br/>rate, runbook accuracy"]
-    end
-
-    subgraph EW["Enterprise Workflow"]
-        EW1["Knowledge: Process maps,<br/>org chart, regulatory<br/>requirements"]
-        EW2["Tools: Document parser,<br/>approval engine,<br/>ERP/CRM APIs"]
-        EW3["Compliance: Approval chains,<br/>audit requirements,<br/>data retention"]
-        EW4["Eval: Processing time,<br/>accuracy rate,<br/>compliance score"]
-    end
-
-    style CS fill:#ebf8ff,stroke:#3182ce,stroke-width:2px
-    style DA fill:#f0fff4,stroke:#276749,stroke-width:2px
-    style DO fill:#faf5ff,stroke:#6b46c1,stroke-width:2px
-    style EW fill:#fefcbf,stroke:#d69e2e,stroke-width:2px
-`} />
-
-Notice how each domain fills the same four slots with entirely different content. The architecture is reusable; the domain knowledge is not. This is the central insight: **you do not need to invent a new agent architecture for every vertical -- you need to deeply understand each domain's knowledge, tools, constraints, and success metrics**.
+<DataTable
+  headers={["Vertical", "Knowledge Layer", "Key Tools", "Critical Guardrails"]}
+  rows={[
+    ["Data & Analytics", "Schemas, metric definitions, business glossary", "SQL engines, semantic models, visualization", "Read-only enforcement, PII masking, query cost limits"],
+    ["Knowledge & Support", "FAQs, product docs, ticket history", "Ticketing API, CRM, KB search", "SLA timers, escalation policies, tone guidelines"],
+    ["DevOps & Operations", "Runbooks, architecture docs, incident history", "Log aggregators, CI/CD, alerting", "Blast radius limits, change approval, rollback rules"],
+    ["Workflow & Back-Office", "Process maps, org chart, regulations", "Document parser, approval engine, ERP/CRM", "Approval chains, audit trails, data retention"],
+  ]}
+/>
 
 ## Customer Support Agents
 
@@ -179,101 +154,7 @@ The knowledge base is not static. Production support agents continuously learn f
 
 This mirrors the human-in-the-loop gating pattern from Module 11 -- the agent does the work, but a confidence gate controls whether it acts autonomously or hands off.
 
-## Data Analysis Agents
-
-**Data analysis agents** translate natural language questions into SQL queries, execute them against databases, and present the results as insights with visualizations. The pattern is sometimes called **text-to-SQL**, but production systems go well beyond query generation.
-
-### SQL Generation
-
-The core capability is translating business questions like "What was our revenue by region last quarter?" into correct SQL. This requires:
-
-- **Schema understanding** -- the agent must know the table structures, column types, and join relationships. This is typically provided as context in the system prompt or retrieved from a data catalog.
-- **Business metric definitions** -- "revenue" might mean gross revenue, net revenue, or ARR depending on the organization. The agent needs access to a **metric glossary** that defines these terms precisely.
-- **Query safety** -- generated queries must be read-only (no mutations), bounded (no full table scans on billion-row tables), and efficient (reasonable use of indexes and joins).
-
-### Visualization and Insight Extraction
-
-Raw query results are rarely useful on their own. A data analysis agent adds value by:
-
-- Selecting the appropriate **chart type** based on the data shape (time series gets a line chart, category comparison gets a bar chart, proportions get a pie chart)
-- Highlighting **anomalies** and trends in the results
-- Generating a **natural language summary** that explains what the data shows and why it matters
-
-### Guardrails for Data Agents
-
-Data analysis agents need strict guardrails because they operate on production data:
-
-- **Query cost limits** -- prevent queries that would scan terabytes of data and cost thousands of dollars
-- **PII masking** -- ensure that query results do not expose personally identifiable information to unauthorized users
-- **Access control** -- the agent should only query tables and columns that the requesting user has permission to see
-- **Execution sandboxing** -- run generated SQL in a read-only replica, never against the production database
-
-## DevOps Agents
-
-**DevOps agents** respond to incidents, analyze logs and metrics, and execute runbooks to resolve infrastructure issues. They are the domain where agent autonomy is most consequential -- a wrong action can take down production systems.
-
-### Incident Response Flow
-
-When an alert fires, a DevOps agent follows a structured flow:
-
-1. **Classify severity** -- based on the alert type, affected services, and impact scope (P1 through P4)
-2. **Gather context** -- pull recent logs, metrics, and deployment history for affected services
-3. **Match to runbook** -- find the documented response procedure for this type of incident
-4. **Execute remediation** -- follow the runbook steps, which might include restarting services, rolling back deployments, or scaling infrastructure
-5. **Escalate if unresolved** -- if automated remediation fails, page the on-call engineer with all gathered context
-
-### Log Analysis and Pattern Matching
-
-Log analysis is where LLM-based agents dramatically outperform rule-based systems. Traditional log monitoring relies on predefined patterns -- you write regex rules for known error signatures. An LLM-based agent can:
-
-- Identify **novel error patterns** that do not match any existing rule
-- **Correlate across services** -- connect an error in Service A to a latency spike in Service B that happened 30 seconds earlier
-- **Summarize** thousands of log lines into a concise incident narrative
-
-### Runbook Execution with Safety Gates
-
-**Runbooks** are documented procedures for handling specific incident types. A DevOps agent can execute runbook steps automatically, but safety is paramount. The pattern is:
-
-- **Read-only actions** (querying logs, checking metrics, listing pods) execute automatically
-- **Reversible actions** (scaling up replicas, adding a feature flag) execute with logging but no approval gate
-- **Irreversible actions** (deleting resources, modifying database schemas, rolling back to a previous version) require **explicit human approval** before execution
-
-This tiered approach, which you studied in Module 11 as the blast radius pattern, is essential for DevOps agents. The agent can handle 80% of incident response autonomously while ensuring that high-risk actions always have human oversight.
-
-## Enterprise Workflow Agents
-
-**Enterprise workflow agents** automate document-heavy business processes: invoice processing, contract review, employee onboarding, compliance reporting, and approval chains. These are high-volume, repetitive tasks where manual processing is slow and error-prone.
-
-### Document Processing
-
-The first step in most enterprise workflows is **document ingestion and extraction**. The agent receives a document (PDF invoice, scanned contract, email attachment) and extracts structured data:
-
-- **Named entity extraction** -- vendor name, invoice number, line items, amounts, dates
-- **Classification** -- what type of document is this? (purchase order, invoice, receipt, contract amendment)
-- **Validation** -- do the extracted values make sense? (does the total match the sum of line items? is the date in a valid range?)
-
-This combines the structured output patterns from Module 2 with domain-specific validation rules.
-
-### Approval Chains
-
-Enterprise processes almost always involve **approval chains** -- a series of human approvals required before an action can proceed. The agent's role is to:
-
-- Determine the **correct approval path** based on the request type, amount, and organizational rules (purchases over $10,000 need VP approval; international contracts need legal review)
-- **Route** the request to the right approver with a summary and recommendation
-- **Track** approval status and send reminders for stalled requests
-- **Enforce** segregation of duties (the person who submits a request cannot approve it)
-
-This is a multi-agent coordination problem (Module 9) where some of the "agents" are humans with specific organizational roles.
-
-### Compliance and Audit
-
-Enterprise workflow agents operate in heavily regulated environments. Every action must be:
-
-- **Logged** with a full audit trail (who requested, who approved, what changed, when)
-- **Compliant** with regulations like SOX, GDPR, HIPAA, or industry-specific requirements
-- **Explainable** -- if an auditor asks why a decision was made, the system must be able to reconstruct the reasoning
-
-The compliance layer is not optional for enterprise agents. It is a hard requirement that must be designed into the architecture from the start, not bolted on afterward.
+The remainder of this lesson focuses on **customer support** as a worked example. It is one of the most widely deployed verticals and demonstrates all four template layers clearly. You will see the other verticals in full depth in Module 14.
 
 ## Building a Customer Support Agent
 
@@ -610,10 +491,10 @@ Looking across all four domains, several patterns emerge that apply universally 
 
 ## Summary
 
-**Domain-specific agents** apply a consistent four-layer architecture -- domain knowledge, specialized tools, compliance guardrails, and domain-specific evaluation -- across different verticals. The architecture template is reusable, but the content of each layer is deeply specific to the domain.
+This lesson introduced a reusable **four-layer architecture** for domain-specific agents -- domain knowledge, specialized tools, compliance guardrails, and domain-specific evaluation. The template is consistent across verticals, but the content of each layer is deeply specific to the domain.
 
-**Customer support agents** combine ticket classification, knowledge base retrieval, and confidence-based escalation to resolve issues autonomously while routing complex cases to human agents. **Data analysis agents** translate natural language to SQL, generate visualizations, and enforce data access controls. **DevOps agents** follow structured incident response flows with tiered autonomy that gates high-risk actions behind human approval. **Enterprise workflow agents** automate document processing and approval chains while maintaining the audit trails and compliance records that regulated industries require.
+The **customer support agent** worked example demonstrated all four layers in action: ticket classification, knowledge base retrieval, confidence-based escalation, and domain-specific evaluation through resolution rates and customer satisfaction. The five cross-domain patterns -- domain knowledge as the moat, confidence-based escalation, tiered autonomy, domain metrics, and the flywheel effect -- apply universally regardless of vertical.
 
-The foundational patterns from earlier modules -- tool use, memory, planning, multi-agent coordination, guardrails, and evaluation -- are not separate techniques. They are building blocks that combine differently in each domain. Mastering domain-specific agents means understanding both the general patterns and the specific constraints of the vertical you are building for.
+The foundational patterns from earlier modules -- tool use, memory, planning, multi-agent coordination, guardrails, and evaluation -- are not separate techniques. They are building blocks that combine differently in each domain. Module 14 applies this template in depth to enterprise verticals: data agents, knowledge and support agents, DevOps agents, workflow agents, and governance.
 
 In the next lesson, we shift from building agents to governing them, exploring the alignment and ethical challenges that arise when agents operate with increasing autonomy in consequential domains.

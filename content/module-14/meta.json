@@ -1,0 +1,71 @@
+{
+  "id": 14,
+  "title": "Enterprise Agent Applications",
+  "description": "Applying agent patterns to enterprise verticals: data, support, DevOps, workflows, and governance",
+  "color": "#fc8181",
+  "lessons": [
+    {
+      "slug": "01-enterprise-agent-landscape",
+      "title": "Enterprise Agent Landscape",
+      "description": "Where agents create value in enterprises and what makes enterprise deployment different",
+      "estimatedMinutes": 12,
+      "diagramTypes": ["architecture"],
+      "hasCode": false,
+      "hasQuiz": true
+    },
+    {
+      "slug": "02-data-agents-and-analytics",
+      "title": "Data Agents and Analytics Agents",
+      "description": "Agents that query, analyze, and explain data using semantic layers and governed access",
+      "estimatedMinutes": 20,
+      "diagramTypes": ["architecture", "flowchart"],
+      "hasCode": true,
+      "hasQuiz": true
+    },
+    {
+      "slug": "03-knowledge-and-support-agents",
+      "title": "Knowledge and Support Agents",
+      "description": "Enterprise knowledge search, customer support at scale, and source-grounded answers",
+      "estimatedMinutes": 12,
+      "diagramTypes": ["architecture", "flowchart"],
+      "hasCode": true,
+      "hasQuiz": true
+    },
+    {
+      "slug": "04-devops-and-operations-agents",
+      "title": "DevOps and Software Operations Agents",
+      "description": "Incident response, CI/CD triage, code review, and runbook automation agents",
+      "estimatedMinutes": 12,
+      "diagramTypes": ["flowchart", "sequence"],
+      "hasCode": true,
+      "hasQuiz": true
+    },
+    {
+      "slug": "05-workflow-and-back-office-agents",
+      "title": "Workflow and Back-Office Agents",
+      "description": "Document processing, approval chains, procurement, and structured process automation",
+      "estimatedMinutes": 12,
+      "diagramTypes": ["flowchart", "architecture"],
+      "hasCode": true,
+      "hasQuiz": true
+    },
+    {
+      "slug": "06-governance-risk-compliance",
+      "title": "Governance, Risk, and Compliance",
+      "description": "Identity, audit, PII, regulatory compliance, and policy enforcement for enterprise agents",
+      "estimatedMinutes": 12,
+      "diagramTypes": ["architecture"],
+      "hasCode": false,
+      "hasQuiz": true
+    },
+    {
+      "slug": "07-enterprise-agent-adoption-lab",
+      "title": "Enterprise Agent Adoption Lab",
+      "description": "Design an enterprise agent system with governance, evaluation, and rollout strategy",
+      "estimatedMinutes": 15,
+      "diagramTypes": ["architecture"],
+      "hasCode": true,
+      "hasQuiz": false
+    }
+  ]
+}

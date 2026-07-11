@@ -1,0 +1,644 @@
+---
+title: "Knowledge and Support Agents"
+quiz:
+  - question: "What is the primary difference between public chatbots and internal knowledge agents?"
+    options:
+      - "Internal agents are faster"
+      - "Internal agents access proprietary data with access controls and stale sources"
+      - "Internal agents use smaller models"
+      - "Internal agents don't need citations"
+    correctIndex: 1
+    explanation: "Internal knowledge agents operate over proprietary, access-controlled data that may be stale or distributed across multiple systems, unlike public chatbots that work with curated, public data."
+  - question: "Which of these is NOT a valid escalation trigger type?"
+    options:
+      - "Confidence-based escalation when the agent is uncertain"
+      - "Policy-based escalation for sensitive topics like legal threats"
+      - "Sentiment-based escalation for frustrated customers"
+      - "Performance-based escalation when response time is too slow"
+    correctIndex: 3
+    explanation: "The three main escalation trigger types are confidence-based, policy-based, and sentiment-based. Performance-based escalation is not a standard trigger type."
+  - question: "What is the 'flywheel effect' in knowledge and support agents?"
+    options:
+      - "Agents get faster over time"
+      - "Resolved tickets feed back into the knowledge base, improving future responses"
+      - "More customers create more support requests"
+      - "Agents learn to escalate less frequently"
+    correctIndex: 1
+    explanation: "The flywheel effect refers to successful resolutions being captured and fed back into the knowledge base, creating a virtuous cycle that improves the agent's ability to handle similar issues in the future."
+  - question: "Why is source metadata critical in enterprise knowledge agents?"
+    options:
+      - "It makes responses longer and more impressive"
+      - "It provides citation, freshness tracking, and access control verification"
+      - "It improves model performance"
+      - "It reduces token usage"
+    correctIndex: 1
+    explanation: "Source metadata enables citation (so users can verify claims), freshness tracking (to avoid stale information), and access control verification (to ensure users only see data they're authorized to access)."
+---
+
+## Overview
+
+In Lesson 02, you learned how data agents query databases, APIs, and data warehouses to surface insights from structured enterprise data. This lesson covers the other side of enterprise information access: **knowledge and support agents**. These agents answer questions from internal knowledge bases, serve customers through multiple channels, and provide source-grounded answers with citations.
+
+Knowledge and support agents are among the most widely deployed enterprise agents. Module 13 introduced a customer support worked example using the four-layer template. This lesson goes deeper into enterprise-scale concerns: multi-source retrieval with access controls, escalation design, and the flywheel effect that turns resolved tickets into knowledge base improvements.
+
+> **Key distinction:** Data agents query structured data (databases, APIs). Knowledge agents search unstructured or semi-structured content (documents, wikis, tickets, policies).
+
+## Internal Knowledge Agents
+
+Internal knowledge agents serve employees by answering questions from proprietary sources. Common use cases include:
+
+- **Enterprise search** — Find information across wikis, documentation, Confluence, SharePoint, and internal tools
+- **Policy Q&A** — Answer questions about HR policies, compliance rules, security procedures, and legal guidelines
+- **Employee onboarding** — Guide new hires through setup, benefits enrollment, and company processes
+- **Runbook assistance** — Help engineers troubleshoot production issues using internal runbooks and postmortem reports
+
+Unlike public chatbots that operate over curated, stable knowledge bases, internal knowledge agents face unique challenges:
+
+<DataTable
+  headers={["Challenge", "Description", "Impact"]}
+  rows={[
+    ["Proprietary access", "Knowledge is private and access-controlled per user role", "Agent must enforce source-level permissions"],
+    ["Source staleness", "Documentation goes out of date as systems evolve", "Agent must track freshness and warn about stale sources"],
+    ["Source fragmentation", "Information spread across dozens of disconnected systems", "Agent needs multi-source retrieval and triangulation"],
+    ["Source quality variance", "Official policy coexists with wikis, Slack threads, and personal notes", "Agent must score source quality and prioritize authoritative sources"]
+  ]}
+  caption="Challenges unique to internal knowledge agents"
+/>
+
+The agent must navigate these challenges while maintaining user trust. A wrong answer from an internal knowledge agent can lead to policy violations, security incidents, or compliance failures.
+
+## Source-Grounded Answers
+
+Every answer from a knowledge or support agent should include **source grounding**: explicit citations pointing to where the information came from. Source grounding serves three purposes:
+
+1. **Verification** — Users can check the original source to confirm the agent's interpretation
+2. **Trust** — Citations demonstrate the agent isn't hallucinating or making up information
+3. **Freshness awareness** — Users can see when the source was last updated and judge whether it might be stale
+
+A source-grounded answer includes:
+
+- **Citation identifiers** — Link to the original document, section, or paragraph
+- **Source metadata** — Document title, author, last updated timestamp, access level
+- **Confidence scoring** — Agent's assessment of how well the source supports the answer
+- **Multi-source triangulation** — When multiple sources support the same answer, list all of them
+
+Example of a well-grounded answer:
+
+```
+Q: What is the maximum vacation carryover allowed?
+
+A: According to the 2026 Employee Handbook (Section 5.2, last updated 
+2026-03-15), the maximum vacation carryover is 10 days per year. This 
+is also confirmed in the HR Policy Update from 2026-01-10.
+
+Sources:
+- Employee Handbook 2026, Section 5.2 [last updated: 2026-03-15]
+- HR Policy Update: Vacation Changes [published: 2026-01-10]
+
+Confidence: High (multiple authoritative sources agree)
+```
+
+When sources conflict or information is missing, the agent should acknowledge the gap and escalate if necessary.
+
+## RAG at Enterprise Scale
+
+Module 8 introduced Retrieval-Augmented Generation (RAG) for grounding agent responses in retrieved documents. Enterprise RAG extends these patterns with:
+
+### Per-Source Access Control
+
+Different knowledge bases have different access policies. HR documents are visible only to HR staff. Legal memos are visible only to legal and executive teams. Security runbooks are visible only to the security organization.
+
+The retrieval layer must enforce these controls:
+
+1. **User identity propagation** — Pass the current user's identity and roles to every retrieval call
+2. **Source-level filtering** — Filter out documents the user isn't authorized to access before returning results
+3. **Partial access handling** — Some documents may have public sections and restricted sections; return only the accessible parts
+
+This is the per-user context assembly pattern from Module 13, applied at the retrieval layer.
+
+### Freshness Tracking
+
+Enterprise knowledge bases are living documents. Policies change, systems evolve, and old information becomes misleading. The retrieval layer should track freshness:
+
+- **Last updated timestamps** — Capture when each document was last modified
+- **Freshness warnings** — Flag sources older than a threshold (e.g., 1 year for policies, 6 months for runbooks)
+- **Deprecation markers** — Some systems mark documents as "deprecated" or "superseded by X"
+
+When retrieving sources, prioritize recent documents and warn the user when relying on potentially stale information.
+
+### Source Quality Scoring
+
+Not all sources are equally authoritative. An official policy document carries more weight than a wiki page, which carries more weight than a Slack thread or personal notes.
+
+Assign quality scores to source types:
+
+<DataTable
+  headers={["Source Type", "Quality Score", "Reasoning"]}
+  rows={[
+    ["Official policy docs", "1.0", "Authoritative, reviewed, version-controlled"],
+    ["Internal documentation (Confluence, SharePoint)", "0.8", "Maintained but may lag behind reality"],
+    ["Runbooks and postmortems", "0.7", "Written during incidents, may contain shortcuts or workarounds"],
+    ["Wiki pages", "0.5", "Crowdsourced, variable quality, often stale"],
+    ["Slack threads and emails", "0.3", "Informal, context-dependent, not reviewed"],
+    ["Personal notes", "0.1", "Individual perspective, not vetted"]
+  ]}
+  caption="Source quality scoring by document type"
+/>
+
+When multiple sources support the same answer, prioritize higher-quality sources in the response. When sources conflict, the higher-quality source should take precedence unless there's evidence it's stale.
+
+<MermaidDiagram
+  chart={`graph TD
+    A[User Question] --> B[Retrieve from All Sources]
+    B --> C{Access Control}
+    C -->|Authorized| D[Filter by Freshness]
+    C -->|Denied| E[Exclude Source]
+    D --> F[Score by Quality]
+    F --> G[Rank Results]
+    G --> H[Generate Grounded Answer]
+    H --> I[Return with Citations]
+    
+    style A fill:#e1f5ff,stroke:#01579b
+    style C fill:#fff3e0,stroke:#e65100
+    style F fill:#f3e5f5,stroke:#4a148c
+    style I fill:#e8f5e9,stroke:#1b5e20`}
+/>
+
+## Customer Support at Scale
+
+Module 13 introduced a customer support agent template with multi-turn conversation, tool use, and escalation logic. At enterprise scale, customer support agents face additional complexity:
+
+### Multi-Channel Support
+
+Customers reach out through email, live chat, phone (transcribed to text), social media, and in-app messaging. The agent must:
+
+- **Normalize input** — Convert all channels to a common message format
+- **Maintain context across channels** — A customer who starts on chat and moves to email should get consistent context
+- **Respect channel affordances** — Chat expects near-instant replies; email tolerates longer responses with more detail
+
+### Multi-Language Support
+
+Global customer bases require multi-language support. Two approaches:
+
+1. **Translation layer** — Translate customer input to English, process with a single agent, translate response back to customer's language
+2. **Native multilingual models** — Use models with strong multilingual capabilities and maintain prompts in multiple languages
+
+Translation adds latency and can lose nuance. Native multilingual is preferred when available, but may require separate prompt tuning per language.
+
+### SLA Tracking
+
+Service-level agreements (SLAs) define maximum response times based on customer tier:
+
+- **Enterprise customers** — 15-minute first response, 2-hour resolution target
+- **Pro customers** — 1-hour first response, 8-hour resolution target
+- **Free-tier customers** — 24-hour first response, best-effort resolution
+
+The agent should track SLA deadlines and prioritize customers approaching their deadline. When an SLA is about to be breached, escalate to a human agent.
+
+### Customer Context Assembly
+
+Before answering a customer question, the agent should assemble context:
+
+- **Account history** — Subscription tier, billing status, usage patterns
+- **Previous tickets** — Past issues and resolutions
+- **Product usage** — What features the customer uses, recent errors or warnings
+- **Communication preferences** — Preferred language, channel, tone
+
+This is the same per-user context assembly pattern from Module 13, now applied to external customers.
+
+## Escalation Design
+
+Not every customer inquiry can or should be handled by an agent. Escalation is the process of routing a conversation to a human specialist when the agent cannot provide a satisfactory resolution.
+
+Three escalation trigger types work together:
+
+### 1. Confidence-Based Escalation
+
+The agent assesses its own confidence in the answer. When confidence is low, escalate before providing a potentially wrong answer.
+
+Confidence signals:
+- **Source quality** — Low-quality sources (Slack threads, wikis) reduce confidence
+- **Source agreement** — Conflicting sources reduce confidence
+- **Source freshness** — Stale sources reduce confidence
+- **Answer completeness** — Partial answers or missing context reduce confidence
+
+Example rule: "If confidence < 0.6, escalate with message: 'I found some information but am not confident in the answer. Connecting you to a specialist.'"
+
+### 2. Policy-Based Escalation
+
+Certain topics always escalate regardless of confidence:
+
+- **Legal threats** — "I'm going to sue" or "I'll report you to regulators"
+- **Security incidents** — "My account was hacked" or "I see charges I didn't make"
+- **VIP customers** — High-value accounts get immediate human attention
+- **Regulated topics** — Medical advice, financial guidance, legal interpretation
+
+Example rule: "If message contains legal threat keywords ('sue', 'lawyer', 'regulator'), escalate immediately to legal team."
+
+### 3. Sentiment-Based Escalation
+
+Frustrated or angry customers should be routed to human agents who can de-escalate. Sentiment analysis detects:
+
+- **Negative sentiment** — Anger, frustration, disappointment
+- **Escalating emotion** — Sentiment worsening over the conversation
+- **Explicit requests** — "I want to talk to a human"
+
+Example rule: "If sentiment score < -0.7 or customer explicitly requests human, escalate to support specialist."
+
+<MermaidDiagram
+  chart={`graph TD
+    A[Customer Message] --> B{Policy Trigger?}
+    B -->|Yes| C[Escalate: Policy]
+    B -->|No| D{Sentiment Trigger?}
+    D -->|Yes| E[Escalate: Sentiment]
+    D -->|No| F[Generate Answer]
+    F --> G{Confidence Check}
+    G -->|Low| H[Escalate: Confidence]
+    G -->|High| I[Return Answer to Customer]
+    
+    C --> J[Route to Human Specialist]
+    E --> J
+    H --> J
+    
+    style A fill:#e1f5ff,stroke:#01579b
+    style B fill:#fff3e0,stroke:#e65100
+    style D fill:#fff3e0,stroke:#e65100
+    style G fill:#fff3e0,stroke:#e65100
+    style J fill:#ffebee,stroke:#b71c1c
+    style I fill:#e8f5e9,stroke:#1b5e20`}
+/>
+
+All three triggers operate in parallel. The first one to fire causes escalation.
+
+## The Flywheel Effect at Scale
+
+Module 13 mentioned the flywheel effect: resolved tickets feed back into the knowledge base, improving the agent's ability to handle similar issues in the future. At enterprise scale, this process is formalized:
+
+### Automatic Article Generation
+
+When a ticket is resolved successfully, the agent proposes a knowledge base article:
+
+1. **Extract the question** — What was the customer's core issue?
+2. **Extract the solution** — What steps resolved it?
+3. **Generalize** — Is this solution applicable to other customers with similar issues?
+4. **Draft article** — Generate a knowledge base article in standard format
+
+Example: A customer asks "How do I reset my two-factor authentication?" The agent walks them through the reset process. After resolution, the agent drafts:
+
+```
+Title: Resetting Two-Factor Authentication
+Category: Account Security
+Tags: 2FA, authentication, password
+
+Problem: User needs to reset two-factor authentication after losing 
+their device or changing phone numbers.
+
+Solution:
+1. Log in to your account using your backup code
+2. Navigate to Settings > Security > Two-Factor Authentication
+3. Click "Reset 2FA"
+4. Follow the prompts to set up 2FA on your new device
+
+If you don't have a backup code, contact support to verify your identity.
+```
+
+### Quality Scoring
+
+Not all generated articles are equally useful. The system scores them based on:
+
+- **Resolution success** — Did the customer confirm the issue was resolved?
+- **Generality** — Is the issue likely to recur for other customers?
+- **Clarity** — Is the solution clear and actionable?
+- **Completeness** — Are all steps included, or are there gaps?
+
+High-scoring articles are promoted for human review. Low-scoring articles are discarded.
+
+### Human Review Before Promotion
+
+Generated articles go through human review before becoming official knowledge base content:
+
+1. **Accuracy check** — Is the solution correct and safe?
+2. **Completeness check** — Are there edge cases or prerequisites missing?
+3. **Style check** — Does it match the organization's voice and documentation standards?
+4. **Deduplication** — Does this article overlap with existing content?
+
+Approved articles are published to the knowledge base and become available for future retrieval. Over time, the knowledge base grows to cover more issues, reducing escalation rates and improving customer satisfaction.
+
+> **The flywheel in action:** More tickets → More resolutions → More knowledge base articles → Better agent performance → Faster resolutions → Happier customers → More trust in the agent
+
+## Code Example
+
+This example implements an internal knowledge agent with multi-source retrieval, access control, and confidence-based escalation.
+
+<CodeBlock
+  code={`import anthropic
+import json
+from typing import Literal
+
+client = anthropic.Anthropic()
+MODEL_NAME = "claude-sonnet-4-20250514"
+
+# Tool definitions
+tools = [
+    {
+        "name": "search_knowledge_base",
+        "description": "Search internal knowledge bases with access control. Returns documents the user is authorized to access.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Search query"
+                },
+                "source_types": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "enum": ["policy", "documentation", "runbook", "wiki", "slack"]
+                    },
+                    "description": "Limit search to specific source types"
+                },
+                "user_id": {
+                    "type": "string",
+                    "description": "User identifier for access control"
+                }
+            },
+            "required": ["query", "user_id"]
+        }
+    },
+    {
+        "name": "get_source_metadata",
+        "description": "Get metadata for a specific document including last updated timestamp, author, and quality score.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "document_id": {
+                    "type": "string",
+                    "description": "Document identifier"
+                }
+            },
+            "required": ["document_id"]
+        }
+    },
+    {
+        "name": "escalate_to_specialist",
+        "description": "Escalate the inquiry to a human specialist. Use when confidence is low or the topic requires expert judgment.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "reason": {
+                    "type": "string",
+                    "enum": ["low_confidence", "conflicting_sources", "policy_topic", "stale_sources"],
+                    "description": "Reason for escalation"
+                },
+                "summary": {
+                    "type": "string",
+                    "description": "Brief summary of the inquiry and what was found"
+                }
+            },
+            "required": ["reason", "summary"]
+        }
+    }
+]
+
+# Mock tool implementations
+def search_knowledge_base(query: str, user_id: str, source_types: list[str] | None = None):
+    """Mock search that returns access-controlled results with metadata."""
+    # In production: query vector database, enforce ACLs, return ranked results
+    return json.dumps({
+        "results": [
+            {
+                "document_id": "policy-2026-vacation",
+                "title": "2026 Vacation Policy",
+                "excerpt": "Maximum vacation carryover is 10 days per year. Employees must use or lose excess days by December 31.",
+                "source_type": "policy",
+                "quality_score": 1.0,
+                "last_updated": "2026-03-15",
+                "access_level": "all_employees"
+            },
+            {
+                "document_id": "wiki-vacation-tips",
+                "title": "Vacation Planning Tips",
+                "excerpt": "Some teams allow informal carryover arrangements. Check with your manager.",
+                "source_type": "wiki",
+                "quality_score": 0.5,
+                "last_updated": "2024-06-20",
+                "access_level": "all_employees"
+            }
+        ],
+        "total_results": 2
+    })
+
+def get_source_metadata(document_id: str):
+    """Mock metadata retrieval."""
+    metadata = {
+        "policy-2026-vacation": {
+            "title": "2026 Vacation Policy",
+            "author": "HR Department",
+            "last_updated": "2026-03-15",
+            "version": "1.2",
+            "quality_score": 1.0,
+            "source_type": "policy",
+            "url": "https://internal.example.com/policies/vacation-2026"
+        },
+        "wiki-vacation-tips": {
+            "title": "Vacation Planning Tips",
+            "author": "Jane Smith",
+            "last_updated": "2024-06-20",
+            "version": "unknown",
+            "quality_score": 0.5,
+            "source_type": "wiki",
+            "url": "https://wiki.example.com/vacation-tips"
+        }
+    }
+    return json.dumps(metadata.get(document_id, {"error": "Document not found"}))
+
+def escalate_to_specialist(reason: str, summary: str):
+    """Mock escalation."""
+    return json.dumps({
+        "status": "escalated",
+        "ticket_id": "ESC-2026-07-11-001",
+        "reason": reason,
+        "summary": summary,
+        "message": "Your inquiry has been escalated to a specialist. Expected response time: 2 hours."
+    })
+
+def process_tool_call(tool_name: str, tool_input: dict):
+    """Route tool calls to implementations."""
+    if tool_name == "search_knowledge_base":
+        return search_knowledge_base(**tool_input)
+    elif tool_name == "get_source_metadata":
+        return get_source_metadata(**tool_input)
+    elif tool_name == "escalate_to_specialist":
+        return escalate_to_specialist(**tool_input)
+    else:
+        return json.dumps({"error": f"Unknown tool: {tool_name}"})
+
+def run_knowledge_agent(user_query: str, user_id: str):
+    """Run the knowledge agent with citation requirements and escalation logic."""
+    
+    system_prompt = """You are an internal knowledge agent helping employees find accurate, 
+source-grounded answers to questions about company policies, procedures, and documentation.
+
+CITATION REQUIREMENTS:
+- Every factual claim must be backed by a cited source
+- Include document title, last updated date, and quality score for all sources
+- When sources conflict, prioritize higher-quality sources (policy > documentation > wiki > slack)
+- Warn users when relying on sources older than 1 year
+
+CONFIDENCE AND ESCALATION:
+- Assess your confidence in each answer (High/Medium/Low)
+- Confidence is LOW if:
+  - Only low-quality sources (wiki, slack) support the answer
+  - Sources conflict with each other
+  - Sources are older than 1 year
+  - Answer is incomplete or missing critical context
+- If confidence is LOW, escalate to a specialist rather than providing a potentially wrong answer
+
+ANSWER FORMAT:
+1. Direct answer to the question
+2. Sources section with full citations
+3. Confidence assessment with reasoning
+4. (If applicable) Freshness warning for stale sources"""
+
+    messages = [{"role": "user", "content": user_query}]
+    
+    print(f"\\n{'='*60}")
+    print(f"User Query: {user_query}")
+    print(f"User ID: {user_id}")
+    print(f"{'='*60}\\n")
+    
+    # Agentic loop
+    while True:
+        response = client.messages.create(
+            model=MODEL_NAME,
+            max_tokens=4096,
+            tools=tools,
+            system=system_prompt,
+            messages=messages
+        )
+        
+        print(f"\\nAgent Response (stop_reason: {response.stop_reason}):")
+        
+        # Process response content
+        tool_calls = []
+        for block in response.content:
+            if block.type == "text":
+                print(f"\\nText: {block.text}")
+            elif block.type == "tool_use":
+                tool_calls.append(block)
+                print(f"\\nTool Call: {block.name}")
+                print(f"Input: {json.dumps(block.input, indent=2)}")
+        
+        # If no tool calls, we're done
+        if response.stop_reason == "end_turn":
+            break
+        
+        # Execute tool calls and continue conversation
+        messages.append({"role": "assistant", "content": response.content})
+        
+        tool_results = []
+        for tool_call in tool_calls:
+            result = process_tool_call(tool_call.name, tool_call.input)
+            print(f"\\nTool Result ({tool_call.name}): {result}")
+            tool_results.append({
+                "type": "tool_result",
+                "tool_use_id": tool_call.id,
+                "content": result
+            })
+        
+        messages.append({"role": "user", "content": tool_results})
+    
+    # Extract final answer
+    final_answer = ""
+    for block in response.content:
+        if block.type == "text":
+            final_answer = block.text
+            break
+    
+    return final_answer
+
+# Example usage
+if __name__ == "__main__":
+    # Query about vacation policy
+    answer = run_knowledge_agent(
+        user_query="What is the maximum vacation carryover allowed?",
+        user_id="emp-12345"
+    )
+    
+    print(f"\\n{'='*60}")
+    print("FINAL ANSWER:")
+    print(f"{'='*60}")
+    print(answer)
+`}
+  language="python"
+  filename="knowledge_agent.py"
+/>
+
+Key elements in this implementation:
+
+1. **Access control parameter** — `search_knowledge_base` requires `user_id` to enforce permissions
+2. **Source metadata** — Each search result includes `quality_score`, `last_updated`, `source_type`, and `access_level`
+3. **Confidence-based escalation** — System prompt instructs the agent to assess confidence and escalate when low
+4. **Citation requirements** — System prompt requires source grounding for all factual claims
+5. **Freshness warnings** — System prompt instructs the agent to warn about stale sources
+
+The agent will search the knowledge base, evaluate source quality and freshness, and either provide a grounded answer or escalate to a specialist if confidence is low.
+
+## Enterprise Controls Used in This Vertical
+
+Knowledge and support agents require additional enterprise controls beyond the base four-layer template:
+
+### Source Access Control
+
+The retrieval layer must enforce per-user access controls. Implementation approaches:
+
+- **Pre-filter at retrieval** — Query the knowledge base with user identity; the database filters results based on ACLs
+- **Post-filter before LLM** — Retrieve all results, then filter out unauthorized sources before sending to the LLM
+- **Metadata-only for restricted sources** — Return titles and summaries for restricted sources but not full content, allowing the agent to suggest the user request access
+
+Never return restricted content to the LLM if the user shouldn't see it, even if the LLM is instructed to redact. The LLM may summarize or leak restricted information.
+
+### PII Redaction in Answers
+
+Customer support agents may retrieve PII (names, email addresses, account numbers, payment details) from customer context. Redact PII before logging or displaying answers:
+
+- **Redact in tool results** — The tool that retrieves customer context redacts PII before returning to the LLM
+- **Redact in final answer** — Post-process the LLM's response to redact any PII that slipped through
+
+Use named entity recognition (NER) or regex patterns to detect PII. This is the data loss prevention pattern from Module 13.
+
+### Escalation Audit Trail
+
+Every escalation should be logged with:
+
+- **Timestamp** — When did the escalation occur?
+- **Trigger type** — Confidence, policy, or sentiment?
+- **Conversation history** — What led to the escalation?
+- **Specialist assignment** — Which human handled the escalated inquiry?
+- **Resolution** — How was the issue resolved?
+
+The audit trail supports:
+- **Escalation rate monitoring** — Are escalation rates increasing? Why?
+- **Agent improvement** — What topics trigger the most escalations? Add knowledge base content to reduce future escalations.
+- **Compliance** — Demonstrate that sensitive topics were handled by qualified humans.
+
+### SLA Compliance Tracking
+
+Customer support agents must track SLA deadlines and prioritize at-risk customers. Implementation:
+
+- **SLA timer** — Start a timer when a new inquiry arrives; track time to first response and time to resolution
+- **Priority queue** — Customers approaching SLA deadlines move to the front of the queue
+- **Automatic escalation** — If SLA is about to be breached, escalate to a human even if the agent could handle it
+
+Log SLA compliance rates per customer tier for monitoring and reporting.
+
+## Summary
+
+Knowledge and support agents retrieve information from internal knowledge bases and serve customers through multi-channel interactions. They extend the RAG patterns from Module 8 with enterprise-scale concerns: access control, source quality scoring, freshness tracking, and multi-source triangulation.
+
+Escalation design combines confidence-based, policy-based, and sentiment-based triggers to route complex or sensitive inquiries to human specialists. The flywheel effect turns resolved tickets into knowledge base improvements, creating a virtuous cycle that enhances agent performance over time.
+
+Key enterprise controls for this vertical include source access control, PII redaction, escalation audit trails, and SLA compliance tracking.
+
+In Lesson 04, you'll explore **DevOps and Software Operations Agents**, which manage deployments, monitor infrastructure, respond to incidents, and automate operational workflows.

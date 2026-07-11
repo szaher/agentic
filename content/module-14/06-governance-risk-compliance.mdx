@@ -1,0 +1,362 @@
+---
+title: "Governance, Risk, and Compliance"
+quiz:
+  - question: "What is the primary difference between user-impersonation and service account models for agent identity?"
+    options:
+      - "User-impersonation is more secure than service accounts"
+      - "Service accounts always have broader permissions than users"
+      - "User-impersonation inherits user permissions exactly, while service accounts have defined independent scope"
+      - "Service accounts cannot be audited as effectively as user-impersonation"
+    correctIndex: 2
+    explanation: "User-impersonation means the agent acts with the exact permissions of the requesting user, while service accounts have their own defined identity and permission scope independent of any individual user."
+  
+  - question: "Which autonomy tier requires the most stringent governance controls?"
+    options:
+      - "Tier 2: Derived analysis and aggregation"
+      - "Tier 3: Recommended action requiring human approval"
+      - "Tier 4: Write-back and record modification"
+      - "Tier 5: Structural change to schema, pipelines, or policies"
+    correctIndex: 3
+    explanation: "Tier 5 (structural changes) carries the highest risk and blast radius, affecting system architecture, data structures, or policy frameworks. These actions require the most comprehensive governance including multi-level approval, extensive audit trails, and rollback capabilities."
+  
+  - question: "Why is agent audit logging more complex than traditional application audit logging?"
+    options:
+      - "Agents generate more log volume than traditional applications"
+      - "Agent reasoning is probabilistic and tool calls may be exploratory, making intent harder to capture"
+      - "Agents cannot be assigned unique identifiers for tracking"
+      - "Traditional applications don't require audit logging"
+    correctIndex: 1
+    explanation: "Agent audit is more complex because agent reasoning is probabilistic rather than deterministic, tool calls may be exploratory rather than final actions, and capturing the 'why' (reasoning chain) alongside the 'what' (actions) requires structured trace logging that traditional applications don't need."
+  
+  - question: "What is the purpose of time-bounded approval in human approval workflows?"
+    options:
+      - "To reduce the number of actions agents can take per day"
+      - "To ensure approvals expire after a set period, preventing indefinite authorization"
+      - "To limit how long an agent can run before shutting down"
+      - "To schedule approvals during business hours only"
+    correctIndex: 1
+    explanation: "Time-bounded approval ensures that human authorization for high-risk actions expires after a defined period (e.g., 24 hours), preventing an approval granted in one context from being used indefinitely or in a different, potentially riskier context later."
+---
+
+## Overview
+
+In Lessons 02 through 05, you explored enterprise agent applications across four critical verticals: data and analytics, knowledge management, DevOps and infrastructure, and workflow automation. Each vertical introduced controls specific to its risk profile—read-only enforcement for data agents querying sensitive databases, source access control for knowledge agents surfacing internal documentation, blast-radius limits for DevOps agents managing infrastructure, and segregation of duties for workflow agents processing financial transactions.
+
+This lesson consolidates those vertical-specific patterns into a unified **governance, risk, and compliance (GRC)** framework applicable to any enterprise agent deployment. You'll learn how to establish identity models, autonomy tiers, audit requirements, PII handling, regulatory compliance, policy enforcement, approval workflows, and compliance scoring that work across all agent types.
+
+> **Cross-module integration**: This lesson builds on **Module 12 (Production, Deployment and Safety)** for guardrails, safety layers, and monitoring infrastructure, and **Module 11 (Evaluation and Testing)** for evaluation strategies. Together, these modules form your enterprise-grade agent governance stack.
+
+## Identity and Access Management for Agents
+
+The foundational governance question is: **What can the agent access, and on whose behalf does it act?**
+
+Unlike traditional applications where a user logs in and performs actions directly, agents act autonomously on behalf of users or the organization. This creates an identity problem: Does the agent have its own identity, or does it inherit the requesting user's permissions?
+
+### Three Identity Models
+
+<DataTable
+  headers={["Model", "How It Works", "Security Characteristics", "Best For"]}
+  rows={[
+    [
+      "**User-Impersonation**",
+      "Agent inherits the exact permissions of the requesting user",
+      "Least privilege by default; agent cannot escalate beyond user scope; audit trail tied to user identity",
+      "Data agents, knowledge agents where access control already exists at the data layer"
+    ],
+    [
+      "**Service Account**",
+      "Agent has its own identity with defined permission scope",
+      "Permissions managed centrally; agent scope independent of any individual user; requires careful scoping to prevent over-privilege",
+      "DevOps agents, workflow agents that need consistent permissions across many users"
+    ],
+    [
+      "**Hybrid**",
+      "Agent has base permissions plus user-delegated access",
+      "Combines least-privilege user scope with elevated capabilities when justified; complex to implement and audit",
+      "Complex workflows where some actions require user context and others require elevated service permissions"
+    ]
+  ]}
+  caption="Three identity models for enterprise agents, with security tradeoffs and use cases."
+/>
+
+> **Key principle**: Default to user-impersonation unless you have a specific reason to grant the agent independent permissions. Service accounts are necessary for agents that act on behalf of the organization (e.g., scheduled batch jobs, cross-team workflows) rather than individual users.
+
+### Identity Governance Checklist
+
+- **Provision**: How are agent identities created and assigned?
+- **Scope**: What is the minimum permission set required for the agent's function?
+- **Rotate**: How often are credentials rotated? (This is critical for service accounts.)
+- **Revoke**: What triggers immediate credential revocation? (User termination, security incident, role change.)
+- **Audit**: Are all actions traceable to a specific user or service account?
+
+## Write-Action Autonomy Tiers
+
+In Lesson 02, you learned about read-only vs. write-enabled data agents. In Lesson 05, you saw workflow agents with varying levels of write authority. This section generalizes those patterns into a **five-tier autonomy framework** with corresponding governance requirements.
+
+<MermaidDiagram
+  chart={`graph TD
+    T1[Tier 1: Read-Only Observation] --> T2[Tier 2: Derived Analysis]
+    T2 --> T3[Tier 3: Recommended Action]
+    T3 --> T4[Tier 4: Write-Back]
+    T4 --> T5[Tier 5: Structural Change]
+    
+    T1 --> G1[Governance: Basic audit logging]
+    T2 --> G2[Governance: Output validation, PII masking]
+    T3 --> G3[Governance: Human approval, rollback plan]
+    T4 --> G4[Governance: Multi-level approval, full audit trail, automated rollback]
+    T5 --> G5[Governance: Executive approval, change advisory board, disaster recovery plan]
+    
+    style T1 fill:#e8f5e9,stroke:#4caf50
+    style T2 fill:#fff9c4,stroke:#fbc02d
+    style T3 fill:#ffe0b2,stroke:#fb8c00
+    style T4 fill:#ffccbc,stroke:#f4511e
+    style T5 fill:#ffcdd2,stroke:#e53935
+    
+    style G1 fill:#f1f8e9,stroke:#9ccc65
+    style G2 fill:#fff9c4,stroke:#fbc02d
+    style G3 fill:#ffe0b2,stroke:#fb8c00
+    style G4 fill:#ffccbc,stroke:#f4511e
+    style G5 fill:#ffcdd2,stroke:#e53935`}
+  caption="Five autonomy tiers with escalating governance requirements. Higher tiers require more stringent controls."
+/>
+
+### Tier Definitions and Governance
+
+- **Tier 1: Read-Only Observation** — Agent queries data, observes state, retrieves documentation. **Governance**: Basic audit logging (who, what, when). Minimal risk.
+
+- **Tier 2: Derived Analysis / Aggregation** — Agent computes statistics, generates reports, summarizes trends. **Governance**: Output validation (no PII leakage), result caching policies, usage tracking.
+
+- **Tier 3: Recommended Action** — Agent proposes a change but requires human approval before execution. **Governance**: Human-in-the-loop workflow, approval audit trail, rollback plan if recommendation is later deemed incorrect.
+
+- **Tier 4: Write-Back / Record Modification** — Agent updates records, modifies configurations, writes back to databases. **Governance**: Multi-level approval for sensitive actions, full before/after audit trail, automated rollback on policy violation.
+
+- **Tier 5: Structural Change** — Agent modifies schema, deploys infrastructure changes, updates policy frameworks. **Governance**: Executive-level approval, change advisory board review, disaster recovery plan, formal rollback procedure.
+
+> **Practical guidance**: Most enterprise agents should start at Tier 1 or Tier 2 during initial deployment and only graduate to higher tiers after proving reliability, audit coverage, and safety controls.
+
+## Audit Logging
+
+Agent audit logs must answer five questions:
+
+1. **Who requested?** User identity or service account.
+2. **What did the agent do?** Tool calls, queries, data accesses, modifications.
+3. **Why did the agent do it?** Agent's reasoning chain or decision rationale.
+4. **What changed?** Before-and-after state for all write operations.
+5. **When?** Timestamps for every action, including retries and rollbacks.
+
+### Why Agent Audit Is Harder
+
+Traditional application audit logs capture deterministic actions: a user clicked a button, submitted a form, or executed a command. Agent audit is more complex because:
+
+- **Reasoning is probabilistic**: The agent's decision-making process is non-deterministic. Two identical prompts may lead to different tool calls.
+- **Tool calls may be exploratory**: The agent might query a database to explore options, not because it intends to use the result. How do you distinguish exploration from intent?
+- **Reasoning chains are long**: Capturing the full chain-of-thought requires structured trace logs, not simple action logs.
+
+### Audit Log Requirements
+
+- **Immutable**: Logs cannot be edited or deleted after creation.
+- **Tamper-evident**: Use cryptographic hashes or append-only storage to detect tampering.
+- **Retained per policy**: Retain logs for the duration required by regulatory or organizational policy (e.g., 7 years for SOX, 6 years for FINRA).
+- **Queryable**: Logs must be searchable by user, agent, action type, time range, and resource accessed.
+
+> **Implementation note**: This is the trace logging infrastructure from Module 5 (Lesson 03) and the observability stack from Module 12 (Lesson 03), applied to governance and compliance requirements.
+
+## PII Handling
+
+Agents operating in enterprise environments will inevitably encounter **personally identifiable information (PII)**: employee records, customer data, health information, financial details. Governance requires a four-step PII framework.
+
+### 1. Detection
+
+Identify PII in both inputs (user queries) and outputs (agent responses, query results). Common PII types:
+
+- Names, email addresses, phone numbers
+- National identifiers (SSN, passport numbers)
+- Financial account numbers
+- Health records (diagnoses, prescriptions)
+- Biometric data
+
+Use pattern matching (regex), NER models, or specialized PII detection tools to flag PII automatically.
+
+### 2. Masking
+
+Redact or anonymize PII before displaying results or storing logs. Masking strategies:
+
+- **Full redaction**: Replace PII with a placeholder (`[REDACTED]`)
+- **Partial masking**: Show only the last 4 digits of an account number (`****1234`)
+- **Tokenization**: Replace PII with a reversible token for authorized users
+- **Differential privacy**: Add noise to aggregate statistics to prevent re-identification
+
+### 3. Data Retention
+
+How long are agent conversations, query results, and reasoning traces stored? Retention policies must balance:
+
+- **Regulatory requirements**: GDPR mandates data minimization; HIPAA requires minimum necessary retention.
+- **Operational needs**: Audit logs and incident response require historical data.
+- **User expectations**: Users may expect their data to be deleted after a session ends.
+
+### 4. Right to Deletion
+
+Under GDPR Article 17 (Right to Erasure), individuals can request deletion of their personal data. For agent systems, this means:
+
+- **Identifying all traces**: PII may appear in user queries, agent responses, audit logs, cached results, and training data (if the agent is fine-tuned).
+- **Deleting or anonymizing**: Remove PII from all storage systems or replace it with anonymized tokens.
+- **Verification**: Prove that deletion was complete and effective.
+
+> **Critical consideration**: If your agent caches results or fine-tunes on conversation data, right-to-deletion becomes significantly more complex. Design for deletion from the start.
+
+## Regulatory Compliance
+
+Enterprise agents must comply with industry-specific and geographic regulations. This section covers major frameworks and their agent-specific implications.
+
+<DataTable
+  headers={["Framework", "Key Requirements", "Agent Implications"]}
+  rows={[
+    [
+      "**GDPR** (EU General Data Protection Regulation)",
+      "Data minimization, consent, right to deletion, cross-border transfer restrictions",
+      "PII detection and masking; user consent for data processing; ability to delete all traces of a person; restrictions on transferring data outside the EU"
+    ],
+    [
+      "**HIPAA** (Health Insurance Portability and Accountability Act)",
+      "Protected health information (PHI) safeguards, minimum necessary standard, breach notification",
+      "Agents accessing medical records must enforce minimum necessary access; PHI must be encrypted in transit and at rest; breach of PHI must be reported within 60 days"
+    ],
+    [
+      "**SOX** (Sarbanes-Oxley Act)",
+      "Financial controls, audit trail integrity, segregation of duties",
+      "Agents modifying financial records must have full audit trails; segregation of duties (agent cannot both approve and execute); immutable logs retained for 7 years"
+    ],
+    [
+      "**PCI-DSS** (Payment Card Industry Data Security Standard)",
+      "Cardholder data protection, access control, monitoring",
+      "Agents accessing payment data must meet PCI compliance; cardholder data must be encrypted; access logs must be monitored for suspicious activity"
+    ],
+    [
+      "**FERPA** (Family Educational Rights and Privacy Act)",
+      "Student education records privacy, consent for disclosure",
+      "Agents accessing student records must respect FERPA consent rules; educational institutions must control who can query student data"
+    ],
+    [
+      "**FINRA** (Financial Industry Regulatory Authority)",
+      "Recordkeeping, supervision, communications archiving",
+      "Agents used in financial services must archive all communications; supervisory review of agent recommendations; records retained for 6 years"
+    ]
+  ]}
+  caption="Major regulatory frameworks and their implications for enterprise agent deployments."
+/>
+
+> **Compliance is continuous**: Regulatory requirements evolve. Your agent governance framework must include a process for monitoring regulatory changes and updating controls accordingly.
+
+## Policy Enforcement at the Harness Level
+
+The **policy engine** is the runtime component that enforces governance rules before, during, and after agent actions. It integrates with the agent harness (Module 5) and guardrails (Module 12) to provide real-time policy checks.
+
+<MermaidDiagram
+  chart={`graph LR
+    User[User Request] --> Harness[Agent Harness]
+    Harness --> PolicyEngine[Policy Engine]
+    
+    PolicyEngine --> PreCheck{Pre-Action Check}
+    PreCheck -->|Allowed| ToolCall[Execute Tool Call]
+    PreCheck -->|Denied| Block[Block Action & Log]
+    
+    ToolCall --> PostCheck{Post-Action Validation}
+    PostCheck -->|Valid| AuditLog[Write Audit Log]
+    PostCheck -->|Violation| Rollback[Rollback & Alert]
+    
+    AuditLog --> Response[Return Response to User]
+    
+    PolicyEngine -.-> Rules[(Policy Rules DB)]
+    
+    style PolicyEngine fill:#bbdefb,stroke:#1976d2
+    style PreCheck fill:#fff9c4,stroke:#fbc02d
+    style PostCheck fill:#ffe0b2,stroke:#fb8c00
+    style Block fill:#ffcdd2,stroke:#e53935
+    style Rollback fill:#ffcdd2,stroke:#e53935
+    style AuditLog fill:#e8f5e9,stroke:#4caf50`}
+  caption="Policy engine integrated into the agent harness. Pre-action checks prevent violations; post-action validation triggers rollback if needed."
+/>
+
+### Policy Enforcement Stages
+
+1. **Pre-Action Check** — Before the agent executes a tool call, the policy engine evaluates:
+   - Is this action allowed by the current policy?
+   - Does the user (or service account) have sufficient permissions?
+   - Does this action require human approval?
+
+   If the answer to any check is "no," the action is blocked and logged.
+
+2. **Post-Action Validation** — After the agent executes a tool call, the policy engine validates:
+   - Did the action produce any unexpected side effects?
+   - Did the action violate data retention, PII masking, or access control policies?
+   - Did the action exceed rate limits or blast-radius constraints?
+
+   If a violation is detected, the policy engine triggers rollback (if possible) and alerts the security team.
+
+3. **Policy Update** — Policies are not static. The policy engine must support dynamic policy updates without requiring agent redeployment.
+
+> **Integration points**: This is the same policy-as-code pattern from Module 5 (Lesson 06) and the guardrail layer from Module 12 (Lesson 02), now applied to governance requirements.
+
+## Human Approval Workflows for High-Risk Actions
+
+For Tier 4 and Tier 5 actions, human approval is a critical control. Enterprise approval workflows extend the human-in-the-loop pattern from Module 5 (Lesson 07) with additional governance requirements.
+
+### Enterprise Approval Requirements
+
+- **Multi-level approval**: High-risk actions may require approval from multiple stakeholders (e.g., manager, VP, legal, security).
+- **Time-bounded approval**: Approvals expire after a defined period (e.g., 24 hours) to prevent indefinite authorization.
+- **Delegation**: If the designated approver is unavailable, approval can be delegated to a backup approver with equivalent authority.
+- **Audit of approval decisions**: Not just "was it approved?" but "who approved it, when, and why?"
+
+### Approval Workflow Example
+
+An agent recommends a database schema change (Tier 5 action):
+
+1. **Agent proposes**: "Add `last_login` column to `users` table to support session timeout feature."
+2. **Manager approves**: "Schema change looks reasonable for the feature requirement."
+3. **DBA reviews**: "Migration script is correct and includes rollback plan."
+4. **Security reviews**: "No PII added; logging requirements unchanged."
+5. **Approval granted**: All stakeholders approve; approval is valid for 24 hours.
+6. **Agent executes**: Schema change is applied with full audit trail.
+
+If any stakeholder denies approval, the action is blocked and the agent notifies the user.
+
+> **Critical failure mode**: Approval workflows can become bottlenecks. Tune approval thresholds carefully—require approval for truly high-risk actions, but avoid requiring approval for routine operations.
+
+## Enterprise Evaluation: Compliance Scoring
+
+In Module 11, you learned how to evaluate agent performance using task success, latency, cost, and user satisfaction. For enterprise agents, add **compliance scoring** to your evaluation framework.
+
+### Compliance Metrics
+
+- **Policy violation rate**: Number of policy violations per 1,000 agent actions. Target: < 0.1%.
+- **PII exposure rate**: Number of PII leaks (unmasked PII in logs or responses) per 1,000 agent actions. Target: 0.
+- **Audit completeness**: Percentage of agent actions with full audit trail (who, what, why, what changed, when). Target: 100%.
+- **Escalation accuracy**: Did the agent correctly identify cases requiring human review? Measured as precision and recall of escalation decisions.
+- **Regulatory compliance score**: Composite score based on framework-specific requirements (GDPR, HIPAA, SOX, etc.). This is often a manual audit score, not an automated metric.
+
+### Scoring Implementation
+
+Run compliance audits on a schedule (e.g., monthly) and after major policy or agent updates:
+
+1. **Sample agent actions**: Randomly select 1,000 agent actions from the audit log.
+2. **Score each action**: Does it have a complete audit trail? Were policies followed? Was PII handled correctly?
+3. **Aggregate scores**: Calculate violation rate, exposure rate, and completeness percentage.
+4. **Report and remediate**: If scores fall below target, investigate root causes and update policies, guardrails, or agent prompts.
+
+> **Continuous improvement**: Compliance scoring is not a one-time certification. It's a continuous process that evolves as your agent capabilities, policies, and regulatory environment change.
+
+## Summary
+
+You've now consolidated the vertical-specific governance patterns from Lessons 02 through 05 into a unified GRC framework applicable to any enterprise agent deployment. You learned:
+
+- **Identity models** (user-impersonation, service account, hybrid) and their security tradeoffs
+- **Autonomy tiers** (read-only through structural change) with corresponding governance requirements
+- **Audit logging** requirements that capture who, what, why, what changed, and when
+- **PII handling** through detection, masking, retention, and right-to-deletion
+- **Regulatory compliance** frameworks (GDPR, HIPAA, SOX, PCI-DSS, FERPA, FINRA) and their agent implications
+- **Policy enforcement** integrated into the agent harness with pre-action checks and post-action validation
+- **Human approval workflows** with multi-level, time-bounded, and delegated approval
+- **Compliance scoring** to measure policy violation rate, PII exposure, audit completeness, and escalation accuracy
+
+In **Lesson 07 (Enterprise Agent Adoption Lab)**, you'll apply these governance principles in a culminating enterprise application exercise, integrating agent capabilities, safety controls, and GRC requirements into a production-ready deployment.

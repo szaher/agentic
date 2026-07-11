@@ -1,0 +1,214 @@
+---
+title: "Enterprise Agent Landscape"
+quiz:
+  - question: "What is the primary difference between prototype agents and enterprise agents?"
+    options:
+      - "Enterprise agents use larger language models"
+      - "Enterprise agents must integrate with organizational data, identity, compliance, and workflow systems"
+      - "Enterprise agents are faster and more accurate"
+      - "Enterprise agents only run in the cloud"
+    correctIndex: 1
+    explanation: "Enterprise deployment introduces organizational concerns like governed data access, identity and permissions, compliance trails, and workflow integration that are not present in prototypes."
+  - question: "In the Enterprise Agent Maturity Model, what distinguishes an 'Assistant' agent from a 'Copilot' agent?"
+    options:
+      - "Assistant agents use better models"
+      - "Assistant agents are faster"
+      - "Assistant agents act with approval gates, while Copilot agents only suggest"
+      - "Assistant agents don't need human oversight"
+    correctIndex: 2
+    explanation: "Copilot agents are human-directed and only suggest actions. Assistant agents can act independently but require approval gates for critical operations."
+  - question: "Which of the following is NOT a typical enterprise evaluation criterion for agents?"
+    options:
+      - "ROI (time saved, error reduction)"
+      - "Adoption rate (percentage of users actively using the agent)"
+      - "Model perplexity score"
+      - "Compliance score (policy violations per 1000 actions)"
+    correctIndex: 2
+    explanation: "Enterprise evaluation focuses on business outcomes (ROI, adoption, compliance, incident rate) rather than ML metrics like perplexity. Model perplexity is a research metric, not a business KPI."
+  - question: "Why do enterprise agents require organizational data access governance?"
+    options:
+      - "To prevent agents from running too slowly"
+      - "To ensure agents inherit user permissions and only access data they're authorized to see"
+      - "To reduce model inference costs"
+      - "To make agents easier to build"
+    correctIndex: 1
+    explanation: "Enterprise agents act on behalf of users and must respect organizational permissions and data access policies. They need governed data access to ensure they only interact with data the user is authorized to see."
+---
+
+## Overview
+
+In Module 13, you learned the four-layer domain-specific agent template: the core agent loop, tool integration, state management, and domain knowledge. That template applies to all agent architectures, but enterprise deployment introduces a distinct set of concerns that go beyond building a working prototype.
+
+Enterprise agents must integrate with organizational data systems, inherit user identity and permissions, maintain compliance and audit trails, fit into existing approval workflows, and prove measurable business value. This lesson surveys the enterprise agent landscape and establishes the foundational concerns that shape every enterprise agent deployment.
+
+## Where Agents Create Value in Enterprises
+
+Enterprise agents deliver value across functional verticals. Each vertical has distinct workflows, data sources, and success metrics.
+
+<DataTable
+  headers={["Vertical", "Example Use Cases", "Primary Value Drivers"]}
+  rows={[
+    ["Customer Support", "Ticket triage, response drafting, knowledge base lookup", "Resolution time, agent productivity, customer satisfaction"],
+    ["Sales", "Lead qualification, proposal generation, CRM updates", "Conversion rate, sales cycle time, rep capacity"],
+    ["Operations", "Workflow automation, incident response, runbook execution", "Mean time to resolution, operational efficiency, error reduction"],
+    ["Analytics / BI", "Report generation, anomaly detection, dashboard creation", "Time to insight, data accessibility, decision latency"],
+    ["Software Engineering", "Code review, test generation, deployment automation", "Developer velocity, defect rate, review cycle time"],
+    ["Finance", "Invoice processing, reconciliation, compliance reporting", "Processing throughput, error rate, audit readiness"],
+    ["HR", "Onboarding automation, benefits inquiry, policy lookup", "Employee satisfaction, HR team capacity, onboarding time"],
+    ["Legal", "Contract analysis, clause extraction, compliance checks", "Review time, risk identification, contract cycle time"]
+  ]}
+  caption="Enterprise verticals where agents deliver measurable business value. Each vertical has domain-specific workflows and success criteria."
+/>
+
+> **Key Takeaway:** Enterprise agents are not general-purpose assistants. They are vertical-specific automation systems that integrate with existing enterprise tools, data sources, and workflows.
+
+## Why Enterprise Is Different
+
+Building a prototype agent in a sandbox environment is fundamentally different from deploying an agent in an enterprise organization. Five critical differences shape enterprise deployment:
+
+### Organizational Data Access
+
+Prototype agents often work with open APIs or sample datasets. Enterprise agents must access governed organizational data: CRM records, ERP systems, internal knowledge bases, customer databases. This requires integration with data governance frameworks, access control systems, and data classification policies.
+
+The agent cannot simply connect to a database and read everything. It must respect data access policies, handle personally identifiable information (PII) correctly, and operate within the organization's data residency and sovereignty constraints.
+
+### Identity and Permissions
+
+Enterprise agents act on behalf of a user. When the agent creates a support ticket, sends an email, or updates a CRM record, it does so with the user's identity and inherits the user's permissions.
+
+This means the agent must integrate with the organization's identity provider (SSO, LDAP, Active Directory), respect role-based access control (RBAC), and maintain an audit trail linking every action to the user who authorized it. If the user does not have permission to delete a record, neither does their agent.
+
+### Compliance and Audit Trails
+
+Enterprise agents must maintain comprehensive audit logs. Every tool call, every data access, every decision must be logged, timestamped, and attributed to a specific user and session. These logs must survive for years and be queryable for compliance audits, incident investigation, and dispute resolution.
+
+Regulations like GDPR, HIPAA, SOC 2, and industry-specific frameworks impose requirements on data handling, retention, deletion, and explainability. The agent must produce audit trails that demonstrate compliance with these requirements.
+
+### Workflow Integration
+
+Enterprise agents do not replace existing workflows—they integrate with them. Organizations have established approval chains, escalation paths, notification systems, and handoff procedures. The agent must fit into these workflows rather than bypassing them.
+
+For example, an agent that drafts a sales proposal may require manager approval before sending. An agent that processes an invoice may need finance team sign-off above a certain dollar threshold. The agent must support human-in-the-loop intervention points at workflow boundaries.
+
+### Change Management
+
+The hardest part of enterprise agent deployment is often not technical—it is organizational. Users must trust the agent, understand its capabilities and limitations, and adopt it into their daily workflows. This requires training, communication, phased rollout, feedback channels, and ongoing iteration.
+
+<VerifyClaim status="verify">
+Many enterprise AI initiatives fail not because of technical defects but because of poor change management and user adoption.
+</VerifyClaim>
+
+Technical success (the agent works) does not guarantee business success (the agent delivers ROI). Adoption is as critical as accuracy.
+
+## Enterprise Readiness Checklist
+
+Before deploying an agent in an enterprise environment, evaluate readiness across six dimensions:
+
+1. **Governance Model** — Who owns the agent? Who approves changes to its behavior? Who is accountable when it makes a mistake? What is the escalation path for incidents?
+
+2. **Permission Framework** — How does the agent inherit user permissions? How does it authenticate to enterprise systems? How are credentials managed and rotated? What happens when a user's access is revoked?
+
+3. **Observability** — How do you monitor the agent in production? What metrics matter? How do you detect degraded performance, policy violations, or anomalous behavior? What alerts trigger human review?
+
+4. **Human-in-the-Loop Intervention Points** — Where are the approval gates? What actions require human confirmation? How do users override or correct agent decisions? How is feedback incorporated?
+
+5. **Evaluation Strategy** — How do you measure success? What is the baseline performance before the agent is deployed? How do you track improvement over time? What metrics justify continued investment?
+
+6. **Rollout Plan** — Who are the early adopters? What is the phased rollout schedule? How do you collect feedback? What are the success criteria for expanding deployment?
+
+The following diagram shows the enterprise agent ecosystem. Vertical-specific agents (customer support, sales, analytics, etc.) share common infrastructure layers: identity and permissions, compliance and audit, observability, and workflow integration.
+
+<MermaidDiagram chart={`
+graph TB
+    subgraph Verticals["Vertical-Specific Agents"]
+        Support["Customer Support Agent"]
+        Sales["Sales Agent"]
+        Analytics["Analytics Agent"]
+        Engineering["Engineering Agent"]
+        Finance["Finance Agent"]
+    end
+
+    subgraph Shared["Shared Enterprise Layers"]
+        Identity["Identity & Permissions"]
+        Compliance["Compliance & Audit"]
+        Observability["Observability & Monitoring"]
+        Workflow["Workflow Integration"]
+    end
+
+    Support --> Identity
+    Support --> Compliance
+    Support --> Observability
+    Support --> Workflow
+
+    Sales --> Identity
+    Sales --> Compliance
+    Sales --> Observability
+    Sales --> Workflow
+
+    Analytics --> Identity
+    Analytics --> Compliance
+    Analytics --> Observability
+    Analytics --> Workflow
+
+    Engineering --> Identity
+    Engineering --> Compliance
+    Engineering --> Observability
+    Engineering --> Workflow
+
+    Finance --> Identity
+    Finance --> Compliance
+    Finance --> Observability
+    Finance --> Workflow
+
+    style Support fill:#4299e1,stroke:#2b6cb0,color:#fff
+    style Sales fill:#48bb78,stroke:#2f855a,color:#fff
+    style Analytics fill:#ed8936,stroke:#c05621,color:#fff
+    style Engineering fill:#9f7aea,stroke:#6b46c1,color:#fff
+    style Finance fill:#f56565,stroke:#c53030,color:#fff
+    style Identity fill:#edf2f7,stroke:#4a5568,color:#2d3748
+    style Compliance fill:#edf2f7,stroke:#4a5568,color:#2d3748
+    style Observability fill:#edf2f7,stroke:#4a5568,color:#2d3748
+    style Workflow fill:#edf2f7,stroke:#4a5568,color:#2d3748
+`} fallback="Enterprise agents across verticals (customer support, sales, analytics, engineering, finance) share common infrastructure layers: identity and permissions, compliance and audit, observability and monitoring, and workflow integration." />
+
+> **Key Takeaway:** Enterprise readiness is not a single dimension. It requires alignment across governance, permissions, observability, human oversight, evaluation, and rollout planning.
+
+## The Enterprise Agent Maturity Model
+
+Enterprise agents evolve through three maturity stages, each representing increasing autonomy, trust, and governance complexity.
+
+<DataTable
+  headers={["Maturity Level", "Agent Role", "Autonomy", "Governance Requirements"]}
+  rows={[
+    ["Copilot", "Human-directed assistant that suggests actions but does not execute them", "Low: agent proposes, human approves every action", "Minimal: suggestions do not affect systems, so audit trails are optional"],
+    ["Assistant", "Agent executes actions with approval gates for critical operations", "Medium: agent acts independently for low-risk tasks, requires approval for high-risk tasks", "Moderate: audit trail for all actions, approval workflow for gated operations, incident escalation"],
+    ["Autonomous Agent", "Agent acts independently within policy boundaries, human oversight is exception-based", "High: agent executes multi-step workflows without per-action approval, escalates only when policy constraints are violated", "High: comprehensive audit trail, policy enforcement framework, anomaly detection, incident response, regular governance review"]
+  ]}
+  caption="Enterprise Agent Maturity Model showing three stages of increasing autonomy and governance complexity."
+/>
+
+Most enterprise deployments begin at the Copilot level and gradually increase autonomy as trust builds, governance frameworks mature, and evaluation demonstrates safe operation. This is the same trust calibration pattern from Module 9 (Multi-Agent Collaboration), but applied at the organizational level rather than the technical level.
+
+> **Key Takeaway:** Agent autonomy is earned through demonstrated reliability, not granted upfront. Start with Copilot mode, measure success, and graduate to Assistant or Autonomous mode only when governance and evaluation frameworks are mature.
+
+## Enterprise Evaluation Criteria
+
+Enterprise agent evaluation differs from general agent evaluation. In Module 11 (Evaluation and Testing), you learned the core evaluation framework: task success rate, accuracy, latency, and cost. Enterprise evaluation adds business-specific success criteria:
+
+1. **ROI (Return on Investment)** — Time saved, error reduction, throughput gain, capacity unlocked. Enterprise agents must demonstrate measurable business value. If an agent saves 10 hours per week per user, that translates to dollar savings and capacity for higher-value work.
+
+2. **Adoption Rate** — What percentage of target users are actively using the agent? Adoption rate is a leading indicator of success. If users do not adopt the agent, it delivers no value regardless of technical performance. Low adoption may indicate poor user experience, lack of trust, insufficient training, or misalignment between agent capabilities and user needs.
+
+3. **Compliance Score** — Policy violations per 1,000 actions. Enterprise agents must operate within policy boundaries. Compliance violations (unauthorized data access, incorrect approvals, regulation breaches) are critical incidents. Track compliance score as a core KPI and investigate every violation.
+
+4. **Incident Rate** — How often does the agent cause problems that require human intervention, rollback, or damage control? Incidents include incorrect actions, data corruption, security breaches, and workflow failures. Incident rate measures agent reliability in production and informs decisions about expanding autonomy.
+
+These enterprise metrics complement the technical metrics from Module 11. Task success rate and accuracy matter, but so do ROI, adoption, compliance, and incident rate. Enterprise success requires both technical correctness and business impact.
+
+## Summary
+
+This lesson established the foundational differences between prototype agents and enterprise agents. Enterprise deployment introduces organizational concerns: governed data access, identity and permissions, compliance and audit trails, workflow integration, and change management. The four-layer domain-specific agent template from Module 13 still applies, but each layer gains additional enterprise requirements.
+
+The Enterprise Agent Maturity Model describes three stages: Copilot (human-directed), Assistant (agent acts with approval gates), and Autonomous Agent (agent acts independently within policy boundaries). Most organizations begin with Copilot mode and increase autonomy as trust and governance frameworks mature.
+
+In Lesson 02, you will explore the first enterprise vertical in depth: Data Agents and Analytics Agents. These agents help organizations turn data into insights by automating report generation, anomaly detection, and dashboard creation.

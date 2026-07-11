@@ -33,8 +33,8 @@
     },
     {
       "slug": "04-domain-specific-agents",
-      "title": "Domain-Specific Agents",
-      "description": "Patterns for customer support, data analysis, DevOps, and enterprise workflows",
+      "title": "Domain-Specific Agent Design Template",
+      "description": "A reusable four-layer architecture for building agents in any vertical domain",
       "estimatedMinutes": 12,
       "diagramTypes": ["architecture", "comparison"],
       "hasCode": true,
@@ -60,8 +60,8 @@
     },
     {
       "slug": "07-capstone-project",
-      "title": "Capstone Project",
-      "description": "Design and build a production-grade multi-agent system for a real-world use case",
+      "title": "Advanced Applications Lab",
+      "description": "Design and build a production-grade multi-agent system integrating advanced patterns",
       "estimatedMinutes": 15,
       "diagramTypes": ["architecture"],
       "hasCode": true,

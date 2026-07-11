@@ -1,0 +1,590 @@
+---
+title: "Data Agents and Analytics Agents"
+quiz:
+  - question: "What is the primary difference between a data agent and a data chatbot?"
+    options:
+      - "Data agents use SQL, chatbots use natural language"
+      - "Data agents execute multi-step workflows, chatbots provide one-shot answers"
+      - "Data agents are faster than chatbots"
+      - "Data agents require cloud infrastructure, chatbots run locally"
+    correctIndex: 1
+    explanation: "Data agents plan and execute multi-step analytical workflows with verification and evidence trails, while chatbots typically provide single-shot answers without iterative planning."
+  - question: "Why do data agents need a semantic layer?"
+    options:
+      - "To make queries run faster"
+      - "To reduce infrastructure costs"
+      - "To map business terminology to database schemas and ensure consistent metric definitions"
+      - "To comply with GDPR regulations"
+    correctIndex: 2
+    explanation: "A semantic layer provides canonical definitions for business terms like 'active customer' or 'revenue,' preventing inconsistent interpretations and incorrect query generation."
+  - question: "At which autonomy tier should an agent require human approval before executing?"
+    options:
+      - "Tier 1: read-only queries"
+      - "Tier 2: derived analysis"
+      - "Tier 3: recommended actions"
+      - "Tier 4: write-back and data modifications"
+    correctIndex: 3
+    explanation: "Write operations (Tier 4 and above) modify data or pipelines and should require human approval to prevent data corruption or unauthorized changes."
+  - question: "According to the 2026 Data Agent Benchmark, what was the best frontier model's pass@1 rate on complex enterprise tasks?"
+    options:
+      - "85%"
+      - "62%"
+      - "38%"
+      - "91%"
+    correctIndex: 2
+    explanation: "The benchmark found only 38% pass@1 on complex enterprise-style data-agent tasks, indicating that data agents are not yet a solved problem."
+---
+
+## Overview
+
+In Lesson 01, you learned why enterprise agent design differs from consumer patterns: data scale, permission complexity, cost sensitivity, and audit requirements shape every design decision. This lesson applies the four-layer enterprise template to one of the most impactful verticals: **data agents**.
+
+A **data agent** is an AI system that plans and executes multi-step data workflows using analytical tools like databases, warehouses, semantic models, and business intelligence platforms. Unlike simple chatbots that answer questions with single queries, data agents iteratively refine their approach, validate intermediate results, and construct evidence trails for human review.
+
+Data agents appear in every data-intensive enterprise workflow: answering executive questions, investigating anomalies, generating reports, validating data quality, and recommending pipeline improvements. Understanding their architecture and limits is essential for deploying reliable analytical automation.
+
+## Data Agent vs Data Chatbot
+
+Many organizations confuse data chatbots with data agents. The distinction matters for setting expectations and choosing the right architecture.
+
+<DataTable
+  headers={["Dimension", "Data Chatbot", "Data Agent"]}
+  rows={[
+    ["Workflow", "One-shot Q&A", "Multi-step analysis with planning"],
+    ["Query strategy", "Single SQL query", "Iterative query refinement"],
+    ["Actions", "Read-only answers", "Possible pipeline/data-quality actions"],
+    ["Validation", "Weak or absent", "Evidence trails and verification steps"],
+    ["Human oversight", "Optional", "Required for write operations"],
+    ["Typical use case", "Simple lookups", "Complex investigations and decisions"]
+  ]}
+  caption="Chatbots answer questions; agents execute workflows."
+/>
+
+> **Key takeaway:** A data chatbot is a conversational interface to your data. A data agent is an autonomous analyst that plans, executes, validates, and reports on multi-step analytical workflows.
+
+## Core Capabilities
+
+Enterprise data agents typically provide:
+
+1. **Connection management** — Access to databases, data warehouses (Snowflake, BigQuery, Redshift), lakehouses (Databricks, Delta Lake), and semantic models (Tableau, Power BI, dbt metrics)
+2. **Schema understanding** — Read table schemas, column types, relationships, and business terminology from metadata catalogs
+3. **Query generation** — Translate natural language questions into SQL, DAX, KQL, or other query languages appropriate to the platform
+4. **Query validation** — Check syntax, estimate cost, verify permissions, and prevent destructive operations before execution
+5. **Result analysis** — Interpret query results, detect anomalies, and explain findings in business terms
+6. **Visualization and reporting** — Produce charts, dashboards, or evidence-backed summaries for stakeholders
+7. **Governance compliance** — Respect row-level security, column masking, data lineage, and audit requirements
+
+The capability list looks straightforward, but the enterprise challenge lies in **bridging the semantic gap** between how users describe their questions and how data is actually organized.
+
+## Why Data Agents Need a Semantic Layer
+
+Data agents often fail because they translate natural language directly to database tables without understanding what the business means by terms like "sales," "active customer," "churn," "region," or "quarter."
+
+Consider the question: *"What was our revenue in EMEA last quarter?"*
+
+Without a semantic layer, the agent faces ambiguity:
+
+- **Revenue definition:** Gross revenue? Net revenue? ARR? Bookings? Recognized revenue?
+- **EMEA definition:** Which countries? Does it include the Middle East? Africa?
+- **Quarter definition:** Fiscal quarter or calendar quarter? Does fiscal Q1 start in January or another month?
+- **Table selection:** Is revenue in `invoices`, `transactions`, `orders`, or a materialized view?
+- **Joins:** How do you link revenue records to regional data? What is the correct join grain?
+- **Permissions:** Does the user have access to all EMEA data, or are certain rows masked?
+
+A **semantic layer** provides canonical answers to these questions. It includes:
+
+1. **Metric definitions** — Explicit mappings from business terms to SQL expressions
+   ```sql
+   -- Example metric definition
+   revenue = SUM(transactions.amount_usd) WHERE status = 'completed'
+   ```
+
+2. **Entity definitions** — What counts as an "active customer," "churned account," or "qualified lead"
+   ```sql
+   -- Example entity definition
+   active_customer = (last_login_date >= CURRENT_DATE - 30) AND (subscription_status = 'active')
+   ```
+
+3. **Business glossary** — Canonical term-to-SQL mappings maintained by data teams
+   
+4. **Join specifications** — How tables relate and at what grain (customer-level, transaction-level, daily aggregates)
+
+5. **Permission-aware views** — Pre-filtered tables reflecting row-level security and column masking rules
+
+6. **Canonical dimensions** — Standardized hierarchies for time, geography, product categories, and customer segments
+
+Without a semantic layer, every data agent query is a gamble. With one, the agent can reliably translate business questions into correct analytical queries.
+
+> **Key takeaway:** The semantic layer is not optional for production data agents. It is the contract between business language and database reality.
+
+## Runtime Architecture
+
+Data agents map to the Module 5 harness architecture with data-specific components:
+
+<MermaidDiagram
+  chart={`graph TB
+    User[User Question] --> Context[Context Assembly]
+    Context --> Schema[Schema Metadata]
+    Context --> Semantic[Semantic Layer]
+    Context --> Permissions[Permission Rules]
+    
+    Context --> Agent[Agent Core]
+    Agent --> Tools[Tool Dispatch]
+    
+    Tools --> QueryEngine[Query Engines]
+    Tools --> SemanticModel[Semantic Models]
+    Tools --> DataQuality[Data Quality Tools]
+    Tools --> Notebooks[Notebooks / dbt]
+    
+    Tools --> Guard[Guardrails]
+    Guard --> ReadOnly[Read-Only Mode]
+    Guard --> Validation[Query Validation]
+    Guard --> RowLimits[Row Limits]
+    Guard --> CostLimits[Cost Limits]
+    Guard --> PIIMask[PII Masking]
+    
+    Agent --> HITL{HITL Gate}
+    HITL -->|Write Ops| Approval[Human Approval]
+    HITL -->|Read Ops| Execute[Execute]
+    
+    Execute --> Observe[Observability]
+    Observe --> Queries[Query Log]
+    Observe --> Sources[Data Sources Used]
+    Observe --> Evidence[Evidence Trail]
+    Observe --> Results[Result Samples]
+    
+    Approval --> Execute
+    
+    style Context fill:#e6f3ff,stroke:#4a90e2
+    style Agent fill:#fff4e6,stroke:#f39c12
+    style Guard fill:#ffe6e6,stroke:#e74c3c
+    style Observe fill:#e6ffe6,stroke:#27ae60`}
+  fallback="Data agent architecture: context assembly (schemas, semantic layer, permissions) feeds the agent core, which dispatches to query engines, semantic models, and data-quality tools. Guardrails enforce read-only mode, validation, and cost limits. HITL gates require approval for write operations. Observability logs queries, sources, and evidence trails."
+  caption="Data agents extend the Module 5 harness with semantic layers, query validation, and permission-aware execution."
+/>
+
+**Context assembly** includes:
+- Table and column schemas from metadata catalogs
+- Metric definitions from the semantic layer
+- Business glossary mappings
+- Row-level and column-level permission rules for the current user
+
+**Tool dispatch** connects to:
+- Query engines (SQL databases, BigQuery, Snowflake)
+- Semantic models (Tableau, Power BI, dbt metrics)
+- Notebooks (Jupyter, Databricks)
+- Data-quality tools (dbt tests, Great Expectations)
+
+**Guardrails** enforce:
+- Read-only mode by default (prevents accidental writes)
+- Query validation before execution (syntax, cost, permissions)
+- Row limits to prevent expensive scans
+- Cost limits to prevent runaway queries
+- PII masking for sensitive columns
+
+**HITL gates** require human approval for write operations and high-impact decisions.
+
+**Observability** logs:
+- Executed queries with timestamps
+- Data sources accessed
+- Result samples (not full datasets)
+- Confidence scores and evidence trails
+
+This architecture prevents the most common data agent failures: unauthorized data access, expensive queries, hallucinated schemas, and unverified results.
+
+## Write-Action Autonomy Tiers
+
+Not all data agent actions carry the same risk. Enterprise deployments use a tiered autonomy model:
+
+<DataTable
+  headers={["Tier", "Action Type", "Risk Level", "Approval Required", "Examples"]}
+  rows={[
+    ["1", "Read-only query", "Low", "No", "SELECT queries, dashboards"],
+    ["2", "Derived analysis", "Low-Medium", "No", "Aggregations, trend analysis"],
+    ["3", "Recommended action", "Medium", "Yes (decision)", "Suggested SQL edits, metric changes"],
+    ["4", "Write-back / data modification", "High", "Yes (execution)", "dbt model edits, CRM updates"],
+    ["5", "Pipeline modification", "Very High", "Yes (execution + audit)", "Schema changes, ETL rewrites"]
+  ]}
+  caption="Autonomy tiers determine when human approval is required."
+/>
+
+Most production data agents operate at **Tier 1** or **Tier 2**: they answer questions and produce insights but do not modify data or pipelines. Tier 3 agents recommend actions but require human decision-making. Tier 4 and Tier 5 agents execute changes but only after explicit approval and with full audit trails.
+
+> **Key takeaway:** Match autonomy tier to organizational risk tolerance. Start at Tier 1 and promote cautiously.
+
+## Worked Example
+
+**Question:** *"Why did sales decline in Ireland last quarter?"*
+
+### Step 1: Schema Discovery
+
+The agent queries the metadata catalog to find tables containing sales and geography data:
+
+- `transactions` table (columns: `amount`, `currency`, `country`, `date`, `status`)
+- `customers` table (columns: `customer_id`, `country`, `segment`)
+- `regions` table (columns: `country`, `region`)
+
+### Step 2: Metric Definition Lookup
+
+The agent checks the semantic layer for the definition of "sales":
+
+```sql
+-- Semantic layer definition
+sales = SUM(transactions.amount_usd) WHERE status = 'completed'
+```
+
+It also confirms that "last quarter" refers to the fiscal quarter (Q2 FY2026: April–June 2026).
+
+### Step 3: SQL Generation
+
+The agent generates a comparison query:
+
+```sql
+SELECT 
+  QUARTER(date) AS quarter,
+  SUM(amount_usd) AS total_sales
+FROM transactions
+WHERE country = 'Ireland'
+  AND status = 'completed'
+  AND date >= '2026-01-01'
+GROUP BY QUARTER(date)
+ORDER BY quarter;
+```
+
+### Step 4: Query Validation
+
+Before execution, the agent validates:
+- Syntax is correct
+- User has permission to access `transactions` table
+- Estimated cost is within budget
+- No destructive operations (read-only query)
+
+### Step 5: Execution and Result Analysis
+
+The query returns:
+
+| Quarter | Total Sales |
+|---------|-------------|
+| Q1 2026 | $1.2M       |
+| Q2 2026 | $0.9M       |
+
+The agent detects a **25% decline** from Q1 to Q2.
+
+### Step 6: Evidence Trail Construction
+
+The agent produces a summary with evidence:
+
+> **Finding:** Sales in Ireland declined 25% from Q1 to Q2 2026 (from $1.2M to $0.9M).
+>
+> **Data sources:** `transactions` table (schema version 3.2), filtered by `country = 'Ireland'` and `status = 'completed'`.
+>
+> **Metric definition:** Sales = SUM(amount_usd) for completed transactions.
+>
+> **Recommended next step:** Investigate transaction volume and average transaction size to determine whether the decline is driven by fewer customers or smaller orders.
+
+This evidence trail allows stakeholders to verify the analysis and decide on next steps.
+
+## Code Example
+
+Here is a compact data analysis agent using the Anthropic SDK:
+
+<CodeBlock
+  code={`import anthropic
+import json
+from dataclasses import dataclass
+from enum import Enum
+from typing import List, Dict, Any, Optional
+
+# Domain models
+class QueryStatus(Enum):
+    VALID = "valid"
+    INVALID = "invalid"
+    UNAUTHORIZED = "unauthorized"
+
+@dataclass
+class SchemaInfo:
+    table: str
+    columns: List[Dict[str, str]]
+    
+@dataclass
+class QueryResult:
+    rows: List[Dict[str, Any]]
+    row_count: int
+    
+@dataclass
+class ValidationResult:
+    status: QueryStatus
+    message: str
+
+# Simulated data
+SCHEMAS = {
+    "transactions": {
+        "columns": [
+            {"name": "id", "type": "INTEGER"},
+            {"name": "amount_usd", "type": "DECIMAL"},
+            {"name": "country", "type": "VARCHAR"},
+            {"name": "date", "type": "DATE"},
+            {"name": "status", "type": "VARCHAR"}
+        ]
+    },
+    "customers": {
+        "columns": [
+            {"name": "customer_id", "type": "INTEGER"},
+            {"name": "country", "type": "VARCHAR"},
+            {"name": "segment", "type": "VARCHAR"}
+        ]
+    }
+}
+
+SEMANTIC_LAYER = {
+    "sales": "SUM(transactions.amount_usd) WHERE status = 'completed'",
+    "active_customer": "last_purchase_date >= CURRENT_DATE - 90"
+}
+
+# Tool definitions
+TOOLS = [
+    {
+        "name": "get_schema",
+        "description": "Retrieve schema information for database tables",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "table_name": {
+                    "type": "string",
+                    "description": "Name of the table"
+                }
+            },
+            "required": ["table_name"]
+        }
+    },
+    {
+        "name": "query_database",
+        "description": "Execute a read-only SQL query against the database",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "SQL SELECT query to execute"
+                }
+            },
+            "required": ["query"]
+        }
+    },
+    {
+        "name": "validate_query",
+        "description": "Validate a SQL query before execution",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "SQL query to validate"
+                }
+            },
+            "required": ["query"]
+        }
+    }
+]
+
+def execute_tool(tool_name: str, tool_input: Dict[str, Any]) -> str:
+    """Execute tool and return result as JSON string."""
+    if tool_name == "get_schema":
+        table = tool_input["table_name"]
+        if table in SCHEMAS:
+            return json.dumps({
+                "table": table,
+                "columns": SCHEMAS[table]["columns"]
+            })
+        return json.dumps({"error": f"Table {table} not found"})
+    
+    elif tool_name == "validate_query":
+        query = tool_input["query"].upper()
+        if "DROP" in query or "DELETE" in query or "UPDATE" in query:
+            return json.dumps({
+                "status": "invalid",
+                "message": "Write operations not permitted"
+            })
+        if "SELECT" not in query:
+            return json.dumps({
+                "status": "invalid",
+                "message": "Only SELECT queries allowed"
+            })
+        return json.dumps({
+            "status": "valid",
+            "message": "Query validation passed"
+        })
+    
+    elif tool_name == "query_database":
+        # Simulated query execution
+        return json.dumps({
+            "rows": [
+                {"quarter": "Q1 2026", "total_sales": 1200000},
+                {"quarter": "Q2 2026", "total_sales": 900000}
+            ],
+            "row_count": 2
+        })
+    
+    return json.dumps({"error": "Unknown tool"})
+
+def run_data_agent(question: str, max_iterations: int = 10) -> str:
+    """Run the data analysis agent."""
+    client = anthropic.Anthropic()
+    
+    system_prompt = """You are a data analysis agent. Your role:
+
+1. Understand the user's analytical question
+2. Identify relevant data sources using get_schema
+3. Generate SQL queries to answer the question
+4. Validate queries using validate_query before execution
+5. Execute queries using query_database
+6. Analyze results and provide evidence-backed insights
+
+Constraints:
+- Only execute read-only queries (SELECT)
+- Always validate queries before execution
+- Cite data sources and metric definitions in your analysis
+- Construct evidence trails for all findings
+
+Available metric definitions:
+- sales: SUM(transactions.amount_usd) WHERE status = 'completed'
+- active_customer: last_purchase_date >= CURRENT_DATE - 90"""
+
+    messages = [{"role": "user", "content": question}]
+    
+    for iteration in range(max_iterations):
+        response = client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=4096,
+            system=system_prompt,
+            tools=TOOLS,
+            messages=messages
+        )
+        
+        # Check stop reason
+        if response.stop_reason == "end_turn":
+            # Extract final text response
+            for block in response.content:
+                if hasattr(block, "text"):
+                    return block.text
+            return "Analysis complete (no text output)"
+        
+        # Process tool uses
+        if response.stop_reason == "tool_use":
+            # Add assistant response to messages
+            messages.append({"role": "assistant", "content": response.content})
+            
+            # Execute tools and collect results
+            tool_results = []
+            for block in response.content:
+                if block.type == "tool_use":
+                    result = execute_tool(block.name, block.input)
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": result
+                    })
+            
+            # Add tool results to messages
+            messages.append({"role": "user", "content": tool_results})
+        else:
+            return f"Unexpected stop reason: {response.stop_reason}"
+    
+    return "Maximum iterations reached"
+
+# Example usage
+if __name__ == "__main__":
+    question = "Why did sales decline in Ireland last quarter?"
+    result = run_data_agent(question)
+    print(result)
+`}
+  language="python"
+  filename="data_analysis_agent.py"
+/>
+
+This compact implementation demonstrates:
+- Schema discovery and query validation before execution
+- Read-only enforcement (rejects DROP, DELETE, UPDATE)
+- Semantic layer integration (metric definitions in system prompt)
+- Evidence trail construction (sources and definitions cited in output)
+
+A production implementation would include connection pooling, cost estimation, permission checks, result caching, and integration with enterprise semantic layers.
+
+## Common Types
+
+Enterprise data agents vary by scope and autonomy:
+
+1. **Analytics agent** — Answers business questions by querying warehouses and semantic models. This is the most common enterprise data agent.
+
+2. **Data engineering agent** — Assists with pipeline development, dbt model generation, and ETL troubleshooting. Operates at Tier 3 (recommendations) or Tier 4 (approved changes).
+
+3. **Data quality agent** — Monitors data freshness, completeness, and consistency. Detects anomalies and alerts stakeholders. Can execute data-quality tests.
+
+4. **Governance agent** — Audits data access, tracks lineage, and enforces compliance policies. Read-only with audit-trail generation.
+
+5. **Data science agent** — Supports exploratory analysis, feature engineering, and model evaluation. Often integrated with notebook environments.
+
+Each type requires domain-specific tools, validation rules, and HITL workflows.
+
+## Reliability Limits
+
+Data agents are not a solved problem. The 2026 Data Agent Benchmark (arXiv:2603.20576) evaluated frontier models on complex enterprise-style analytical tasks and found:
+
+> The best tested model reached only **38% pass@1** on tasks requiring multi-step reasoning, semantic layer understanding, and correct SQL generation.
+
+Common failure modes include:
+- Hallucinating table or column names
+- Ignoring metric definitions from the semantic layer
+- Generating syntactically correct but semantically wrong queries
+- Misinterpreting join requirements
+- Violating permission boundaries
+
+The data agent taxonomy paper (arXiv:2602.04261) notes that the term "data agent" is used inconsistently across vendors and proposes a hierarchy from low-autonomy assistants to more autonomous agents.
+
+<VerifyClaim status="verify">
+Some vendor benchmarks report higher success rates, but these often use simplified schemas and single-table queries that do not reflect enterprise complexity.
+</VerifyClaim>
+
+> **Key takeaway:** Data agents require careful evaluation, human oversight, and continuous monitoring. Do not deploy them assuming reliability without validation.
+
+## Evaluation
+
+Evaluating data agents requires both correctness metrics and workflow metrics:
+
+**Correctness:**
+- **SQL/query correctness** — Does the generated query match ground-truth queries for known questions?
+- **Source selection** — Did the agent query the correct tables?
+- **Metric-definition accuracy** — Did the agent use canonical metric definitions?
+- **Permission compliance** — Did the agent respect row-level and column-level access controls?
+- **Hallucination rate** — How often does the agent reference non-existent columns or tables?
+
+**Workflow:**
+- **Reproducibility** — Can another analyst verify the result using the evidence trail?
+- **Evidence trail quality** — Are data sources, filters, and definitions clearly documented?
+- **Human-review workflow** — How long does it take for a human to review and approve Tier 3+ actions?
+
+Enterprise data teams often maintain **golden question sets**: a curated list of business questions with known correct answers. Data agents are tested against these questions before deployment and monitored continuously in production.
+
+## Enterprise Controls Used in This Vertical
+
+Data agents rely on these enterprise controls (to be consolidated in Lesson 06):
+
+- **Read-only enforcement** — Prevents accidental or malicious data modification
+- **Query cost limits** — Prevents expensive scans and runaway queries
+- **PII masking** — Automatically redacts sensitive columns based on governance policies
+- **Column-level access control** — Restricts visibility of sensitive columns by user role
+- **Audit of executed queries** — Logs all queries with user identity, timestamp, and result samples
+
+These controls are not optional. Without them, data agents pose unacceptable risk to data integrity and compliance.
+
+## Summary
+
+Data agents plan and execute multi-step analytical workflows, bridging the gap between business questions and database reality. Unlike simple chatbots, they iterate on queries, validate intermediate results, and construct evidence trails for human review.
+
+The **semantic layer** is critical: it provides canonical definitions for metrics, entities, and business terminology, preventing the most common failure mode—generating syntactically correct but semantically wrong queries.
+
+Enterprise deployments use **autonomy tiers** to match agent capabilities to organizational risk tolerance, with read-only agents (Tier 1–2) deployed widely and write-capable agents (Tier 4–5) requiring approval workflows.
+
+Current data agents are not fully reliable. Benchmarks show frontier models achieving only 38% pass@1 on complex tasks, with common failures including hallucinated schemas, ignored metric definitions, and violated permissions.
+
+In Lesson 03, you will apply the same architectural template to **knowledge agents and support agents**, which navigate document repositories and resolve customer issues.
