@@ -296,6 +296,26 @@ The model sees this error in the next turn and can retry with `{"query": "MCP", 
 
 Permission boundaries determine **which tools** an agent can use and **under what conditions**. This is distinct from parameter validation — a tool call can be well-formed but still forbidden.
 
+<MermaidDiagram chart={`graph TD
+    TC["Tool Call Received"] --> AL{"On allow-list?"}
+    AL -->|no| DENY1["Reject: tool not permitted"]
+    AL -->|yes| DL{"On deny-list?"}
+    DL -->|yes| DENY2["Reject: tool blocked"]
+    DL -->|no| QUOTA{"Quota remaining?"}
+    QUOTA -->|no| DENY3["Reject: quota exhausted"]
+    QUOTA -->|yes| RISK{"High-risk tool?"}
+    RISK -->|yes| CONFIRM{"User confirms?"}
+    CONFIRM -->|no| DENY4["Reject: user denied"]
+    CONFIRM -->|yes| EXEC["Execute tool"]
+    RISK -->|no| EXEC
+
+    style EXEC fill:#e8f5e9,stroke:#388e3c
+    style DENY1 fill:#ffebee,stroke:#c62828
+    style DENY2 fill:#ffebee,stroke:#c62828
+    style DENY3 fill:#ffebee,stroke:#c62828
+    style DENY4 fill:#ffebee,stroke:#c62828
+`} />
+
 ### Static Permissions
 
 A static permission list hardcodes allowed tools:

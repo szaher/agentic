@@ -198,6 +198,22 @@ Plain text logs ("Calling search tool with query 'climate data'") are human-read
 
 Every observability system must answer these questions:
 
+<MermaidDiagram chart={`graph TD
+    START["Unexpected Agent Output"] --> Q1["What did the model see?"]
+    START --> Q2["What did it decide?"]
+    START --> Q3["What happened?"]
+    START --> Q4["Was it right?"]
+    Q1 --> A1["Traces: context input span"]
+    Q2 --> A2["Traces: model output span"]
+    Q3 --> A3["Traces: tool & state spans"]
+    Q4 --> A4["Evals: per-run scoring"]
+
+    style Q1 fill:#e3f2fd,stroke:#1976d2
+    style Q2 fill:#fff3e0,stroke:#f57c00
+    style Q3 fill:#f3e5f5,stroke:#7b1fa2
+    style Q4 fill:#e8f5e9,stroke:#388e3c
+`} />
+
 1. **What did the model see?** (Context inspection)
    - Full prompt with system message, conversation history, tool schemas
    - Reveals context assembly bugs: truncated history, missing search results, incorrect prompt construction

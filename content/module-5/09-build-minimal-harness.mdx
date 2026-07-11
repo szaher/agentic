@@ -21,10 +21,17 @@ You've learned the eight harness concerns conceptually across Lessons 1–8. Now
 **Why this is valuable:** Understanding the bare-metal implementation makes framework abstractions legible. You'll see exactly what LangGraph's `StateGraph` or Claude SDK's `Runner` are doing under the hood.
 
 **The build progression:**
-1. **Stage 1:** Bare loop — call the model, print the response
-2. **Stage 2:** Add tool dispatch — register tools, parse tool_use blocks, format tool_result
-3. **Stage 3:** Add context assembly — system prompt + history management
-4. **Stage 4:** Add loop controls — max turns, token budgets, timeout
+
+<MermaidDiagram chart={`graph LR
+    S1["Stage 1<br/>Bare Loop<br/>• while loop<br/>• model call<br/>• print response"] --> S2["Stage 2<br/>+ Tool Dispatch<br/>• tool registry<br/>• parse tool_use<br/>• format tool_result"]
+    S2 --> S3["Stage 3<br/>+ Context Assembly<br/>• system prompt<br/>• history window<br/>• token counting"]
+    S3 --> S4["Stage 4<br/>+ Loop Controls<br/>• max turns<br/>• token budget<br/>• stop tool"]
+
+    style S1 fill:#e3f2fd,stroke:#1976d2
+    style S2 fill:#fff3e0,stroke:#f57c00
+    style S3 fill:#f3e5f5,stroke:#7b1fa2
+    style S4 fill:#e8f5e9,stroke:#388e3c
+`} />
 
 **Critical pedagogical choice:** We'll use a **fake deterministic model client** (`FakeModelClient`) for all stages. This class returns scripted tool-call sequences based on keyword matching in the input. Every stage is reproducible and runnable without API credentials.
 
@@ -546,6 +553,24 @@ run_agent_v4("What is the population of France?", max_turns=3)
 You'll add these in Lesson 10.
 
 ## The Complete Minimal Harness
+
+<MermaidDiagram chart={`graph TD
+    LC["Loop Controller<br/>max turns · stop tool · budget"] --> AL["Agent Loop"]
+    AL --> CA["Context Assembler"]
+    AL --> TR["Tool Registry"]
+    AL --> MODEL["Model Client"]
+    CA --> SP["System Prompt"]
+    CA --> HIST["Message History"]
+    CA --> TRES["Tool Results"]
+    TR --> T1["search"]
+    TR --> T2["calculate"]
+    TR --> T3["stop"]
+
+    style AL fill:#9f7aea,stroke:#6b46c1,color:#fff
+    style LC fill:#e8f5e9
+    style CA fill:#e3f2fd
+    style TR fill:#fff3e0
+`} />
 
 Here's the full final version, refactored into a `Harness` class for clarity.
 

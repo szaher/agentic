@@ -259,6 +259,49 @@ while state != WorkflowState.DONE:
 
 The architectures from Module 4 can usually be implemented with one or more of these control flow models. The mappings are not rigid — the same architecture may evolve from a simple loop to a graph as requirements grow.
 
+<DataTable caption="Architecture to control flow mapping">
+  <thead>
+    <tr>
+      <th>Architecture</th>
+      <th>Natural Flow Model</th>
+      <th>Complexity</th>
+      <th>Evolves To</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>ReAct</td>
+      <td>Linear Loop</td>
+      <td>Low</td>
+      <td>Graph (if tool sequencing needed)</td>
+    </tr>
+    <tr>
+      <td>Plan-and-Execute</td>
+      <td>Loop + Planning State</td>
+      <td>Medium</td>
+      <td>Graph or Workflow (parallel sub-goals, conditional branches)</td>
+    </tr>
+    <tr>
+      <td>Routing / Handoffs</td>
+      <td>Conditional Router</td>
+      <td>Medium</td>
+      <td>Graph (multi-level classification)</td>
+    </tr>
+    <tr>
+      <td>LangGraph-Style</td>
+      <td>Directed Graph</td>
+      <td>High</td>
+      <td>Already graph-based; may embed loops inside nodes</td>
+    </tr>
+    <tr>
+      <td>Business Processes</td>
+      <td>State Machine</td>
+      <td>High</td>
+      <td>Workflow runtime (Temporal, Inngest)</td>
+    </tr>
+  </tbody>
+</DataTable>
+
 ### ReAct → Usually Linear Loop
 
 **Why:** ReAct is reasoning + acting in a loop. The model decides when to think, when to use tools, and when to stop. A linear loop fits this naturally.
@@ -467,6 +510,17 @@ The user sees a seamless handoff, but the underlying model now operates under di
 The handoff examples above assume both agents run inside the same harness. But what if Agent B runs in a different framework — or a different organization?
 
 **A2A (Agent-to-Agent Protocol)** standardizes cross-runtime handoffs. Instead of framework-specific message passing, agents discover peers via a registry and coordinate through structured A2A messages: task delegation, status updates, and results.
+
+<MermaidDiagram chart={`sequenceDiagram
+    participant A as Agent A
+    participant R as A2A Registry
+    participant B as Agent B (External Runtime)
+    A->>R: Discover agents for task type
+    R-->>A: Agent Card (capabilities, auth)
+    A->>B: Delegate task + serialized context
+    B->>B: Validate identity and scope
+    B-->>A: Result + provenance chain
+`} />
 
 **Runtime implications for handoffs:**
 

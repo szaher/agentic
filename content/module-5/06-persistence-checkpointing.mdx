@@ -66,6 +66,25 @@ In this lesson, you will learn why persistence matters, what gets checkpointed, 
 
 Why do agent harnesses need persistence? Here are five production motivations:
 
+<MermaidDiagram chart={`mindmap
+  root((Why Persist?))
+    Failure Recovery
+      Resume after crash
+      Skip completed steps
+    Human Intervention
+      Pause for approval
+      Resume with decision
+    Inspection
+      Debug past states
+      Examine pending actions
+    Time Travel
+      Rewind to prior step
+      Re-execute from checkpoint
+    Auditability
+      Compliance trail
+      Prove what happened
+`} />
+
 ### 1. Failure Recovery
 
 An agent run might fail due to:
@@ -544,6 +563,26 @@ Checkpointing *saves* cost when it prevents re-execution:
 ## Case Study: Crash and Resume in a Research Assistant
 
 Let's walk through a real scenario.
+
+<MermaidDiagram chart={`sequenceDiagram
+    participant H as Harness
+    participant M as Model
+    participant S as Storage
+    H->>M: Turn 1: Search source 1
+    H->>S: Checkpoint C1
+    H->>M: Turn 2: Search source 2
+    H->>S: Checkpoint C2
+    H->>M: Turn 3: Search source 3
+    H->>S: Checkpoint C3
+    H->>M: Turn 4: Search source 4
+    Note over H: CRASH (network timeout)
+    H->>S: Load checkpoint C3
+    S-->>H: State at Turn 3
+    H->>M: Turn 4: Search source 4 (retry)
+    H->>S: Checkpoint C4
+    H->>M: Turn 5: Search source 5
+    H->>S: Checkpoint C5
+`} />
 
 ### Scenario
 

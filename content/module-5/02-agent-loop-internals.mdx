@@ -208,6 +208,28 @@ This dual-exit pattern is why the harness must track both "did the agent succeed
 
 Let us walk through each of the ten phases in detail. This is where the harness makes all the decisions that determine agent behavior.
 
+<MermaidDiagram chart={`graph TD
+    P1["1. Pre-Turn Hooks"] --> P2["2. Context Assembly"]
+    P2 --> P3["3. Model Call"]
+    P3 --> P4["4. Response Parsing"]
+    P4 --> P5{"5. Action Validation"}
+    P5 -->|"valid"| P6["6. Tool Execution"]
+    P5 -->|"rejected"| P9B["9. Post-Turn Hooks"]
+    P6 --> P7["7. Observation &<br/>Context Update"]
+    P7 --> P8["8. State Checkpoint"]
+    P8 --> P9["9. Post-Turn Hooks"]
+    P9 --> P10{"10. Termination Check"}
+    P10 -->|"continue"| P1
+    P10 -->|"stop"| END["Return Result"]
+    P9B --> END
+
+    style P3 fill:#e3f2fd,stroke:#1976d2
+    style P6 fill:#fff3e0,stroke:#f57c00
+    style P8 fill:#f3e5f5,stroke:#7b1fa2
+    style P5 fill:#ffebee,stroke:#c62828
+    style P10 fill:#ffebee,stroke:#c62828
+`} />
+
 ### Phase 1: Pre-Turn Hooks
 
 Before the model is called, the harness executes any registered pre-turn hooks. These are user-defined callbacks that can:

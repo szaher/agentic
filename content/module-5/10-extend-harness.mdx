@@ -15,10 +15,33 @@ In Lesson 9, you built a minimal harness with four concerns: loop internals, too
 
 In this lesson, you'll extend it with four production-critical features:
 
-1. **Structured Agent State** — a serializable state object that tools can read and write
-2. **Checkpoint and Resume with Idempotency** — save/restore state and skip completed work on resume
-3. **Tracing** — structured JSON events for observability and debugging
-4. **Approval Gate** — human-in-the-loop intervention for dangerous actions
+<MermaidDiagram chart={`graph TD
+    subgraph Minimal["Minimal Harness (Lesson 9)"]
+        AL["Agent Loop"]
+        TR["Tool Registry"]
+        CA["Context Assembler"]
+        LC["Loop Controller"]
+    end
+
+    subgraph Extensions["Extensions (This Lesson)"]
+        STATE["1. Structured State"]
+        CKPT["2. Checkpoint/Resume"]
+        TRACE["3. Tracing"]
+        GATE["4. Approval Gate"]
+    end
+
+    AL --> STATE
+    AL --> CKPT
+    AL --> TRACE
+    AL --> GATE
+
+    style STATE fill:#c6f6d5,stroke:#38a169
+    style CKPT fill:#c6f6d5,stroke:#38a169
+    style TRACE fill:#c6f6d5,stroke:#38a169
+    style GATE fill:#c6f6d5,stroke:#38a169
+    style Minimal fill:#e9d5ff,stroke:#9f7aea
+    style Extensions fill:#d1fae5,stroke:#10b981
+`} />
 
 Each extension builds incrementally. By the end, you'll have a harness that implements **6 of the 8 concerns** from Lesson 1.
 
@@ -225,6 +248,24 @@ class Harness:
 What happens if the harness crashes mid-run? All progress is lost. In production, long-running agents (research tasks, deployments, data pipelines) must survive failures.
 
 **Solution:** Add checkpointing. Serialize state + history + completed tool calls to disk. On resume, skip completed work and continue from the last checkpoint.
+
+<MermaidDiagram chart={`graph TD
+    START["Start"] --> CHECK{"Checkpoint<br/>exists?"}
+    CHECK -->|yes| LOAD["Load saved state"]
+    CHECK -->|no| INIT["Initialize fresh state"]
+    LOAD --> SKIP["Skip completed turns"]
+    SKIP --> RESUME["Resume from next turn"]
+    INIT --> EXEC["Execute turn"]
+    RESUME --> EXEC
+    EXEC --> SAVE["Save checkpoint"]
+    SAVE --> TERM{"Done?"}
+    TERM -->|no| EXEC
+    TERM -->|yes| END["Return result"]
+
+    style LOAD fill:#e3f2fd
+    style SAVE fill:#fff3e0
+    style SKIP fill:#c6f6d5
+`} />
 
 ```python
 # harness_checkpoint.py

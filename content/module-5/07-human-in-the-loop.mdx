@@ -53,6 +53,30 @@ Intervention is not a sign of failure — it's a deliberate control mechanism.
 
 A harness provides multiple **intervention points** where humans can influence agent behavior:
 
+<MermaidDiagram chart={`graph TD
+    TURN["Turn Start"] --> CTX["Context Assembly"]
+    CTX --> MODEL["Model Call"]
+    MODEL --> PARSE["Parse Response"]
+    PARSE --> PRE{"Pre-Action<br/>Approval"}
+    PRE -->|approved| EXEC["Tool Execution"]
+    PRE -->|denied| GOAL
+    EXEC --> POST{"Post-Action<br/>Review"}
+    POST -->|ok| STATE["Update State"]
+    POST -->|flag| ESC
+    STATE --> TERM{"Termination<br/>Check"}
+    TERM -->|continue| GOAL{"Goal<br/>Modification?"}
+    GOAL --> TURN
+    TERM -->|uncertain| ESC{"Escalation on<br/>Uncertainty"}
+    TERM -->|stop| DONE["Done"]
+    ESTOP["Emergency Stop"] -.->|async, any point| DONE
+
+    style PRE fill:#ffd700,stroke:#b8860b
+    style POST fill:#ffd700,stroke:#b8860b
+    style GOAL fill:#ffd700,stroke:#b8860b
+    style ESC fill:#ffd700,stroke:#b8860b
+    style ESTOP fill:#ff6347,stroke:#cc0000,color:#fff
+`} />
+
 ### 1. Pre-Action Approval
 
 The harness **pauses before executing a high-risk action** and requests human approval.
@@ -228,6 +252,43 @@ The harness maps **action risk** and **reversibility** to an intervention level:
 ## Synchronous vs Asynchronous Intervention
 
 Intervention can be **synchronous** (blocking) or **asynchronous** (non-blocking):
+
+<DataTable caption="Synchronous vs asynchronous intervention">
+  <thead>
+    <tr>
+      <th>Attribute</th>
+      <th>Synchronous</th>
+      <th>Asynchronous</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Agent behavior</td>
+      <td>Blocks, waits for response</td>
+      <td>Checkpoints, continues other work</td>
+    </tr>
+    <tr>
+      <td>Latency impact</td>
+      <td>High (user must be present)</td>
+      <td>Variable (hours to days possible)</td>
+    </tr>
+    <tr>
+      <td>Use case</td>
+      <td>Interactive CLI, short-lived scripts</td>
+      <td>Long-running agents, batch jobs</td>
+    </tr>
+    <tr>
+      <td>Persistence needed</td>
+      <td>No (process stays alive)</td>
+      <td>Yes (checkpoint + resume)</td>
+    </tr>
+    <tr>
+      <td>User experience</td>
+      <td>Immediate dialog prompt</td>
+      <td>Notification or approval queue</td>
+    </tr>
+  </tbody>
+</DataTable>
 
 ### Synchronous (Blocking)
 

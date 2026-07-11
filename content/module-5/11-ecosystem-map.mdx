@@ -103,6 +103,34 @@ These are not among the Big Seven but appear in production agent stacks:
 - **Temporal** — a durable execution platform with exactly-once semantics. Hosts agent steps as workflow activities. Use when agents are part of larger distributed workflows requiring transactional guarantees.
 - **Prefect / Airflow** — workflow orchestrators for data pipelines. Can embed LLM agent steps but lack interactive session continuity.
 
+<MermaidDiagram chart={`graph TD
+    subgraph SDK["SDK-Style"]
+        OAI["OpenAI Agents SDK"]
+        CLAUDE["Claude Agent SDK"]
+    end
+    subgraph GraphRT["Graph-Based"]
+        LG["LangGraph"]
+    end
+    subgraph MultiAgent["Multi-Agent"]
+        CREW["CrewAI"]
+        MAF["MAF 1.0"]
+    end
+    subgraph FullStack["Full-Stack"]
+        ADK["Google ADK"]
+        MASTRA["Mastra"]
+    end
+    MAF ---|"MCP + A2A"| ADK
+    CLAUDE ---|"MCP"| MAF
+    ADK ---|"MCP"| CLAUDE
+    OAI -.- LG
+    CREW -.- MASTRA
+
+    style SDK fill:#e3f2fd,stroke:#1976d2
+    style GraphRT fill:#f3e5f5,stroke:#7b1fa2
+    style MultiAgent fill:#fff3e0,stroke:#f57c00
+    style FullStack fill:#e8f5e9,stroke:#388e3c
+`} />
+
 ## Comparison Table
 
 The table below maps the runtime model, the eight harness concerns, deployment model, and protocol support across the Big Seven frameworks plus Custom. Each cell summarizes how the framework addresses the concern.

@@ -1,0 +1,401 @@
+{
+  "plans": [
+    {
+      "lessonId": "lesson-what-is-harness",
+      "multimediaPlan": {
+        "recommendations": [
+          {
+            "id": "lesson-what-is-harness-mind-map-01",
+            "type": "mind-map",
+            "rationale": "The Five Adjacent Layers section introduces a hierarchy of five layers surrounding the harness (model provider, tools, memory, orchestrator, deployment). A mind-map clarifies how the harness sits relative to each layer better than inline prose.",
+            "priority": "recommended",
+            "placement": "## The Five Adjacent Layers, after the introductory paragraph",
+            "contentBrief": "Central node: 'Agent Harness'. Five branches: Model Provider (below), Tool Layer (right), Memory/State (left), Orchestration (above-right), Deployment/Infra (above-left). Each branch has 2-3 leaf nodes with key responsibilities.",
+            "accessibilityNotes": "Provide alt text listing all five layers and their relationship to the harness. Use shape differentiation (rectangles vs rounded) not just color to distinguish layer types.",
+            "objectiveIds": ["obj-define-harness"],
+            "mermaidSource": null,
+            "estimatedEffort": "medium"
+          },
+          {
+            "id": "lesson-what-is-harness-slides-01",
+            "type": "slides",
+            "rationale": "The lesson introduces the foundational vocabulary for the entire module. A summary slide deck reinforces the eight concerns and harness spectrum for review.",
+            "priority": "optional",
+            "placement": "## Summary, as a recap artifact",
+            "contentBrief": "5-slide deck: (1) Title: What Is a Harness? (2) The Harness Layer diagram (3) Eight Concerns grid (4) Harness Spectrum: thin → thick (5) Decision: when you need one. Reuse existing Mermaid diagrams as slide content.",
+            "accessibilityNotes": "Each slide needs a text fallback. Slide content should not rely on color alone for the spectrum visualization.",
+            "objectiveIds": ["obj-define-harness"],
+            "mermaidSource": null,
+            "estimatedEffort": "medium"
+          }
+        ]
+      }
+    },
+    {
+      "lessonId": "lesson-agent-loop-internals",
+      "multimediaPlan": {
+        "recommendations": [
+          {
+            "id": "lesson-agent-loop-internals-mermaid-01",
+            "type": "mermaid",
+            "rationale": "The Turn Lifecycle Phases section describes a 10-phase pipeline (Pre-Turn Hooks → Context Assembly → Model Call → Response Parsing → Action Validation → Tool Execution → Observation → State Checkpoint → Post-Turn Hooks → Termination Check) but has no visual. Systematic voice requires a flowchart for every process.",
+            "priority": "required",
+            "placement": "## Turn Lifecycle Phases, before the subsection breakdowns",
+            "contentBrief": "Vertical flowchart showing all 10 phases as sequential nodes with brief labels. Highlight the three decision points: Action Validation (pass/reject), Tool Execution (parallel/sequential), Termination Check (continue/stop).",
+            "accessibilityNotes": "Fallback text: 'Each turn passes through 10 phases in sequence: Pre-Turn Hooks, Context Assembly, Model Call, Response Parsing, Action Validation, Tool Execution, Observation and Context Update, State Checkpoint, Post-Turn Hooks, Termination Check. Decision points exist at Action Validation, Tool Execution mode, and Termination Check.'",
+            "objectiveIds": ["obj-trace-loop"],
+            "mermaidSource": "graph TD\n    P1[\"1. Pre-Turn Hooks\"] --> P2[\"2. Context Assembly\"]\n    P2 --> P3[\"3. Model Call\"]\n    P3 --> P4[\"4. Response Parsing\"]\n    P4 --> P5{\"5. Action Validation\"}\n    P5 -->|pass| P6[\"6. Tool Execution\"]\n    P5 -->|reject| P9[\"9. Post-Turn Hooks\"]\n    P6 --> P7[\"7. Observation & Context Update\"]\n    P7 --> P8[\"8. State Checkpoint\"]\n    P8 --> P9\n    P9 --> P10{\"10. Termination Check\"}\n    P10 -->|continue| P1\n    P10 -->|stop| END[\"Return Result\"]",
+            "estimatedEffort": "low"
+          },
+          {
+            "id": "lesson-agent-loop-internals-comparison-matrix-01",
+            "type": "comparison-matrix",
+            "rationale": "SDK Comparison: Loop Shapes in Practice compares multiple SDKs across loop shape attributes. A formal comparison matrix makes the differences scannable rather than requiring sequential reading of code blocks.",
+            "priority": "recommended",
+            "placement": "## SDK Comparison: Loop Shapes in Practice, as a summary table after the code examples",
+            "contentBrief": "Rows: OpenAI Agents SDK, LangGraph, Claude Agent SDK, CrewAI. Columns: Default Loop Shape, Customization Level, Streaming Support, Max-Turns Control. Values drawn from the existing code examples in the section.",
+            "accessibilityNotes": "Provide a DataTable fallback with column and row headers. Do not rely on color to distinguish SDK entries.",
+            "objectiveIds": ["obj-trace-loop"],
+            "mermaidSource": null,
+            "estimatedEffort": "low"
+          }
+        ]
+      }
+    },
+    {
+      "lessonId": "lesson-tool-dispatch",
+      "multimediaPlan": {
+        "recommendations": [
+          {
+            "id": "lesson-tool-dispatch-mermaid-01",
+            "type": "mermaid",
+            "rationale": "Permission Boundaries section describes a layered permission model (allow-list, deny-list, approval-required, sandboxed) with conditional logic but no visual. Systematic voice requires a flowchart for conditional processes.",
+            "priority": "recommended",
+            "placement": "## Permission Boundaries, after the permission layer descriptions",
+            "contentBrief": "Decision tree flowchart: incoming tool call → check allow-list → check deny-list → check approval-required → check sandbox policy → execute or reject. Each decision node shows the gate and its outcome.",
+            "accessibilityNotes": "Fallback text: 'Permission checking follows a chain: allow-list check, then deny-list check, then approval-required check, then sandbox policy check. A tool call must pass all gates to execute.'",
+            "objectiveIds": ["obj-implement-dispatch"],
+            "mermaidSource": "graph TD\n    TC[\"Tool Call\"] --> AL{\"On allow-list?\"}\n    AL -->|no| DENY1[\"Reject: not allowed\"]\n    AL -->|yes| DL{\"On deny-list?\"}\n    DL -->|yes| DENY2[\"Reject: denied\"]\n    DL -->|no| AR{\"Approval required?\"}\n    AR -->|yes| WAIT[\"Queue for human approval\"]\n    AR -->|no| SB{\"Sandbox required?\"}\n    SB -->|yes| SANDBOX[\"Execute in sandbox\"]\n    SB -->|no| EXEC[\"Execute directly\"]",
+            "estimatedEffort": "low"
+          }
+        ]
+      }
+    },
+    {
+      "lessonId": "lesson-context-goals-state",
+      "multimediaPlan": {
+        "recommendations": [
+          {
+            "id": "lesson-context-goals-state-infographic-01",
+            "type": "infographic",
+            "rationale": "The Context Budget section discusses token allocation across system prompt, conversation history, tool results, and working memory with numeric proportions. DATA signal with no visual — an infographic showing the budget breakdown aids comprehension.",
+            "priority": "required",
+            "placement": "## The Context Budget, after the budget description",
+            "contentBrief": "Stacked bar or pie showing a typical 128K context window budget: system prompt (~5-10%), conversation history (~30-40%), tool results (~20-30%), working memory (~10-20%), headroom for model response (~10-20%). Annotate each segment with what it contains.",
+            "accessibilityNotes": "Color-independent encoding required. Use patterns (stripes, dots, crosshatch) in addition to color. Provide a DataTable fallback with exact token ranges per segment.",
+            "objectiveIds": ["obj-manage-context"],
+            "mermaidSource": null,
+            "estimatedEffort": "medium"
+          },
+          {
+            "id": "lesson-context-goals-state-comparison-matrix-01",
+            "type": "comparison-matrix",
+            "rationale": "State vs Context section distinguishes two concepts across multiple attributes (lifetime, visibility, mutability, serialization). A comparison matrix makes the distinction immediately clear.",
+            "priority": "required",
+            "placement": "## State vs Context, as the primary visual",
+            "contentBrief": "Two-column comparison: State vs Context. Rows: Lifetime (persists across turns vs rebuilt each turn), Visibility (harness-managed vs model-visible), Mutability (explicitly updated vs assembled from sources), Serialization (checkpointable vs ephemeral), Example (task progress dict vs assembled messages array).",
+            "accessibilityNotes": "DataTable fallback required. Use row headers and column headers for screen reader navigation.",
+            "objectiveIds": ["obj-manage-context"],
+            "mermaidSource": null,
+            "estimatedEffort": "low"
+          },
+          {
+            "id": "lesson-context-goals-state-mermaid-01",
+            "type": "mermaid",
+            "rationale": "Goal Representations section compares multiple goal formats (string, structured, hierarchical, plan-based) but has no visual showing the relationships. A concept map shows how goal types relate and when each applies.",
+            "priority": "recommended",
+            "placement": "## Goal Representations, after the format descriptions",
+            "contentBrief": "Concept map: central node 'Goal Representations' branches to four types: String Goal (simplest, single instruction), Structured Goal (fields: objective, constraints, success criteria), Hierarchical Goals (parent-child decomposition), Plan-Based Goals (ordered steps with dependencies). Each annotated with 'use when' label.",
+            "accessibilityNotes": "Fallback text listing all four goal types with their characteristics and when to use each.",
+            "objectiveIds": ["obj-manage-context"],
+            "mermaidSource": "graph TD\n    GR[\"Goal Representations\"] --> SG[\"String Goal\"]\n    GR --> STG[\"Structured Goal\"]\n    GR --> HG[\"Hierarchical Goals\"]\n    GR --> PG[\"Plan-Based Goals\"]\n    SG --- SG_USE[\"Use: simple single-step tasks\"]\n    STG --- STG_USE[\"Use: tasks with constraints\"]\n    HG --- HG_USE[\"Use: decomposable multi-part work\"]\n    PG --- PG_USE[\"Use: ordered workflows\"]",
+            "estimatedEffort": "low"
+          }
+        ]
+      }
+    },
+    {
+      "lessonId": "lesson-control-flow",
+      "multimediaPlan": {
+        "recommendations": [
+          {
+            "id": "lesson-control-flow-comparison-matrix-01",
+            "type": "comparison-matrix",
+            "rationale": "Architecture → Control Flow Mapping section maps agent architectures to their natural control flow models but has no visual summary. A matrix makes the mapping scannable.",
+            "priority": "required",
+            "placement": "## Architecture → Control Flow Mapping, as the section's primary visual",
+            "contentBrief": "Rows: Single Agent, Router/Dispatcher, Pipeline, Hierarchical, Collaborative. Columns: Natural Control Flow, Complexity, Autonomy Level, Example Use Case. Values drawn from the existing prose.",
+            "accessibilityNotes": "DataTable fallback with row and column headers. Screen reader should read architecture name first, then each attribute.",
+            "objectiveIds": ["obj-trace-loop"],
+            "mermaidSource": null,
+            "estimatedEffort": "low"
+          },
+          {
+            "id": "lesson-control-flow-mermaid-01",
+            "type": "mermaid",
+            "rationale": "The A2A cross-framework handoffs subsection describes a multi-step protocol (discovery, identity/trust, context serialization, scope negotiation) but has no sequence diagram. Systematic voice requires a flowchart for this process.",
+            "priority": "recommended",
+            "placement": "After the Cross-Framework Handoffs: A2A Protocol subsection introduction",
+            "contentBrief": "Sequence diagram: Agent A sends discovery request to A2A Registry, receives agent card. Agent A sends task with context to Agent B. Agent B negotiates scope, executes, returns result. Shows the trust handshake and context serialization steps.",
+            "accessibilityNotes": "Fallback text: 'A2A handoff sequence: (1) Agent A queries registry for Agent B capabilities, (2) Agent A sends task with serialized context, (3) Agent B validates identity and negotiates scope, (4) Agent B executes and returns result with provenance.'",
+            "objectiveIds": ["obj-trace-loop"],
+            "mermaidSource": "sequenceDiagram\n    participant A as Agent A\n    participant R as A2A Registry\n    participant B as Agent B\n    A->>R: Discover capabilities\n    R-->>A: Agent Card (skills, auth)\n    A->>B: Send task + context\n    B->>B: Validate identity & scope\n    B-->>A: Result + provenance",
+            "estimatedEffort": "low"
+          }
+        ]
+      }
+    },
+    {
+      "lessonId": "lesson-persistence-checkpointing",
+      "multimediaPlan": {
+        "recommendations": [
+          {
+            "id": "lesson-persistence-checkpointing-mermaid-01",
+            "type": "mermaid",
+            "rationale": "Five Motivations for Persistence lists five distinct motivations with no visual. A mind-map groups the motivations and links each to its primary benefit, making the taxonomy memorable.",
+            "priority": "recommended",
+            "placement": "## Five Motivations for Persistence, before the subsection breakdowns",
+            "contentBrief": "Mind-map: central node 'Why Persist?' branches to: Failure Recovery (resume after crash), Human Intervention (pause for approval), Inspection (debug past states), Time Travel (replay from checkpoint), Auditability (compliance trail).",
+            "accessibilityNotes": "Fallback text listing all five motivations with their primary benefit. Use distinct shapes for each branch.",
+            "objectiveIds": ["obj-implement-persistence"],
+            "mermaidSource": "mindmap\n  root((Why Persist?))\n    Failure Recovery\n      Resume after crash\n    Human Intervention\n      Pause for approval\n    Inspection\n      Debug past states\n    Time Travel\n      Replay from checkpoint\n    Auditability\n      Compliance trail",
+            "estimatedEffort": "low"
+          },
+          {
+            "id": "lesson-persistence-checkpointing-mermaid-02",
+            "type": "mermaid",
+            "rationale": "Case Study: Crash and Resume describes a timeline of events (agent starts, processes 3 sources, crashes, resumes from checkpoint, completes) with TIMELINE + WALKTHROUGH signals but no visual. A sequence or timeline diagram makes the crash-resume flow concrete.",
+            "priority": "recommended",
+            "placement": "## Case Study: Crash and Resume in a Research Assistant, as the opening visual",
+            "contentBrief": "Timeline or sequence diagram: Turn 1 (search), Turn 2 (read source A), Turn 3 (read source B) — checkpoint saved — Turn 4 (read source C) — CRASH — Resume from Turn 3 checkpoint — Turn 4' (read source C again) — Turn 5 (synthesize).",
+            "accessibilityNotes": "Fallback text: 'Timeline: Turns 1-3 execute normally with checkpoint after Turn 3. Crash occurs during Turn 4. System resumes from Turn 3 checkpoint and re-executes Turn 4, then completes Turn 5.'",
+            "objectiveIds": ["obj-implement-persistence"],
+            "mermaidSource": "sequenceDiagram\n    participant H as Harness\n    participant M as Model\n    participant S as Storage\n    H->>M: Turn 1: Search\n    H->>M: Turn 2: Read Source A\n    H->>M: Turn 3: Read Source B\n    H->>S: Checkpoint (Turn 3)\n    H->>M: Turn 4: Read Source C\n    Note over H: CRASH\n    H->>S: Load checkpoint\n    S-->>H: State at Turn 3\n    H->>M: Turn 4': Read Source C (retry)\n    H->>M: Turn 5: Synthesize",
+            "estimatedEffort": "low"
+          }
+        ]
+      }
+    },
+    {
+      "lessonId": "lesson-human-in-the-loop",
+      "multimediaPlan": {
+        "recommendations": [
+          {
+            "id": "lesson-human-in-the-loop-mermaid-01",
+            "type": "mermaid",
+            "rationale": "Five Intervention Points section lists five types with no unifying visual. A flowchart showing where each intervention type fires within the agent loop makes the placement concrete — tying back to Lesson 02's turn lifecycle.",
+            "priority": "required",
+            "placement": "## Five Intervention Points, after the introductory paragraph",
+            "contentBrief": "Annotated agent loop showing insertion points: Pre-Action Approval (before tool execution), Post-Action Review (after tool execution), Goal Modification (between turns), Escalation on Uncertainty (at termination check), Emergency Stop (any point, async). Uses the Lesson 02 loop as the backbone.",
+            "accessibilityNotes": "Fallback text: 'Five intervention points mapped to the agent loop: Pre-Action Approval fires before tool execution, Post-Action Review fires after, Goal Modification occurs between turns, Escalation triggers at the termination check, Emergency Stop can fire at any point.'",
+            "objectiveIds": ["obj-design-hitl"],
+            "mermaidSource": "graph TD\n    TURN[\"Turn Start\"] --> CTX[\"Context Assembly\"]\n    CTX --> MODEL[\"Model Call\"]\n    MODEL --> PARSE[\"Parse Response\"]\n    PARSE --> PRE{\"Pre-Action\\nApproval\"}\n    PRE -->|approved| EXEC[\"Tool Execution\"]\n    PRE -->|denied| GOAL\n    EXEC --> POST{\"Post-Action\\nReview\"}\n    POST -->|ok| STATE[\"Update State\"]\n    POST -->|flag| ESC\n    STATE --> TERM{\"Termination\\nCheck\"}\n    TERM -->|continue| GOAL{\"Goal\\nModification?\"}\n    GOAL --> TURN\n    TERM -->|uncertain| ESC{\"Escalation\"}\n    TERM -->|stop| DONE[\"Done\"]\n    ESTOP[\"Emergency Stop\"] -.->|async| DONE\n    style PRE fill:#ffd700\n    style POST fill:#ffd700\n    style GOAL fill:#ffd700\n    style ESC fill:#ffd700\n    style ESTOP fill:#ff6347",
+            "estimatedEffort": "medium"
+          },
+          {
+            "id": "lesson-human-in-the-loop-comparison-matrix-01",
+            "type": "comparison-matrix",
+            "rationale": "Synchronous vs Asynchronous Intervention section compares two modes across multiple attributes with COMPARISON signal but no visual.",
+            "priority": "recommended",
+            "placement": "## Synchronous vs Asynchronous Intervention",
+            "contentBrief": "Two-column comparison: Synchronous vs Asynchronous. Rows: Agent behavior (blocks vs continues), Latency impact (high vs none), Use case (high-risk actions vs monitoring), Implementation (callback/poll vs event queue), User experience (immediate dialog vs notification).",
+            "accessibilityNotes": "DataTable fallback with row and column headers.",
+            "objectiveIds": ["obj-design-hitl"],
+            "mermaidSource": null,
+            "estimatedEffort": "low"
+          }
+        ]
+      }
+    },
+    {
+      "lessonId": "lesson-observability",
+      "multimediaPlan": {
+        "recommendations": [
+          {
+            "id": "lesson-observability-mermaid-01",
+            "type": "mermaid",
+            "rationale": "The Four Diagnostic Questions section presents a structured troubleshooting framework (What happened? Why? How much did it cost? Can I reproduce it?) but relies on a Callout with no visual. A decision-tree diagram shows how each question leads to different observability tools.",
+            "priority": "recommended",
+            "placement": "## The Four Diagnostic Questions, after the Callout",
+            "contentBrief": "Decision tree: start with 'Agent produced unexpected output' → four branches: 'What happened?' (→ traces), 'Why?' (→ structured logs + evals), 'How much did it cost?' (→ cost/latency metrics), 'Can I reproduce it?' (→ replay). Each terminal node names the observability pillar that answers it.",
+            "accessibilityNotes": "Fallback text mapping each diagnostic question to its primary observability tool. Use shape differentiation for question vs answer nodes.",
+            "objectiveIds": ["obj-trace-loop"],
+            "mermaidSource": "graph TD\n    START[\"Unexpected Output\"] --> Q1[\"What happened?\"]\n    START --> Q2[\"Why?\"]\n    START --> Q3[\"What did it cost?\"]\n    START --> Q4[\"Can I reproduce it?\"]\n    Q1 --> A1[\"Traces\"]\n    Q2 --> A2[\"Structured Logs + Evals\"]\n    Q3 --> A3[\"Cost & Latency Metrics\"]\n    Q4 --> A4[\"Replay\"]",
+            "estimatedEffort": "low"
+          }
+        ]
+      }
+    },
+    {
+      "lessonId": "lesson-build-minimal-harness",
+      "multimediaPlan": {
+        "recommendations": [
+          {
+            "id": "lesson-build-minimal-harness-mermaid-01",
+            "type": "mermaid",
+            "rationale": "Build lab with four progressive stages but no architecture diagram showing what's being built at each stage. Hands-on approach requires before/after visuals to orient the learner.",
+            "priority": "required",
+            "placement": "## Overview, as a build progression roadmap",
+            "contentBrief": "Four-stage progression diagram: Stage 1 (Bare Loop: model call + print) → Stage 2 (+ Tool Dispatch: registry + executor) → Stage 3 (+ Context Assembly: system prompt + history + tool results) → Stage 4 (+ Loop Controls: max turns, stop tool, token budget). Each stage box lists the components added.",
+            "accessibilityNotes": "Fallback text: 'Build progression: Stage 1 adds the bare while-loop with model calls. Stage 2 adds tool dispatch with a registry. Stage 3 adds context assembly. Stage 4 adds loop controls (max turns, stop tool, budget).'",
+            "objectiveIds": ["obj-build-harness"],
+            "mermaidSource": "graph LR\n    S1[\"Stage 1\\nBare Loop\\n• while loop\\n• model call\\n• print\"] --> S2[\"Stage 2\\n+ Tool Dispatch\\n• tool registry\\n• executor\\n• result formatting\"]\n    S2 --> S3[\"Stage 3\\n+ Context Assembly\\n• system prompt\\n• history\\n• tool results\"]\n    S3 --> S4[\"Stage 4\\n+ Loop Controls\\n• max turns\\n• stop tool\\n• token budget\"]",
+            "estimatedEffort": "low"
+          },
+          {
+            "id": "lesson-build-minimal-harness-mermaid-02",
+            "type": "mermaid",
+            "rationale": "The Complete Minimal Harness section shows the final code but no architecture diagram of the assembled components. A component diagram shows how the pieces fit together after all four stages.",
+            "priority": "recommended",
+            "placement": "## The Complete Minimal Harness, before the full code listing",
+            "contentBrief": "Component architecture: Agent Loop (center) connects to Tool Registry (right), Context Assembler (left), and Loop Controller (top). Tool Registry connects to individual tools (search, calculate, stop). Context Assembler connects to System Prompt, History, and Tool Results.",
+            "accessibilityNotes": "Fallback text describing the four components and their connections: the agent loop orchestrates calls to the tool registry, context assembler, and loop controller.",
+            "objectiveIds": ["obj-build-harness"],
+            "mermaidSource": "graph TD\n    LC[\"Loop Controller\\nmax turns · stop tool · budget\"] --> AL[\"Agent Loop\"]\n    AL --> CA[\"Context Assembler\"]\n    AL --> TR[\"Tool Registry\"]\n    AL --> MODEL[\"Model API\"]\n    CA --> SP[\"System Prompt\"]\n    CA --> HIST[\"History\"]\n    CA --> TRES[\"Tool Results\"]\n    TR --> T1[\"search\"]\n    TR --> T2[\"calculate\"]\n    TR --> T3[\"stop\"]",
+            "estimatedEffort": "low"
+          }
+        ]
+      }
+    },
+    {
+      "lessonId": "lesson-extend-harness",
+      "multimediaPlan": {
+        "recommendations": [
+          {
+            "id": "lesson-extend-harness-mermaid-01",
+            "type": "mermaid",
+            "rationale": "Build lab adds four extensions but has no visual showing the extended architecture. Hands-on approach needs a before/after comparison to show what was added versus the minimal harness.",
+            "priority": "required",
+            "placement": "## Overview, as an extension roadmap",
+            "contentBrief": "Side-by-side or layered diagram: left side shows Minimal Harness (from Lesson 09), right side shows Extended Harness with four new components highlighted: Structured State (TypedDict), Checkpoint/Resume (JSON persistence), Tracing (span tree), Approval Gate (human-in-the-loop). Arrows show where each extension hooks into the existing loop.",
+            "accessibilityNotes": "Fallback text: 'The extended harness adds four components to the minimal harness: (1) Structured State replaces the ad-hoc dict, (2) Checkpoint/Resume saves state to JSON between turns, (3) Tracing wraps each turn in spans, (4) Approval Gate pauses before flagged tool calls.'",
+            "objectiveIds": ["obj-build-harness", "obj-implement-persistence", "obj-design-hitl"],
+            "mermaidSource": "graph TD\n    subgraph Extended[\"Extended Harness\"]\n        AL[\"Agent Loop\"] --> STATE[\"Structured State\"]\n        AL --> CKPT[\"Checkpoint/Resume\"]\n        AL --> TRACE[\"Tracing\"]\n        AL --> GATE[\"Approval Gate\"]\n        AL --> TR[\"Tool Registry\"]\n        AL --> CA[\"Context Assembler\"]\n        AL --> LC[\"Loop Controller\"]\n    end\n    style STATE fill:#c6f6d5\n    style CKPT fill:#c6f6d5\n    style TRACE fill:#c6f6d5\n    style GATE fill:#c6f6d5",
+            "estimatedEffort": "medium"
+          },
+          {
+            "id": "lesson-extend-harness-mermaid-02",
+            "type": "mermaid",
+            "rationale": "Checkpoint and Resume with Idempotency describes a multi-step process (save checkpoint → crash → detect incomplete → reload → skip completed steps → resume). This PROCESS + WALKTHROUGH signal needs a flowchart per systematic voice rules.",
+            "priority": "recommended",
+            "placement": "## Extension 2: Checkpoint and Resume with Idempotency, after the explanation",
+            "contentBrief": "Flowchart: Start → Check for existing checkpoint? → (yes) Load state, find last completed turn → Skip completed turns → Resume from next turn → Execute → Save checkpoint → Continue loop. (no) → Initialize fresh state → Execute → Save checkpoint → Continue loop.",
+            "accessibilityNotes": "Fallback text describing the two paths: fresh start vs resume from checkpoint, emphasizing that completed turns are skipped on resume.",
+            "objectiveIds": ["obj-implement-persistence"],
+            "mermaidSource": "graph TD\n    START[\"Start\"] --> CHECK{\"Checkpoint exists?\"}\n    CHECK -->|yes| LOAD[\"Load saved state\"]\n    CHECK -->|no| INIT[\"Initialize fresh state\"]\n    LOAD --> SKIP[\"Skip completed turns\"]\n    SKIP --> RESUME[\"Resume from next turn\"]\n    INIT --> EXEC[\"Execute turn\"]\n    RESUME --> EXEC\n    EXEC --> SAVE[\"Save checkpoint\"]\n    SAVE --> TERM{\"Done?\"}\n    TERM -->|no| EXEC\n    TERM -->|yes| END[\"Return result\"]",
+            "estimatedEffort": "low"
+          }
+        ]
+      }
+    },
+    {
+      "lessonId": "lesson-ecosystem-map",
+      "multimediaPlan": {
+        "recommendations": [
+          {
+            "id": "lesson-ecosystem-map-concept-map-01",
+            "type": "concept-map",
+            "rationale": "The Big Seven Frameworks section describes 7 frameworks and their adjacent tools but provides no visual showing how they relate to each other (shared protocols, competing approaches, complementary roles). A concept map shows the ecosystem relationships.",
+            "priority": "required",
+            "placement": "## The Big Seven Frameworks, after the Related and Adjacent subsection",
+            "contentBrief": "Concept map with 7 framework nodes clustered by runtime model: SDK-style (OpenAI Agents SDK, Claude Agent SDK), Graph-based (LangGraph), Multi-agent (CrewAI, MAF), Full-stack (Google ADK, Mastra). Show protocol connections: MCP links (Claude, MAF, ADK), A2A links (MAF, ADK). Adjacent tools (Semantic Kernel, Vercel AI SDK, Temporal) as peripheral nodes.",
+            "accessibilityNotes": "Fallback text listing frameworks grouped by runtime model, with protocol support noted for each. Connections described as text pairs.",
+            "objectiveIds": ["obj-evaluate-frameworks"],
+            "mermaidSource": "graph TD\n    subgraph SDK[\"SDK-Style\"]\n        OAI[\"OpenAI Agents SDK\"]\n        CLAUDE[\"Claude Agent SDK\"]\n    end\n    subgraph Graph[\"Graph-Based\"]\n        LG[\"LangGraph\"]\n    end\n    subgraph Multi[\"Multi-Agent\"]\n        CREW[\"CrewAI\"]\n        MAF[\"MAF 1.0\"]\n    end\n    subgraph Full[\"Full-Stack\"]\n        ADK[\"Google ADK\"]\n        MASTRA[\"Mastra\"]\n    end\n    MAF ---|MCP + A2A| ADK\n    CLAUDE ---|MCP| MAF\n    ADK ---|MCP| CLAUDE\n    OAI -.- LG\n    CREW -.- MASTRA",
+            "estimatedEffort": "medium"
+          },
+          {
+            "id": "lesson-ecosystem-map-comparison-matrix-02",
+            "type": "comparison-matrix",
+            "rationale": "The existing comparison table is embedded in prose. An explicit DataTable component with proper headers would improve accessibility and scannability, especially for the 9-column comparison.",
+            "priority": "recommended",
+            "placement": "## Comparison Table, replacing or supplementing the inline table",
+            "contentBrief": "Formal DataTable with the existing comparison data: rows are the 8 harness concerns + Runtime Model + Deployment + MCP + A2A. Columns are the Big Seven + Custom. Ensure column headers are sticky or repeated for wide table scrolling.",
+            "accessibilityNotes": "DataTable fallback required. Row and column headers must be programmatically associated. Consider splitting into two smaller tables (concerns 1-4, concerns 5-8) if the 9-column width causes horizontal scrolling on mobile.",
+            "objectiveIds": ["obj-evaluate-frameworks"],
+            "mermaidSource": null,
+            "estimatedEffort": "medium"
+          }
+        ]
+      }
+    },
+    {
+      "lessonId": "lesson-choosing-and-frontier",
+      "multimediaPlan": {
+        "recommendations": [
+          {
+            "id": "lesson-choosing-and-frontier-comparison-matrix-01",
+            "type": "comparison-matrix",
+            "rationale": "Anti-Patterns section describes several common mistakes but has no visual summary. A comparison matrix contrasts each anti-pattern with the correct approach.",
+            "priority": "recommended",
+            "placement": "### Anti-Patterns, after the descriptions",
+            "contentBrief": "Two-column table: Anti-Pattern vs Correct Approach. Rows: 'Pick the most popular framework' vs 'Match runtime model to your control flow needs', 'Build custom because it is simpler' vs 'Build custom only when no framework covers your concerns', 'Adopt a framework for one feature' vs 'Evaluate across all eight concerns', etc.",
+            "accessibilityNotes": "DataTable with clear column headers. Anti-pattern column should not be styled in a way that relies on red color alone — use an icon or prefix.",
+            "objectiveIds": ["obj-evaluate-frameworks"],
+            "mermaidSource": null,
+            "estimatedEffort": "low"
+          },
+          {
+            "id": "lesson-choosing-and-frontier-mermaid-01",
+            "type": "mermaid",
+            "rationale": "CodeAct section describes two contrasting execution patterns (traditional multi-turn tool calls vs single-program sandbox execution) with COMPARISON + PROCESS signals but no visual. Side-by-side flow comparison makes the difference concrete — supports the analogical instructional approach.",
+            "priority": "required",
+            "placement": "### CodeAct: Collapsing the Tool-Call Loop, after the introductory explanation",
+            "contentBrief": "Two parallel flowcharts: Left (Traditional): Model → tool call → harness executes → result → model → tool call → harness executes → result → model → final answer. Right (CodeAct): Model → generate program → sandbox executes entire program → result → model → final answer. Highlight the reduced round trips.",
+            "accessibilityNotes": "Fallback text: 'Traditional pattern requires N round trips between model and harness for N tool calls. CodeAct collapses this to 1-2 round trips by generating an executable program that runs all tools in a sandbox.'",
+            "objectiveIds": ["obj-evaluate-frameworks"],
+            "mermaidSource": "graph TD\n    subgraph Traditional[\"Traditional: N Round Trips\"]\n        T1[\"Model\"] --> T2[\"Tool Call 1\"]\n        T2 --> T3[\"Result 1\"]\n        T3 --> T4[\"Model\"]\n        T4 --> T5[\"Tool Call 2\"]\n        T5 --> T6[\"Result 2\"]\n        T6 --> T7[\"Model\"]\n        T7 --> T8[\"Final Answer\"]\n    end\n    subgraph CodeAct[\"CodeAct: 1-2 Round Trips\"]\n        C1[\"Model\"] --> C2[\"Generate Program\"]\n        C2 --> C3[\"Sandbox Executes All\"]\n        C3 --> C4[\"Combined Result\"]\n        C4 --> C5[\"Model\"]\n        C5 --> C6[\"Final Answer\"]\n    end",
+            "estimatedEffort": "medium"
+          },
+          {
+            "id": "lesson-choosing-and-frontier-mermaid-02",
+            "type": "mermaid",
+            "rationale": "Agent Identity, Delegation, and Governance section describes a multi-layer trust model (verifiable identity → delegated authority → provenance chains) but has no visual. A process diagram shows the delegation chain.",
+            "priority": "recommended",
+            "placement": "### Agent Identity, Delegation, and Governance, after the concept descriptions",
+            "contentBrief": "Flow diagram: User (identity) → delegates to Agent A (scoped authority token) → Agent A delegates to Agent B (narrower scope) → Agent B acts (action + provenance chain). Show the scope narrowing at each delegation step.",
+            "accessibilityNotes": "Fallback text: 'Delegation chain: User grants scoped authority to Agent A, who can further delegate a narrower scope to Agent B. Each action carries a provenance chain back to the original user authorization.'",
+            "objectiveIds": ["obj-evaluate-frameworks"],
+            "mermaidSource": "graph LR\n    USER[\"User\\n(identity)\"] -->|\"delegate\\nfull scope\"| A[\"Agent A\\n(scoped token)\"]\n    A -->|\"delegate\\nnarrowed scope\"| B[\"Agent B\\n(sub-token)\"]\n    B --> ACTION[\"Action\"]\n    ACTION -.->|\"provenance chain\"| USER",
+            "estimatedEffort": "low"
+          }
+        ]
+      }
+    }
+  ],
+  "coverageSummary": {
+    "conceptsWithVisuals": [
+      "concept-loop-execution",
+      "concept-tool-dispatch",
+      "concept-context-management",
+      "concept-state-goals",
+      "concept-control-flow",
+      "concept-persistence",
+      "concept-observability",
+      "concept-hitl"
+    ],
+    "conceptsWithoutVisuals": [],
+    "udlRepresentationModes": [
+      "visual-diagram",
+      "text-prose",
+      "code-example",
+      "comparison-table",
+      "worked-example",
+      "interactive-exercise",
+      "narration-hook"
+    ],
+    "externalToolingRequired": [
+      "infographic — lesson-context-goals-state-infographic-01: requires an infographic authoring tool or custom component for the context budget breakdown. DataTable can serve as accessible fallback but lacks the visual impact of a stacked bar/pie chart."
+    ]
+  }
+}

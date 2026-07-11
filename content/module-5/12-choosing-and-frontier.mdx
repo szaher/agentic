@@ -145,6 +145,37 @@ If you don't need durable multi-agent execution, choose based on what your team 
 
 Avoid these common selection mistakes:
 
+<DataTable caption="Harness selection anti-patterns and correct approaches">
+  <thead>
+    <tr>
+      <th>Anti-Pattern</th>
+      <th>Correct Approach</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Over-engineering: graph runtime for a 3-turn agent</td>
+      <td>Match runtime complexity to agent complexity</td>
+    </tr>
+    <tr>
+      <td>Under-engineering: raw API for a 20-step workflow</td>
+      <td>Use a framework when you need checkpoints, retries, or gates</td>
+    </tr>
+    <tr>
+      <td>Hype-driven: choosing by blog mentions</td>
+      <td>Write requirements first, then map to harness capabilities</td>
+    </tr>
+    <tr>
+      <td>Custom when framework fits</td>
+      <td>Only build custom if no framework meets a specific requirement</td>
+    </tr>
+    <tr>
+      <td>Multi-agent when single suffices</td>
+      <td>Prove the task requires coordination before adding agents</td>
+    </tr>
+  </tbody>
+</DataTable>
+
 #### 1. Over-Engineering
 
 **Example**: Using LangGraph for a 3-turn single-tool agent that just answers customer questions.
@@ -275,17 +306,27 @@ A2A has reached early production within single-vendor ecosystems (Azure, Google 
 
 **What it is**: Instead of the traditional loop where the model issues many small tool calls (model → tool call → observation → model → tool call → observation), CodeAct has the model emit a single executable program that composes multiple tool calls inside a sandbox. The sandbox executes all the tool calls and returns a consolidated result.
 
-**Traditional loop:**
+<MermaidDiagram chart={`graph TD
+    subgraph Traditional["Traditional: N Round Trips"]
+        T1["Model"] --> T2["Tool Call 1"]
+        T2 --> T3["Observation 1"]
+        T3 --> T4["Model"]
+        T4 --> T5["Tool Call 2"]
+        T5 --> T6["Observation 2"]
+        T6 --> T7["Model"]
+        T7 --> T8["Final Answer"]
+    end
+    subgraph CodeActFlow["CodeAct: 1–2 Round Trips"]
+        C1["Model"] --> C2["Generate Program"]
+        C2 --> C3["Sandbox Executes<br/>All Tool Calls"]
+        C3 --> C4["Consolidated Result"]
+        C4 --> C5["Model"]
+        C5 --> C6["Final Answer"]
+    end
 
-```
-model → tool call → observation → model → tool call → observation → model → ...
-```
-
-**CodeAct loop:**
-
-```
-model → executable program → sandbox executes multiple tool calls → consolidated observation
-```
+    style Traditional fill:#fff3e0,stroke:#f57c00
+    style CodeActFlow fill:#e8f5e9,stroke:#388e3c
+`} />
 
 **Runtime implications:**
 - **Fewer model turns:** CodeAct collapses multi-step tool plans into fewer round-trips, reducing orchestration overhead and latency.
@@ -304,6 +345,18 @@ CodeAct latency reduction claims (approximately 50% lower orchestration overhead
 ### Agent Identity, Delegation, and Governance
 
 **What it is**: As agents communicate across runtimes via protocols like MCP and A2A, a new runtime concern emerges: who is this agent, what authority does it have, and can you verify its actions? Agent protocols alone do not solve identity or authority.
+
+<MermaidDiagram chart={`graph LR
+    USER["User<br/>(identity)"] -->|"delegate<br/>full scope"| A["Agent A<br/>(scoped token)"]
+    A -->|"delegate<br/>narrowed scope"| B["Agent B<br/>(sub-token)"]
+    B --> ACTION["Action"]
+    ACTION -.->|"provenance chain"| USER
+
+    style USER fill:#e3f2fd
+    style A fill:#fff3e0
+    style B fill:#f3e5f5
+    style ACTION fill:#e8f5e9
+`} />
 
 **Runtime implications:**
 - **Verifiable identity:** Each agent in a delegation chain needs a cryptographically verifiable identity, not just a name string. This enables audit trails and trust decisions.
