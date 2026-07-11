@@ -324,15 +324,40 @@ How should a harness save state? Three common strategies:
 
 **Best for:** Auditability, debugging, time travel, regulated domains.
 
-<DataTable
-  headers={["Strategy", "Write Speed", "Restore Speed", "Storage Cost", "Auditability"]}
-  rows={[
-    ["Full Snapshots", "Slow", "Fast", "High", "Limited"],
-    ["Incremental Deltas", "Fast", "Medium", "Low", "Limited"],
-    ["Event Sourcing", "Fast", "Slow", "Medium", "Excellent"]
-  ]}
-  caption="Checkpoint strategy tradeoffs."
-/>
+<DataTable caption="Checkpoint strategy tradeoffs.">
+  <thead>
+    <tr>
+      <th>Strategy</th>
+      <th>Write Speed</th>
+      <th>Restore Speed</th>
+      <th>Storage Cost</th>
+      <th>Auditability</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Full Snapshots</td>
+      <td>Slow</td>
+      <td>Fast</td>
+      <td>High</td>
+      <td>Limited</td>
+    </tr>
+    <tr>
+      <td>Incremental Deltas</td>
+      <td>Fast</td>
+      <td>Medium</td>
+      <td>Low</td>
+      <td>Limited</td>
+    </tr>
+    <tr>
+      <td>Event Sourcing</td>
+      <td>Fast</td>
+      <td>Slow</td>
+      <td>Medium</td>
+      <td>Excellent</td>
+    </tr>
+  </tbody>
+</DataTable>
 
 **Real-world choice:** Many harnesses use a hybrid:
 - Full snapshot every N checkpoints (for fast restore)
