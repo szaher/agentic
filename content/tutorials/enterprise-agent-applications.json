@@ -174,6 +174,7 @@
       "dependsOnLessonIds": [],
       "artifacts": {
         "mdxPath": "content/module-14/01-enterprise-agent-landscape.mdx",
+        "slidesPath": "presentations/14-enterprise-agent-applications.md",
         "items": [
           {
             "id": "art-enterprise-ecosystem",
@@ -199,6 +200,43 @@
           "placement": "after-lesson"
         }
       ],
+      "multimediaPlan": {
+        "recommendations": [
+          {
+            "id": "lesson-enterprise-landscape-mermaid-01",
+            "type": "mermaid",
+            "rationale": "Visualizes the shared infrastructure layers across enterprise verticals for immediate comprehension of the ecosystem.",
+            "priority": "required",
+            "placement": "Enterprise Readiness Checklist section",
+            "contentBrief": "Graph showing vertical-specific agents (support, sales, analytics, engineering, finance) connected to shared layers (identity, compliance, observability, workflow).",
+            "accessibilityNotes": "Provide fallback text listing all verticals and shared layers. Use distinct shapes, not just colors.",
+            "objectiveIds": ["obj-enterprise-landscape"],
+            "estimatedEffort": "low"
+          },
+          {
+            "id": "lesson-enterprise-landscape-comparison-matrix-01",
+            "type": "comparison-matrix",
+            "rationale": "The maturity model compares three stages across multiple dimensions — ideal for a structured table.",
+            "priority": "required",
+            "placement": "Enterprise Agent Maturity Model section",
+            "contentBrief": "DataTable comparing Copilot, Assistant, and Autonomous Agent across agent role, autonomy level, and governance requirements.",
+            "accessibilityNotes": "DataTable fallback is inherently accessible. Ensure caption describes the maturity progression.",
+            "objectiveIds": ["obj-maturity-model"],
+            "estimatedEffort": "low"
+          },
+          {
+            "id": "lesson-enterprise-landscape-slides-01",
+            "type": "slides",
+            "rationale": "Lesson overview and maturity model are well-suited for instructor-led presentation.",
+            "priority": "recommended",
+            "placement": "Full lesson",
+            "contentBrief": "Presentation deck covering five enterprise differences, readiness checklist, maturity model, and evaluation criteria.",
+            "accessibilityNotes": "Slides use text and diagrams with fallback descriptions. No color-only encoding.",
+            "objectiveIds": ["obj-enterprise-landscape", "obj-maturity-model"],
+            "estimatedEffort": "medium"
+          }
+        ]
+      },
       "scaffolding": {
         "hintLevels": 2,
         "differentiatedPaths": false,
@@ -244,6 +282,43 @@
           "placement": "after-lesson"
         }
       ],
+      "multimediaPlan": {
+        "recommendations": [
+          {
+            "id": "lesson-data-agents-mermaid-01",
+            "type": "mermaid",
+            "rationale": "The data agent runtime architecture is a complex multi-layer system best understood visually.",
+            "priority": "required",
+            "placement": "Runtime Architecture section",
+            "contentBrief": "Graph showing context assembly (schemas, semantic layer, permissions) feeding agent core, tool dispatch, guardrails, HITL gates, and observability.",
+            "accessibilityNotes": "Fallback text describes the four-layer architecture. Use shape differentiation, not just color.",
+            "objectiveIds": ["obj-semantic-layer", "obj-autonomy-tiers"],
+            "estimatedEffort": "medium"
+          },
+          {
+            "id": "lesson-data-agents-comparison-matrix-01",
+            "type": "comparison-matrix",
+            "rationale": "Data agent vs chatbot is a key conceptual distinction best shown in a structured comparison.",
+            "priority": "required",
+            "placement": "Data Agent vs Data Chatbot section",
+            "contentBrief": "DataTable comparing chatbot and data agent across workflow, query strategy, actions, validation, human oversight, and use case.",
+            "accessibilityNotes": "DataTable is inherently accessible. Caption should emphasize the workflow vs one-shot distinction.",
+            "objectiveIds": ["obj-semantic-layer"],
+            "estimatedEffort": "low"
+          },
+          {
+            "id": "lesson-data-agents-comparison-matrix-02",
+            "type": "comparison-matrix",
+            "rationale": "The five autonomy tiers need a structured table showing risk, approval, and examples at each level.",
+            "priority": "required",
+            "placement": "Write-Action Autonomy Tiers section",
+            "contentBrief": "DataTable with columns: Tier, Action Type, Risk Level, Approval Required, Examples.",
+            "accessibilityNotes": "DataTable with caption explaining that tiers determine when human approval is required.",
+            "objectiveIds": ["obj-autonomy-tiers"],
+            "estimatedEffort": "low"
+          }
+        ]
+      },
       "scaffolding": {
         "hintLevels": 3,
         "differentiatedPaths": true,
@@ -294,6 +369,44 @@
           "placement": "mid-lesson"
         }
       ],
+      "multimediaPlan": {
+        "recommendations": [
+          {
+            "id": "lesson-knowledge-support-mermaid-01",
+            "type": "mermaid",
+            "rationale": "The enterprise RAG pipeline with access control, freshness, and quality scoring is a multi-stage process.",
+            "priority": "required",
+            "placement": "RAG at Enterprise Scale section",
+            "contentBrief": "Flowchart: user question → retrieve → access control filter → freshness filter → quality scoring → ranking → grounded answer with citations.",
+            "accessibilityNotes": "Fallback text describes each pipeline stage. Color-independent via shape differentiation.",
+            "objectiveIds": ["obj-source-grounded-answers"],
+            "estimatedEffort": "low"
+          },
+          {
+            "id": "lesson-knowledge-support-decision-tree-01",
+            "type": "decision-tree",
+            "rationale": "The three escalation triggers form a decision tree with parallel evaluation paths.",
+            "priority": "required",
+            "placement": "Escalation Design section",
+            "contentBrief": "Decision tree: message → policy trigger? → sentiment trigger? → generate answer → confidence check. Each trigger routes to human specialist.",
+            "accessibilityNotes": "Fallback text describes the three trigger types and their priority. Each path labeled clearly.",
+            "objectiveIds": ["obj-escalation-design"],
+            "mermaidSource": "graph TD\n    A[Customer Message] --> B{Policy?}\n    B -->|Yes| C[Escalate]\n    B -->|No| D{Sentiment?}\n    D -->|Yes| E[Escalate]\n    D -->|No| F[Answer]\n    F --> G{Confidence?}\n    G -->|Low| H[Escalate]\n    G -->|High| I[Return]",
+            "estimatedEffort": "low"
+          },
+          {
+            "id": "lesson-knowledge-support-comparison-matrix-01",
+            "type": "comparison-matrix",
+            "rationale": "Source quality scoring compares six source types across quality scores — structured table format.",
+            "priority": "recommended",
+            "placement": "Source Quality Scoring subsection",
+            "contentBrief": "DataTable: source type, quality score, reasoning. From policy docs (1.0) to personal notes (0.1).",
+            "accessibilityNotes": "DataTable is inherently accessible. Caption explains scoring rationale.",
+            "objectiveIds": ["obj-source-grounded-answers"],
+            "estimatedEffort": "low"
+          }
+        ]
+      },
       "scaffolding": {
         "hintLevels": 2,
         "differentiatedPaths": false,
@@ -334,6 +447,32 @@
           "placement": "after-lesson"
         }
       ],
+      "multimediaPlan": {
+        "recommendations": [
+          {
+            "id": "lesson-devops-agents-mermaid-01",
+            "type": "mermaid",
+            "rationale": "The incident response flow is a sequential process with conditional branching — ideal for a sequence diagram.",
+            "priority": "required",
+            "placement": "Incident Response Flow section",
+            "contentBrief": "Sequence diagram: monitor fires alert → agent classifies severity → gathers context → matches runbook → executes remediation → resolves or escalates.",
+            "accessibilityNotes": "Fallback text describes the five-step incident response sequence and the resolve-or-escalate decision.",
+            "objectiveIds": ["obj-safety-tiers"],
+            "estimatedEffort": "medium"
+          },
+          {
+            "id": "lesson-devops-agents-comparison-matrix-01",
+            "type": "comparison-matrix",
+            "rationale": "The three safety tiers are best compared in a structured table with examples and autonomy levels.",
+            "priority": "required",
+            "placement": "Three Safety Tiers section",
+            "contentBrief": "DataTable: safety tier, example actions, autonomy level, rationale.",
+            "accessibilityNotes": "DataTable with caption explaining safety tiers match autonomy to blast radius.",
+            "objectiveIds": ["obj-safety-tiers"],
+            "estimatedEffort": "low"
+          }
+        ]
+      },
       "scaffolding": {
         "hintLevels": 2,
         "differentiatedPaths": false,
@@ -374,6 +513,43 @@
           "placement": "mid-lesson"
         }
       ],
+      "multimediaPlan": {
+        "recommendations": [
+          {
+            "id": "lesson-workflow-agents-mermaid-01",
+            "type": "mermaid",
+            "rationale": "The approval chain with amount thresholds, delegation, and escalation is a complex flowchart.",
+            "priority": "required",
+            "placement": "Approval Chain Orchestration section",
+            "contentBrief": "Flowchart: purchase request → amount threshold check → route to auto/manager/VP → delegation for unavailable → escalation for unresponsive → process or reject.",
+            "accessibilityNotes": "Fallback text describes the three routing paths and the delegation/escalation mechanisms.",
+            "objectiveIds": ["obj-segregation-of-duties"],
+            "estimatedEffort": "medium"
+          },
+          {
+            "id": "lesson-workflow-agents-comparison-matrix-01",
+            "type": "comparison-matrix",
+            "rationale": "The five workflow autonomy tiers compare operations, blast radius, and autonomy level.",
+            "priority": "required",
+            "placement": "Write-Action Autonomy Tiers section",
+            "contentBrief": "DataTable: tier (read-only through bulk operations), operations, blast radius, autonomy level.",
+            "accessibilityNotes": "DataTable with caption explaining that higher tiers require stronger controls.",
+            "objectiveIds": ["obj-segregation-of-duties"],
+            "estimatedEffort": "low"
+          },
+          {
+            "id": "lesson-workflow-agents-comparison-matrix-02",
+            "type": "comparison-matrix",
+            "rationale": "Workflow vs research agents are contrasted across five dimensions — structured comparison.",
+            "priority": "recommended",
+            "placement": "Structured Process Execution section",
+            "contentBrief": "Table comparing workflow and research agents across problem type, value proposition, success metric, failure mode, and human role.",
+            "accessibilityNotes": "DataTable is inherently accessible.",
+            "objectiveIds": ["obj-workflow-vs-research"],
+            "estimatedEffort": "low"
+          }
+        ]
+      },
       "scaffolding": {
         "hintLevels": 2,
         "differentiatedPaths": false,
@@ -429,6 +605,54 @@
           "placement": "after-lesson"
         }
       ],
+      "multimediaPlan": {
+        "recommendations": [
+          {
+            "id": "lesson-grc-mermaid-01",
+            "type": "mermaid",
+            "rationale": "The five autonomy tiers with escalating governance are a progression best shown as a directed graph.",
+            "priority": "required",
+            "placement": "Write-Action Autonomy Tiers section",
+            "contentBrief": "Graph: Tier 1 (read-only, basic audit) → Tier 2 (analysis, output validation) → Tier 3 (recommended, human approval) → Tier 4 (write-back, multi-level approval) → Tier 5 (structural, executive approval).",
+            "accessibilityNotes": "Fallback text describes each tier and its governance requirements. Color gradient from green to red with shape differentiation.",
+            "objectiveIds": ["obj-autonomy-tiers", "obj-identity-models"],
+            "estimatedEffort": "medium"
+          },
+          {
+            "id": "lesson-grc-mermaid-02",
+            "type": "mermaid",
+            "rationale": "The policy engine integrating pre-action and post-action checks is a runtime architecture diagram.",
+            "priority": "required",
+            "placement": "Policy Enforcement section",
+            "contentBrief": "Graph: request → harness → policy engine → pre-check (allow/deny) → tool call → post-validation (valid/violation) → audit log or rollback.",
+            "accessibilityNotes": "Fallback text describes the three enforcement stages. Blocked and rollback paths clearly labeled.",
+            "objectiveIds": ["obj-audit-logging", "obj-regulatory-compliance"],
+            "estimatedEffort": "medium"
+          },
+          {
+            "id": "lesson-grc-comparison-matrix-01",
+            "type": "comparison-matrix",
+            "rationale": "Three identity models compared across mechanism, security, and use case — structured table.",
+            "priority": "required",
+            "placement": "Identity and Access Management section",
+            "contentBrief": "DataTable: model (user-impersonation, service account, hybrid), how it works, security characteristics, best for.",
+            "accessibilityNotes": "DataTable with caption. Markdown bold for model names.",
+            "objectiveIds": ["obj-identity-models"],
+            "estimatedEffort": "low"
+          },
+          {
+            "id": "lesson-grc-comparison-matrix-02",
+            "type": "comparison-matrix",
+            "rationale": "Six regulatory frameworks mapped to agent implications — reference table.",
+            "priority": "required",
+            "placement": "Regulatory Compliance section",
+            "contentBrief": "DataTable: framework (GDPR, HIPAA, SOX, PCI-DSS, FERPA, FINRA), key requirements, agent implications.",
+            "accessibilityNotes": "DataTable with caption. VerifyClaim for specific retention periods.",
+            "objectiveIds": ["obj-regulatory-compliance"],
+            "estimatedEffort": "low"
+          }
+        ]
+      },
       "scaffolding": {
         "hintLevels": 3,
         "differentiatedPaths": true,
@@ -474,6 +698,43 @@
           "placement": "after-lesson"
         }
       ],
+      "multimediaPlan": {
+        "recommendations": [
+          {
+            "id": "lesson-adoption-lab-mermaid-01",
+            "type": "mermaid",
+            "rationale": "The four-stage rollout with decision gates and rollback paths is a progression with conditional transitions.",
+            "priority": "required",
+            "placement": "Rollout Stages section",
+            "contentBrief": "Graph: Shadow Mode → Pilot with HITL → Staged Rollout → Full Deployment. Dotted rollback paths for regression and safety incidents.",
+            "accessibilityNotes": "Fallback text describes all four stages, their entry/exit criteria, and rollback conditions.",
+            "objectiveIds": ["obj-staged-rollout"],
+            "estimatedEffort": "medium"
+          },
+          {
+            "id": "lesson-adoption-lab-comparison-matrix-01",
+            "type": "comparison-matrix",
+            "rationale": "The rollout stages table with scope, approval gates, success criteria, and exit criteria.",
+            "priority": "required",
+            "placement": "Design Exercise - Rollout Plan section",
+            "contentBrief": "DataTable: stage, scope, approval gates, success criteria, exit criteria for shadow/pilot/staged/full.",
+            "accessibilityNotes": "DataTable with caption explaining staged adoption. Percentage thresholds in text, not color.",
+            "objectiveIds": ["obj-staged-rollout"],
+            "estimatedEffort": "low"
+          },
+          {
+            "id": "lesson-adoption-lab-slides-01",
+            "type": "slides",
+            "rationale": "The full module summary and adoption lab are well-suited for instructor-led presentation.",
+            "priority": "recommended",
+            "placement": "Full lesson and module summary",
+            "contentBrief": "Presentation deck covering ROI framework, staged rollout, evaluation harness, and module summary.",
+            "accessibilityNotes": "Slides use text, tables, and diagrams with fallback descriptions.",
+            "objectiveIds": ["obj-end-to-end-design", "obj-staged-rollout"],
+            "estimatedEffort": "medium"
+          }
+        ]
+      },
       "scaffolding": {
         "hintLevels": 3,
         "differentiatedPaths": true,
