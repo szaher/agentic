@@ -1,0 +1,1210 @@
+{
+  "schemaVersion": "1.1.0",
+  "id": "enterprise-agent-applications",
+  "title": "Enterprise Agent Applications",
+  "description": "Apply agent patterns to enterprise verticals — data, support, DevOps, workflows, and governance — with production-grade identity, compliance, evaluation, and staged adoption strategies.",
+  "audience": {
+    "primary": "Software engineers and technical leads building or evaluating enterprise agent systems",
+    "priorKnowledge": [
+      "Agent architecture fundamentals (Modules 1-4)",
+      "Agent harness and runtime patterns (Module 5)",
+      "Tool use and function calling (Module 3)",
+      "Basic understanding of enterprise systems (databases, APIs, identity providers)",
+      "Python programming"
+    ],
+    "roles": [
+      "backend engineer",
+      "platform engineer",
+      "data engineer",
+      "DevOps engineer",
+      "technical lead",
+      "solutions architect"
+    ],
+    "readingLevel": "Professional / upper secondary"
+  },
+  "prerequisites": [
+    "Completed Modules 1-5 (agent foundations, prompting, tools, architectures, harnesses)",
+    "Familiarity with Module 11 evaluation patterns and Module 12 production deployment",
+    "Understands the four-layer domain-specific agent template from Module 13 Lesson 04",
+    "Can read and write Python with the Anthropic SDK",
+    "Basic familiarity with SQL and database schemas"
+  ],
+  "learningObjectives": [
+    {
+      "id": "obj-enterprise-landscape",
+      "description": "Distinguish enterprise agent requirements (identity, compliance, audit, workflow integration) from prototype agent requirements.",
+      "bloomLevel": "analyze",
+      "assessmentIds": ["assess-enterprise-vs-prototype", "assess-enterprise-readiness"]
+    },
+    {
+      "id": "obj-maturity-model",
+      "description": "Describe the three-stage enterprise agent maturity model (copilot, assistant, autonomous) and the governance requirements at each stage.",
+      "bloomLevel": "understand",
+      "assessmentIds": ["assess-maturity-stages"]
+    },
+    {
+      "id": "obj-semantic-layer",
+      "description": "Explain why data agents need a semantic layer and how it maps business terminology to database schemas.",
+      "bloomLevel": "understand",
+      "assessmentIds": ["assess-semantic-layer"]
+    },
+    {
+      "id": "obj-autonomy-tiers",
+      "description": "Design write-action autonomy tiers that match agent capabilities to organizational risk tolerance.",
+      "bloomLevel": "apply",
+      "assessmentIds": ["assess-autonomy-tier-selection"]
+    },
+    {
+      "id": "obj-data-agent-limits",
+      "description": "Evaluate data agent reliability limits using benchmark data and identify common failure modes.",
+      "bloomLevel": "evaluate",
+      "assessmentIds": ["assess-data-agent-benchmark"]
+    },
+    {
+      "id": "obj-source-grounded-answers",
+      "description": "Design source-grounded answer systems with citation, freshness tracking, and quality scoring.",
+      "bloomLevel": "apply",
+      "assessmentIds": ["assess-source-grounding"]
+    },
+    {
+      "id": "obj-escalation-design",
+      "description": "Implement escalation logic combining confidence-based, policy-based, and sentiment-based triggers.",
+      "bloomLevel": "apply",
+      "assessmentIds": ["assess-escalation-triggers"]
+    },
+    {
+      "id": "obj-flywheel-effect",
+      "description": "Explain the flywheel effect in knowledge and support agents and how resolved tickets improve future performance.",
+      "bloomLevel": "understand",
+      "assessmentIds": ["assess-flywheel"]
+    },
+    {
+      "id": "obj-safety-tiers",
+      "description": "Categorize DevOps actions by safety tier (read-only, reversible, irreversible) and assign appropriate autonomy levels.",
+      "bloomLevel": "apply",
+      "assessmentIds": ["assess-safety-tier-classification"]
+    },
+    {
+      "id": "obj-workflow-vs-research",
+      "description": "Distinguish structured workflow execution from free-form reasoning and select the correct agent pattern for each.",
+      "bloomLevel": "analyze",
+      "assessmentIds": ["assess-workflow-pattern"]
+    },
+    {
+      "id": "obj-segregation-of-duties",
+      "description": "Design approval chain workflows with segregation of duties, delegation, and escalation.",
+      "bloomLevel": "apply",
+      "assessmentIds": ["assess-segregation"]
+    },
+    {
+      "id": "obj-identity-models",
+      "description": "Select the appropriate identity model (user-impersonation, service account, hybrid) for a given enterprise agent deployment.",
+      "bloomLevel": "evaluate",
+      "assessmentIds": ["assess-identity-model"]
+    },
+    {
+      "id": "obj-audit-logging",
+      "description": "Design audit logging systems that capture who, what, why, what changed, and when for agent actions.",
+      "bloomLevel": "apply",
+      "assessmentIds": ["assess-audit-design"]
+    },
+    {
+      "id": "obj-pii-handling",
+      "description": "Apply the four-step PII handling framework (detection, masking, retention, deletion) to enterprise agent systems.",
+      "bloomLevel": "apply",
+      "assessmentIds": ["assess-pii-framework"]
+    },
+    {
+      "id": "obj-regulatory-compliance",
+      "description": "Map regulatory requirements (GDPR, HIPAA, SOX, PCI-DSS) to specific agent governance controls.",
+      "bloomLevel": "analyze",
+      "assessmentIds": ["assess-regulatory-mapping"]
+    },
+    {
+      "id": "obj-end-to-end-design",
+      "description": "Design a complete enterprise agent system including tools, governance, evaluation, and rollout strategy.",
+      "bloomLevel": "create",
+      "assessmentIds": ["assess-design-exercise"]
+    },
+    {
+      "id": "obj-evaluation-harness",
+      "description": "Build evaluation harnesses with compliance checks, permission testing, and regression detection.",
+      "bloomLevel": "create",
+      "assessmentIds": ["assess-eval-harness"]
+    },
+    {
+      "id": "obj-staged-rollout",
+      "description": "Plan staged enterprise rollouts with shadow mode, pilot, staged expansion, and full deployment.",
+      "bloomLevel": "apply",
+      "assessmentIds": ["assess-rollout-plan"]
+    }
+  ],
+  "scope": {
+    "inScope": [
+      "Enterprise agent landscape and vertical-specific applications",
+      "Data agents with semantic layers, query validation, and autonomy tiers",
+      "Knowledge and support agents with source grounding, escalation, and flywheel effect",
+      "DevOps agents with safety tiers and runbook automation",
+      "Workflow agents with document processing, approval chains, and integration patterns",
+      "Governance, risk, and compliance frameworks for enterprise agents",
+      "Identity models, audit logging, PII handling, and regulatory compliance",
+      "Enterprise evaluation with compliance scoring and regression detection",
+      "Staged rollout strategies with ROI measurement"
+    ],
+    "nonGoals": [
+      "Building production integrations with specific vendor APIs (Snowflake, Salesforce, etc.)",
+      "Implementing runtime point tracking, badge UI, or adaptive routing systems",
+      "Fine-tuning or training custom models for enterprise tasks",
+      "Legal advice on specific regulatory compliance (consult legal counsel)",
+      "Building production CI/CD pipelines or infrastructure automation"
+    ]
+  },
+  "lessons": [
+    {
+      "id": "lesson-enterprise-landscape",
+      "slug": "01-enterprise-agent-landscape",
+      "title": "Enterprise Agent Landscape",
+      "summary": "Surveys where agents create value in enterprises, identifies five critical differences from prototype agents (data access, identity, compliance, workflow, change management), introduces the enterprise readiness checklist and maturity model.",
+      "estimatedMinutes": 12,
+      "difficulty": "intermediate",
+      "prerequisites": ["Module 13 four-layer domain-specific agent template"],
+      "objectiveIds": ["obj-enterprise-landscape", "obj-maturity-model"],
+      "conceptIds": ["concept-enterprise-readiness", "concept-maturity-model", "concept-enterprise-eval"],
+      "referenceIds": [],
+      "dependsOnLessonIds": [],
+      "artifacts": {
+        "mdxPath": "content/module-14/01-enterprise-agent-landscape.mdx",
+        "items": [
+          {
+            "id": "art-enterprise-ecosystem",
+            "type": "mermaid",
+            "status": "approved",
+            "objectiveIds": ["obj-enterprise-landscape"],
+            "accessibility": {
+              "altText": "Enterprise agent ecosystem showing verticals connected to shared infrastructure layers",
+              "fallbackText": "Enterprise agents across verticals (support, sales, analytics, engineering, finance) share common infrastructure: identity, compliance, observability, and workflow integration."
+            }
+          }
+        ]
+      },
+      "metacognition": [
+        {
+          "type": "self-assessment",
+          "prompt": "Before starting, rate your familiarity with enterprise deployment concerns like identity management, compliance, and change management.",
+          "placement": "before-lesson"
+        },
+        {
+          "type": "reflection",
+          "prompt": "Which enterprise readiness dimension is weakest in your current organization? How would you address it?",
+          "placement": "after-lesson"
+        }
+      ],
+      "scaffolding": {
+        "hintLevels": 2,
+        "differentiatedPaths": false,
+        "graduatedComplexity": true
+      }
+    },
+    {
+      "id": "lesson-data-agents",
+      "slug": "02-data-agents-and-analytics",
+      "title": "Data Agents and Analytics Agents",
+      "summary": "Defines data agents and how they differ from chatbots. Covers semantic layers, runtime architecture mapping to Module 5, write-action autonomy tiers, a worked example, code implementation, common types, reliability limits (38% pass@1 benchmark), and enterprise controls.",
+      "estimatedMinutes": 20,
+      "difficulty": "advanced",
+      "prerequisites": ["Enterprise landscape context from Lesson 01", "SQL and database schema fundamentals"],
+      "objectiveIds": ["obj-semantic-layer", "obj-autonomy-tiers", "obj-data-agent-limits"],
+      "conceptIds": ["concept-data-agent", "concept-semantic-layer", "concept-autonomy-tiers", "concept-evidence-trail"],
+      "referenceIds": ["ref-data-agent-benchmark", "ref-data-agent-taxonomy"],
+      "dependsOnLessonIds": ["lesson-enterprise-landscape"],
+      "artifacts": {
+        "mdxPath": "content/module-14/02-data-agents-and-analytics.mdx",
+        "items": [
+          {
+            "id": "art-data-agent-architecture",
+            "type": "mermaid",
+            "status": "approved",
+            "objectiveIds": ["obj-semantic-layer", "obj-autonomy-tiers"],
+            "accessibility": {
+              "altText": "Data agent architecture showing context assembly, tool dispatch, guardrails, HITL gates, and observability",
+              "fallbackText": "Data agent architecture: context assembly (schemas, semantic layer, permissions) feeds the agent core, which dispatches to query engines. Guardrails enforce read-only mode, validation, and cost limits. HITL gates require approval for write operations."
+            }
+          }
+        ]
+      },
+      "metacognition": [
+        {
+          "type": "knowledge-monitoring",
+          "prompt": "Can you explain why 'revenue' might mean three different things to three different teams in your organization?",
+          "placement": "mid-lesson"
+        },
+        {
+          "type": "reflection",
+          "prompt": "Given the 38% pass@1 benchmark, what safety controls would you require before deploying a data agent in your organization?",
+          "placement": "after-lesson"
+        }
+      ],
+      "scaffolding": {
+        "hintLevels": 3,
+        "differentiatedPaths": true,
+        "graduatedComplexity": true
+      }
+    },
+    {
+      "id": "lesson-knowledge-support",
+      "slug": "03-knowledge-and-support-agents",
+      "title": "Knowledge and Support Agents",
+      "summary": "Covers internal knowledge agents and customer support at enterprise scale. Introduces source-grounded answers, enterprise RAG with access control and freshness tracking, three escalation trigger types, and the flywheel effect.",
+      "estimatedMinutes": 12,
+      "difficulty": "intermediate",
+      "prerequisites": ["Enterprise landscape context", "RAG fundamentals from Module 7"],
+      "objectiveIds": ["obj-source-grounded-answers", "obj-escalation-design", "obj-flywheel-effect"],
+      "conceptIds": ["concept-source-grounding", "concept-escalation-design", "concept-flywheel-effect", "concept-source-quality"],
+      "referenceIds": [],
+      "dependsOnLessonIds": ["lesson-data-agents"],
+      "artifacts": {
+        "mdxPath": "content/module-14/03-knowledge-and-support-agents.mdx",
+        "items": [
+          {
+            "id": "art-rag-pipeline",
+            "type": "mermaid",
+            "status": "approved",
+            "objectiveIds": ["obj-source-grounded-answers"],
+            "accessibility": {
+              "altText": "Enterprise RAG pipeline with access control, freshness filtering, quality scoring, and citation generation",
+              "fallbackText": "User question flows to retrieval, then access control filtering, freshness filtering, quality scoring, ranking, and grounded answer generation with citations."
+            }
+          },
+          {
+            "id": "art-escalation-flow",
+            "type": "mermaid",
+            "status": "approved",
+            "objectiveIds": ["obj-escalation-design"],
+            "accessibility": {
+              "altText": "Escalation decision tree with policy, sentiment, and confidence triggers",
+              "fallbackText": "Customer message is checked against policy triggers, then sentiment triggers, then confidence check. Any trigger routes to human specialist."
+            }
+          }
+        ]
+      },
+      "metacognition": [
+        {
+          "type": "self-assessment",
+          "prompt": "How would you handle a case where two authoritative sources disagree about company policy?",
+          "placement": "mid-lesson"
+        }
+      ],
+      "scaffolding": {
+        "hintLevels": 2,
+        "differentiatedPaths": false,
+        "graduatedComplexity": true
+      }
+    },
+    {
+      "id": "lesson-devops-agents",
+      "slug": "04-devops-and-operations-agents",
+      "title": "DevOps and Software Operations Agents",
+      "summary": "Covers incident response, code review, CI/CD triage, and runbook automation agents. Introduces three safety tiers (read-only, reversible, irreversible) that match autonomy to blast radius.",
+      "estimatedMinutes": 12,
+      "difficulty": "intermediate",
+      "prerequisites": ["Enterprise landscape context", "Module 12 production safety patterns"],
+      "objectiveIds": ["obj-safety-tiers"],
+      "conceptIds": ["concept-safety-tiers", "concept-incident-response", "concept-blast-radius"],
+      "referenceIds": [],
+      "dependsOnLessonIds": ["lesson-knowledge-support"],
+      "artifacts": {
+        "mdxPath": "content/module-14/04-devops-and-operations-agents.mdx",
+        "items": [
+          {
+            "id": "art-incident-response-sequence",
+            "type": "mermaid",
+            "status": "approved",
+            "objectiveIds": ["obj-safety-tiers"],
+            "accessibility": {
+              "altText": "Sequence diagram showing incident response agent workflow from alert to resolution or escalation",
+              "fallbackText": "Monitoring fires alert, agent classifies severity, gathers context, matches runbook, executes remediation within safety tier, monitors resolution or escalates to on-call engineer."
+            }
+          }
+        ]
+      },
+      "metacognition": [
+        {
+          "type": "reflection",
+          "prompt": "Think of a recent incident at your organization. Which steps could an agent have handled? Which require human judgment?",
+          "placement": "after-lesson"
+        }
+      ],
+      "scaffolding": {
+        "hintLevels": 2,
+        "differentiatedPaths": false,
+        "graduatedComplexity": true
+      }
+    },
+    {
+      "id": "lesson-workflow-agents",
+      "slug": "05-workflow-and-back-office-agents",
+      "title": "Workflow and Back-Office Agents",
+      "summary": "Covers structured process execution, document processing pipelines, approval chain orchestration with segregation of duties, integration patterns, and write-action autonomy tiers for workflow agents.",
+      "estimatedMinutes": 12,
+      "difficulty": "intermediate",
+      "prerequisites": ["Enterprise landscape context", "Module 5 control flow patterns"],
+      "objectiveIds": ["obj-workflow-vs-research", "obj-segregation-of-duties"],
+      "conceptIds": ["concept-workflow-agent", "concept-segregation-of-duties", "concept-approval-chain", "concept-document-processing"],
+      "referenceIds": [],
+      "dependsOnLessonIds": ["lesson-devops-agents"],
+      "artifacts": {
+        "mdxPath": "content/module-14/05-workflow-and-back-office-agents.mdx",
+        "items": [
+          {
+            "id": "art-approval-flow",
+            "type": "mermaid",
+            "status": "approved",
+            "objectiveIds": ["obj-segregation-of-duties"],
+            "accessibility": {
+              "altText": "Approval chain flowchart with amount thresholds, delegation, and escalation paths",
+              "fallbackText": "Purchase request flows through amount thresholds: under $1K auto-approve, $1K-$10K manager approval, over $10K VP approval. Includes delegation for unavailable approvers and escalation for unresponsive approvers."
+            }
+          }
+        ]
+      },
+      "metacognition": [
+        {
+          "type": "knowledge-monitoring",
+          "prompt": "Can you identify the segregation-of-duties violations in this scenario: Alice submits a purchase request and her direct report Bob approves it?",
+          "placement": "mid-lesson"
+        }
+      ],
+      "scaffolding": {
+        "hintLevels": 2,
+        "differentiatedPaths": false,
+        "graduatedComplexity": true
+      }
+    },
+    {
+      "id": "lesson-grc",
+      "slug": "06-governance-risk-compliance",
+      "title": "Governance, Risk, and Compliance",
+      "summary": "Consolidates vertical-specific controls into a unified GRC framework. Covers identity models, generalized autonomy tiers, audit logging, PII handling, regulatory compliance (GDPR, HIPAA, SOX, PCI-DSS, FERPA, FINRA), policy enforcement, human approval workflows, and compliance scoring.",
+      "estimatedMinutes": 12,
+      "difficulty": "advanced",
+      "prerequisites": ["Enterprise controls from Lessons 02-05", "Module 12 production safety"],
+      "objectiveIds": ["obj-identity-models", "obj-audit-logging", "obj-pii-handling", "obj-regulatory-compliance"],
+      "conceptIds": ["concept-identity-models", "concept-audit-logging", "concept-pii-handling", "concept-policy-engine", "concept-compliance-scoring"],
+      "referenceIds": [],
+      "dependsOnLessonIds": ["lesson-workflow-agents"],
+      "artifacts": {
+        "mdxPath": "content/module-14/06-governance-risk-compliance.mdx",
+        "items": [
+          {
+            "id": "art-autonomy-tiers",
+            "type": "mermaid",
+            "status": "approved",
+            "objectiveIds": ["obj-autonomy-tiers", "obj-identity-models"],
+            "accessibility": {
+              "altText": "Five autonomy tiers from read-only to structural change with escalating governance requirements",
+              "fallbackText": "Five tiers of agent autonomy: Tier 1 read-only (basic audit), Tier 2 derived analysis (output validation), Tier 3 recommended action (human approval), Tier 4 write-back (multi-level approval), Tier 5 structural change (executive approval)."
+            }
+          },
+          {
+            "id": "art-policy-engine",
+            "type": "mermaid",
+            "status": "approved",
+            "objectiveIds": ["obj-audit-logging", "obj-regulatory-compliance"],
+            "accessibility": {
+              "altText": "Policy engine integrated into agent harness with pre-action checks and post-action validation",
+              "fallbackText": "User request enters agent harness, policy engine performs pre-action check (allow or block), tool call executes, post-action validation checks for violations (rollback if found), audit log written, response returned."
+            }
+          }
+        ]
+      },
+      "metacognition": [
+        {
+          "type": "self-assessment",
+          "prompt": "Which regulatory frameworks apply to your organization's agent deployments? Can you map each to specific governance controls?",
+          "placement": "before-lesson"
+        },
+        {
+          "type": "reflection",
+          "prompt": "If you had to design an audit log schema for your agent, what fields would you include beyond who, what, and when?",
+          "placement": "after-lesson"
+        }
+      ],
+      "scaffolding": {
+        "hintLevels": 3,
+        "differentiatedPaths": true,
+        "graduatedComplexity": true
+      }
+    },
+    {
+      "id": "lesson-adoption-lab",
+      "slug": "07-enterprise-agent-adoption-lab",
+      "title": "Enterprise Agent Adoption Lab",
+      "summary": "Culminating design exercise: pick a domain, define tools, design governance and permissions, build an evaluation harness with compliance checks and regression detection, plan a staged rollout, and measure ROI. Includes an extended code example (~200 lines).",
+      "estimatedMinutes": 15,
+      "difficulty": "advanced",
+      "prerequisites": ["All Module 14 lessons (01-06)"],
+      "objectiveIds": ["obj-end-to-end-design", "obj-evaluation-harness", "obj-staged-rollout"],
+      "conceptIds": ["concept-maturity-model", "concept-autonomy-tiers", "concept-compliance-scoring", "concept-evidence-trail"],
+      "referenceIds": [],
+      "dependsOnLessonIds": ["lesson-grc"],
+      "artifacts": {
+        "mdxPath": "content/module-14/07-enterprise-agent-adoption-lab.mdx",
+        "items": [
+          {
+            "id": "art-rollout-stages",
+            "type": "mermaid",
+            "status": "approved",
+            "objectiveIds": ["obj-staged-rollout"],
+            "accessibility": {
+              "altText": "Four-stage rollout diagram from shadow mode to full deployment with rollback paths",
+              "fallbackText": "Four stages: Shadow Mode (comparison only) leads to Pilot with HITL (approved actions) leads to Staged Rollout (reduced approval) leads to Full Deployment (policy-based autonomy). Rollback paths exist for regression or safety incidents."
+            }
+          }
+        ]
+      },
+      "metacognition": [
+        {
+          "type": "goal-setting",
+          "prompt": "Before starting the design exercise, set a specific goal: which domain will you choose and what is the one most important capability for your agent?",
+          "placement": "before-lesson"
+        },
+        {
+          "type": "reflection",
+          "prompt": "Review your design. Which governance control is hardest to implement in your organization? What would unblock it?",
+          "placement": "after-lesson"
+        }
+      ],
+      "scaffolding": {
+        "hintLevels": 3,
+        "differentiatedPaths": true,
+        "graduatedComplexity": true
+      }
+    }
+  ],
+  "references": [
+    {
+      "id": "ref-data-agent-benchmark",
+      "title": "Data Agent Benchmark: Evaluating LLM Agents on Complex Enterprise Analytical Tasks",
+      "url": "https://arxiv.org/abs/2603.20576",
+      "publisher": "arXiv",
+      "accessedAt": "2026-07-11",
+      "quality": "peer-reviewed",
+      "notes": "Reports 38% pass@1 for best frontier model on complex enterprise-style data agent tasks. Cited in Lesson 02 for reliability limits."
+    },
+    {
+      "id": "ref-data-agent-taxonomy",
+      "title": "A Taxonomy of Data Agents: From Assistants to Autonomous Systems",
+      "url": "https://arxiv.org/abs/2602.04261",
+      "publisher": "arXiv",
+      "accessedAt": "2026-07-11",
+      "quality": "peer-reviewed",
+      "notes": "Proposes a hierarchy from low-autonomy data assistants to autonomous data agents. Cited in Lesson 02."
+    },
+    {
+      "id": "ref-anthropic-sdk",
+      "title": "Anthropic Python SDK Documentation",
+      "url": "https://docs.anthropic.com/en/docs/sdks",
+      "publisher": "Anthropic",
+      "accessedAt": "2026-07-11",
+      "quality": "official-docs",
+      "notes": "All code examples use the Anthropic Python SDK with claude-sonnet-4-20250514."
+    }
+  ],
+  "concepts": [
+    {
+      "id": "concept-enterprise-readiness",
+      "term": "Enterprise readiness",
+      "definition": "The state of preparedness across governance, permissions, observability, human oversight, evaluation, and rollout planning required before deploying an agent in an enterprise environment.",
+      "relatedConceptIds": ["concept-maturity-model", "concept-compliance-scoring"]
+    },
+    {
+      "id": "concept-maturity-model",
+      "term": "Enterprise Agent Maturity Model",
+      "definition": "A three-stage progression for enterprise agents — Copilot (human-directed, suggests only), Assistant (acts with approval gates), Autonomous Agent (acts independently within policy boundaries) — representing increasing autonomy, trust, and governance complexity.",
+      "relatedConceptIds": ["concept-autonomy-tiers", "concept-enterprise-readiness"]
+    },
+    {
+      "id": "concept-enterprise-eval",
+      "term": "Enterprise evaluation criteria",
+      "definition": "Business-specific success metrics for enterprise agents including ROI (time saved, error reduction), adoption rate, compliance score (violations per 1000 actions), and incident rate, complementing technical metrics like task success rate.",
+      "relatedConceptIds": ["concept-compliance-scoring"]
+    },
+    {
+      "id": "concept-data-agent",
+      "term": "Data agent",
+      "definition": "An AI system that plans and executes multi-step data workflows using analytical tools (databases, warehouses, semantic models), unlike chatbots that provide one-shot answers. Data agents iteratively refine queries, validate results, and construct evidence trails.",
+      "relatedConceptIds": ["concept-semantic-layer", "concept-evidence-trail"]
+    },
+    {
+      "id": "concept-semantic-layer",
+      "term": "Semantic layer",
+      "definition": "A mapping between business terminology and database schemas that includes metric definitions, entity definitions, business glossary, join specifications, permission-aware views, and canonical dimensions. Without it, data agents produce syntactically correct but semantically wrong queries.",
+      "relatedConceptIds": ["concept-data-agent"]
+    },
+    {
+      "id": "concept-autonomy-tiers",
+      "term": "Write-action autonomy tiers",
+      "definition": "A five-level framework matching agent capabilities to organizational risk tolerance: Tier 1 (read-only), Tier 2 (derived analysis), Tier 3 (recommended action with human decision), Tier 4 (write-back with approval), Tier 5 (structural change with executive approval and audit).",
+      "relatedConceptIds": ["concept-maturity-model", "concept-safety-tiers", "concept-blast-radius"]
+    },
+    {
+      "id": "concept-evidence-trail",
+      "term": "Evidence trail",
+      "definition": "A structured audit record of an agent's analytical process: data sources accessed, queries executed, metric definitions used, intermediate results, and confidence assessments. Allows stakeholders to verify and reproduce the agent's findings.",
+      "relatedConceptIds": ["concept-data-agent", "concept-audit-logging"]
+    },
+    {
+      "id": "concept-source-grounding",
+      "term": "Source-grounded answers",
+      "definition": "Agent responses that include explicit citations, source metadata (title, last updated, quality score), and confidence assessments. Source grounding enables verification, builds trust, and provides freshness awareness.",
+      "relatedConceptIds": ["concept-source-quality", "concept-flywheel-effect"]
+    },
+    {
+      "id": "concept-source-quality",
+      "term": "Source quality scoring",
+      "definition": "A scoring system that assigns weight to sources by type: official policy (1.0), internal documentation (0.8), runbooks (0.7), wikis (0.5), Slack threads (0.3), personal notes (0.1). Higher-quality sources take precedence in answers.",
+      "relatedConceptIds": ["concept-source-grounding"]
+    },
+    {
+      "id": "concept-escalation-design",
+      "term": "Escalation design",
+      "definition": "A system of triggers that route agent conversations to human specialists. Three trigger types work in parallel: confidence-based (uncertain answers), policy-based (sensitive topics like legal threats), and sentiment-based (frustrated customers).",
+      "relatedConceptIds": ["concept-flywheel-effect"]
+    },
+    {
+      "id": "concept-flywheel-effect",
+      "term": "Flywheel effect",
+      "definition": "A virtuous cycle in knowledge and support agents where resolved tickets generate knowledge base articles, improving the agent's ability to handle similar future issues. More tickets produce more resolutions, which produce more articles, which improve performance.",
+      "relatedConceptIds": ["concept-source-grounding", "concept-escalation-design"]
+    },
+    {
+      "id": "concept-safety-tiers",
+      "term": "Safety tiers",
+      "definition": "A three-level classification for DevOps actions based on reversibility: read-only (auto-execute, no risk), reversible (execute with logging, can undo), irreversible (human approval required, cannot undo). Matches autonomy to blast radius.",
+      "relatedConceptIds": ["concept-autonomy-tiers", "concept-blast-radius"]
+    },
+    {
+      "id": "concept-blast-radius",
+      "term": "Blast radius",
+      "definition": "The scope of impact if an agent action goes wrong. Low blast radius: single record, easily reversed. High blast radius: many records, infrastructure changes, or irreversible data modifications. Blast radius determines the required level of human oversight.",
+      "relatedConceptIds": ["concept-safety-tiers", "concept-autonomy-tiers"]
+    },
+    {
+      "id": "concept-incident-response",
+      "term": "Incident response agent",
+      "definition": "A DevOps agent that automates initial triage and remediation when alerts fire: classifies severity, gathers context, matches runbooks, executes safe remediation, and escalates when actions exceed safety tier boundaries.",
+      "relatedConceptIds": ["concept-safety-tiers"]
+    },
+    {
+      "id": "concept-workflow-agent",
+      "term": "Workflow agent",
+      "definition": "An agent that follows structured, well-defined processes with known steps and error-handling paths. Unlike research or coding agents that reason open-endedly, workflow agents deliver value through reliable execution and audit trail generation.",
+      "relatedConceptIds": ["concept-approval-chain", "concept-document-processing"]
+    },
+    {
+      "id": "concept-segregation-of-duties",
+      "term": "Segregation of duties",
+      "definition": "A control that prevents conflicts of interest by enforcing role separation: the requester cannot approve their own request, the approver cannot process the payment. Enforced automatically by workflow agents.",
+      "relatedConceptIds": ["concept-approval-chain"]
+    },
+    {
+      "id": "concept-approval-chain",
+      "term": "Approval chain orchestration",
+      "definition": "Automated routing of requests through a sequence of approvers based on business rules (amount thresholds, category, requester role), with delegation for unavailable approvers and escalation for unresponsive ones.",
+      "relatedConceptIds": ["concept-segregation-of-duties", "concept-workflow-agent"]
+    },
+    {
+      "id": "concept-document-processing",
+      "term": "Document processing pipeline",
+      "definition": "A five-stage pipeline for handling unstructured documents: ingestion (OCR, text extraction), classification (document type), extraction (named entities), validation (business rules), and routing (approval or archive).",
+      "relatedConceptIds": ["concept-workflow-agent"]
+    },
+    {
+      "id": "concept-identity-models",
+      "term": "Agent identity models",
+      "definition": "Three approaches for agent authentication: user-impersonation (inherits user permissions exactly), service account (independent identity with defined scope), and hybrid (base permissions plus user-delegated access). Default to user-impersonation unless the agent acts on behalf of the organization.",
+      "relatedConceptIds": ["concept-audit-logging"]
+    },
+    {
+      "id": "concept-audit-logging",
+      "term": "Agent audit logging",
+      "definition": "Comprehensive logging that answers five questions: who requested, what the agent did, why (reasoning chain), what changed (before/after state), and when. More complex than traditional application audit because agent reasoning is probabilistic and tool calls may be exploratory.",
+      "relatedConceptIds": ["concept-identity-models", "concept-evidence-trail"]
+    },
+    {
+      "id": "concept-pii-handling",
+      "term": "PII handling framework",
+      "definition": "A four-step framework for personally identifiable information in agent systems: detection (pattern matching, NER), masking (redaction, tokenization), retention (policy-driven storage duration), and right-to-deletion (GDPR Article 17 compliance).",
+      "relatedConceptIds": ["concept-audit-logging"]
+    },
+    {
+      "id": "concept-policy-engine",
+      "term": "Policy engine",
+      "definition": "A runtime component integrated into the agent harness that enforces governance rules through pre-action checks (is this allowed?), post-action validation (did it violate policy?), and dynamic policy updates without agent redeployment.",
+      "relatedConceptIds": ["concept-autonomy-tiers", "concept-compliance-scoring"]
+    },
+    {
+      "id": "concept-compliance-scoring",
+      "term": "Compliance scoring",
+      "definition": "Continuous measurement of enterprise agent governance: policy violation rate (per 1000 actions), PII exposure rate (target: zero), audit completeness (target: 100%), escalation accuracy, and regulatory compliance score. Run as scheduled audits, not one-time certifications.",
+      "relatedConceptIds": ["concept-policy-engine", "concept-enterprise-eval"]
+    }
+  ],
+  "misconceptions": [
+    {
+      "id": "mis-bigger-model",
+      "misconception": "Enterprise agents just need a bigger or better model than prototype agents.",
+      "correction": "Enterprise deployment is primarily about governance, identity, compliance, and workflow integration — not model capability. A well-governed agent with a smaller model is more enterprise-ready than an ungoverned agent with a frontier model.",
+      "conceptIds": ["concept-enterprise-readiness"]
+    },
+    {
+      "id": "mis-data-agent-reliable",
+      "misconception": "Data agents can reliably answer complex analytical questions without human oversight.",
+      "correction": "The best frontier model achieved only 38% pass@1 on complex enterprise tasks (arXiv:2603.20576). Common failures include hallucinated schemas, ignored metric definitions, and violated permissions. Human oversight and evidence trails are essential.",
+      "conceptIds": ["concept-data-agent"]
+    },
+    {
+      "id": "mis-semantic-layer-optional",
+      "misconception": "A semantic layer is nice-to-have for data agents but not required.",
+      "correction": "Without a semantic layer, every data agent query is a gamble. Terms like 'revenue' and 'active customer' have organization-specific definitions that the agent cannot infer from database schemas alone.",
+      "conceptIds": ["concept-semantic-layer"]
+    },
+    {
+      "id": "mis-governance-afterthought",
+      "misconception": "Governance can be added after the agent is built and working.",
+      "correction": "Governance must be designed into the agent from the start. Adding identity models, audit logging, PII handling, and compliance controls retroactively is significantly more expensive and error-prone than building them in from day one.",
+      "conceptIds": ["concept-audit-logging", "concept-pii-handling"]
+    },
+    {
+      "id": "mis-agent-audit-same",
+      "misconception": "Agent audit logging is the same as traditional application audit logging.",
+      "correction": "Agent audit is harder because reasoning is probabilistic, tool calls may be exploratory, and capturing the 'why' (reasoning chain) alongside the 'what' (actions) requires structured trace logging that traditional applications don't need.",
+      "conceptIds": ["concept-audit-logging"]
+    },
+    {
+      "id": "mis-full-autonomy-goal",
+      "misconception": "The goal of enterprise agent deployment is full autonomy as quickly as possible.",
+      "correction": "Autonomy is earned through demonstrated reliability, not granted upfront. Most enterprise deployments should start at Copilot (suggest only) and graduate to higher maturity levels only when governance, evaluation, and safety frameworks are proven.",
+      "conceptIds": ["concept-maturity-model", "concept-autonomy-tiers"]
+    },
+    {
+      "id": "mis-safety-tiers-production-only",
+      "misconception": "Safety tiers only matter in production environments, not during development.",
+      "correction": "Safety tier design should be part of the architecture from the start. Development environments should simulate the same tier boundaries to catch policy violations before production deployment.",
+      "conceptIds": ["concept-safety-tiers"]
+    }
+  ],
+  "workedExamples": [
+    {
+      "id": "example-sales-decline",
+      "title": "Investigating a sales decline with a data agent",
+      "prompt": "A stakeholder asks: 'Why did sales decline in Ireland last quarter?' Walk through how a data agent would answer this question.",
+      "steps": [
+        "Schema discovery: agent queries metadata catalog to find tables with sales and geography data (transactions, customers, regions).",
+        "Metric definition lookup: agent checks semantic layer for 'sales' definition — SUM(transactions.amount_usd) WHERE status = 'completed'.",
+        "SQL generation: agent generates a comparison query grouped by quarter, filtered by country = 'Ireland'.",
+        "Query validation: agent validates syntax, user permissions, estimated cost, and read-only compliance before execution.",
+        "Execution and result analysis: agent detects 25% decline from Q1 ($1.2M) to Q2 ($0.9M).",
+        "Evidence trail construction: agent produces a summary citing data sources, metric definitions, and recommended next steps."
+      ],
+      "explanation": "This example demonstrates the full data agent workflow: schema discovery, semantic layer consultation, iterative query refinement, validation before execution, and evidence trail construction. The agent does not just return a number — it provides context, sources, and recommendations.",
+      "conceptIds": ["concept-data-agent", "concept-semantic-layer", "concept-evidence-trail"],
+      "referenceIds": []
+    },
+    {
+      "id": "example-invoice-processing",
+      "title": "Processing an invoice through a workflow agent",
+      "prompt": "An invoice arrives as a PDF attachment. Walk through how a workflow agent processes it through the approval pipeline.",
+      "steps": [
+        "Ingestion: convert PDF to text using OCR/text extraction.",
+        "Classification: identify document as an invoice (not a purchase order, contract, or receipt).",
+        "Extraction: extract vendor name, invoice number, line items, amounts, dates, and PO reference.",
+        "Validation: verify total = subtotal + tax, line items sum correctly, vendor exists in approved list, dates are valid.",
+        "Routing: amount is $8,500 (between $1K and $10K), so route to manager for approval per policy.",
+        "Segregation check: confirm requester is not the same person as the assigned approver."
+      ],
+      "explanation": "This example demonstrates the document processing pipeline and approval chain orchestration. The workflow agent follows structured steps with validation at each stage, applying business rules deterministically rather than reasoning open-endedly.",
+      "conceptIds": ["concept-document-processing", "concept-approval-chain", "concept-segregation-of-duties"],
+      "referenceIds": []
+    },
+    {
+      "id": "example-schema-change-approval",
+      "title": "Multi-level approval for a database schema change",
+      "prompt": "An agent recommends adding a 'last_login' column to the users table. Walk through the Tier 5 approval workflow.",
+      "steps": [
+        "Agent proposes the schema change with rationale (support session timeout feature).",
+        "Manager reviews and approves: schema change is reasonable for the feature requirement.",
+        "DBA reviews: migration script is correct and includes rollback plan.",
+        "Security reviews: no PII added, logging requirements unchanged.",
+        "Approval granted with 24-hour time bound: all stakeholders approve.",
+        "Agent executes schema change with full audit trail logging who approved, when, and why."
+      ],
+      "explanation": "Tier 5 actions (structural changes) require multi-level approval from different stakeholders. Time-bounded approval prevents indefinite authorization. The full audit trail records every approval decision for compliance review.",
+      "conceptIds": ["concept-autonomy-tiers", "concept-audit-logging"],
+      "referenceIds": []
+    }
+  ],
+  "exercises": [
+    {
+      "id": "exercise-enterprise-readiness",
+      "prompt": "Given a prototype data agent that can query a PostgreSQL database and generate reports, list the six enterprise readiness dimensions it must address before production deployment and describe one specific action item for each.",
+      "type": "short-answer",
+      "difficulty": "intermediate",
+      "conceptIds": ["concept-enterprise-readiness"],
+      "answerId": "answer-enterprise-readiness"
+    },
+    {
+      "id": "exercise-autonomy-tier",
+      "prompt": "Classify each of the following agent actions into the correct autonomy tier (1-5): (a) querying a dashboard for monthly revenue, (b) updating a CRM contact's phone number, (c) modifying a dbt model to add a new metric, (d) recommending a budget reallocation, (e) generating a trend analysis report.",
+      "type": "short-answer",
+      "difficulty": "intermediate",
+      "conceptIds": ["concept-autonomy-tiers"],
+      "answerId": "answer-autonomy-tier"
+    },
+    {
+      "id": "exercise-escalation-design",
+      "prompt": "Design an escalation policy for a customer support agent. Specify one rule for each trigger type (confidence-based, policy-based, sentiment-based) with specific thresholds and routing destinations.",
+      "type": "scenario",
+      "difficulty": "intermediate",
+      "conceptIds": ["concept-escalation-design"],
+      "answerId": "answer-escalation-design"
+    },
+    {
+      "id": "exercise-safety-tier-audit",
+      "prompt": "A DevOps agent has these tools: list_pods, restart_service, delete_namespace, get_logs, scale_replicas, drop_database. Assign each tool to a safety tier (read-only, reversible, irreversible) and explain why.",
+      "type": "short-answer",
+      "difficulty": "intermediate",
+      "conceptIds": ["concept-safety-tiers", "concept-blast-radius"],
+      "answerId": "answer-safety-tier-audit"
+    },
+    {
+      "id": "exercise-identity-model",
+      "prompt": "For each scenario, recommend the best identity model (user-impersonation, service account, or hybrid) and justify your choice: (a) a data agent that queries dashboards on behalf of individual analysts, (b) a batch job agent that runs nightly compliance checks across all departments, (c) a DevOps agent that reads logs as any user but needs elevated permissions to restart services.",
+      "type": "scenario",
+      "difficulty": "advanced",
+      "conceptIds": ["concept-identity-models"],
+      "answerId": "answer-identity-model"
+    },
+    {
+      "id": "exercise-compliance-audit",
+      "prompt": "Design a compliance scoring system for a data agent. Define at least four metrics, set target thresholds for each, and describe how you would sample and measure them.",
+      "type": "scenario",
+      "difficulty": "advanced",
+      "conceptIds": ["concept-compliance-scoring"],
+      "answerId": "answer-compliance-audit"
+    }
+  ],
+  "answers": [
+    {
+      "id": "answer-enterprise-readiness",
+      "exerciseId": "exercise-enterprise-readiness",
+      "answer": "Six dimensions: (1) Governance Model — define agent ownership and accountability chain; (2) Permission Framework — integrate with identity provider for user-impersonation; (3) Observability — set up query logging, latency tracking, and anomaly alerts; (4) HITL Intervention Points — add approval gates for write operations; (5) Evaluation Strategy — establish golden question sets with known correct answers; (6) Rollout Plan — identify early adopters and define success criteria for pilot.",
+      "rubric": ["Names all six dimensions", "Provides a specific action item for each", "Action items are concrete and implementable"]
+    },
+    {
+      "id": "answer-autonomy-tier",
+      "exerciseId": "exercise-autonomy-tier",
+      "answer": "(a) Tier 1: read-only query, no state change. (b) Tier 4: write-back, modifies a record. (c) Tier 5: structural change, modifies pipeline/metric definitions. (d) Tier 3: recommended action, agent proposes but human decides. (e) Tier 2: derived analysis, generates insights from existing data.",
+      "rubric": ["Correctly classifies at least 4 of 5 actions", "Provides reasoning for tier assignment", "Distinguishes between Tier 3 (recommendation) and Tier 4 (execution)"]
+    },
+    {
+      "id": "answer-escalation-design",
+      "exerciseId": "exercise-escalation-design",
+      "answer": "Confidence-based: If confidence < 0.6 (based on source quality and agreement), escalate to support specialist with gathered context. Policy-based: If message contains legal threat keywords ('sue', 'lawyer', 'regulator'), escalate immediately to legal team regardless of confidence. Sentiment-based: If sentiment score < -0.7 or customer explicitly requests human, escalate to senior support specialist for de-escalation.",
+      "rubric": ["Defines one rule per trigger type", "Includes specific thresholds", "Specifies routing destination for each", "Rules are non-overlapping and comprehensive"]
+    },
+    {
+      "id": "answer-safety-tier-audit",
+      "exerciseId": "exercise-safety-tier-audit",
+      "answer": "Read-only: list_pods (observes state), get_logs (observes state). Reversible: restart_service (service recovers), scale_replicas (can scale back). Irreversible: delete_namespace (data loss, cannot undo), drop_database (permanent data destruction). Read-only tools auto-execute, reversible execute with logging, irreversible require human approval.",
+      "rubric": ["Correctly classifies all six tools", "Identifies delete_namespace and drop_database as irreversible", "Explains the autonomy level for each tier"]
+    },
+    {
+      "id": "answer-identity-model",
+      "exerciseId": "exercise-identity-model",
+      "answer": "(a) User-impersonation: the agent should inherit each analyst's exact dashboard permissions, preventing over-privilege. (b) Service account: the batch job acts on behalf of the organization, not any individual user, and needs consistent permissions across departments. (c) Hybrid: read-only log access uses user-impersonation, but service restart requires elevated service account permissions granted through an approval workflow.",
+      "rubric": ["Correct model for each scenario", "Justification references security tradeoffs", "Hybrid scenario correctly identifies which operations use which identity"]
+    },
+    {
+      "id": "answer-compliance-audit",
+      "exerciseId": "exercise-compliance-audit",
+      "answer": "Metrics: (1) Policy violation rate — target < 0.1% of actions, sample 1000 random actions monthly. (2) PII exposure rate — target 0 leaks, scan all agent responses with NER. (3) Audit completeness — target 100%, check that every action has who/what/why/when fields. (4) Escalation accuracy — target > 95% precision and recall, review all escalation decisions and a sample of non-escalated cases. Measure monthly and after major agent or policy updates.",
+      "rubric": ["Defines at least four metrics", "Sets specific target thresholds", "Describes measurement methodology", "Includes sampling strategy"]
+    }
+  ],
+  "formativeAssessment": [
+    {
+      "id": "assess-enterprise-vs-prototype",
+      "type": "quiz",
+      "prompt": "What is the primary difference between prototype agents and enterprise agents?",
+      "expectedAnswer": "Enterprise agents must integrate with organizational data, identity, compliance, and workflow systems — not just perform the task correctly.",
+      "objectiveIds": ["obj-enterprise-landscape"]
+    },
+    {
+      "id": "assess-enterprise-readiness",
+      "type": "free-response",
+      "prompt": "List the six dimensions of enterprise readiness and explain why each is necessary.",
+      "expectedAnswer": "Governance model, permission framework, observability, HITL intervention points, evaluation strategy, and rollout plan. Each addresses a distinct risk: accountability, access control, monitoring, safety, quality, and adoption.",
+      "objectiveIds": ["obj-enterprise-landscape"]
+    },
+    {
+      "id": "assess-maturity-stages",
+      "type": "quiz",
+      "prompt": "In the Enterprise Agent Maturity Model, what distinguishes an Assistant from a Copilot?",
+      "expectedAnswer": "Copilot agents only suggest actions (human executes). Assistant agents act independently for low-risk tasks but require approval gates for high-risk tasks.",
+      "objectiveIds": ["obj-maturity-model"]
+    },
+    {
+      "id": "assess-semantic-layer",
+      "type": "quiz",
+      "prompt": "Why do data agents need a semantic layer?",
+      "expectedAnswer": "To map business terminology to database schemas and ensure consistent metric definitions. Without it, agents generate syntactically correct but semantically wrong queries.",
+      "objectiveIds": ["obj-semantic-layer"]
+    },
+    {
+      "id": "assess-autonomy-tier-selection",
+      "type": "performance-task",
+      "prompt": "Given a list of agent actions, classify each into the correct autonomy tier (1-5) and specify the governance controls required.",
+      "expectedAnswer": "Correct tier classification with matching governance: Tier 1 = basic audit, Tier 2 = output validation, Tier 3 = human approval, Tier 4 = multi-level approval + audit trail, Tier 5 = executive approval + change advisory board.",
+      "objectiveIds": ["obj-autonomy-tiers"]
+    },
+    {
+      "id": "assess-data-agent-benchmark",
+      "type": "quiz",
+      "prompt": "According to the 2026 Data Agent Benchmark, what was the best frontier model's pass@1 rate on complex enterprise tasks?",
+      "expectedAnswer": "38% pass@1, indicating data agents are not a solved problem and require human oversight.",
+      "objectiveIds": ["obj-data-agent-limits"]
+    },
+    {
+      "id": "assess-source-grounding",
+      "type": "free-response",
+      "prompt": "What are the four components of a source-grounded answer?",
+      "expectedAnswer": "Citation identifiers (links to source), source metadata (title, author, last updated), confidence scoring, and multi-source triangulation.",
+      "objectiveIds": ["obj-source-grounded-answers"]
+    },
+    {
+      "id": "assess-escalation-triggers",
+      "type": "quiz",
+      "prompt": "Name the three escalation trigger types and give one example of each.",
+      "expectedAnswer": "Confidence-based (low source quality), policy-based (legal threats), sentiment-based (frustrated customer).",
+      "objectiveIds": ["obj-escalation-design"]
+    },
+    {
+      "id": "assess-flywheel",
+      "type": "quiz",
+      "prompt": "What is the flywheel effect in knowledge and support agents?",
+      "expectedAnswer": "Resolved tickets feed back into the knowledge base, improving future responses — creating a virtuous cycle of better performance over time.",
+      "objectiveIds": ["obj-flywheel-effect"]
+    },
+    {
+      "id": "assess-safety-tier-classification",
+      "type": "performance-task",
+      "prompt": "Classify these DevOps actions by safety tier: query logs, scale replicas, delete namespace.",
+      "expectedAnswer": "Query logs = read-only (auto-execute). Scale replicas = reversible (execute with logging). Delete namespace = irreversible (human approval required).",
+      "objectiveIds": ["obj-safety-tiers"]
+    },
+    {
+      "id": "assess-workflow-pattern",
+      "type": "quiz",
+      "prompt": "How do workflow agents differ from research or coding agents?",
+      "expectedAnswer": "Workflow agents follow structured, well-defined processes with known steps and error-handling paths. Research agents reason open-endedly to solve novel problems. Workflow agents' value is reliable execution, not creative problem-solving.",
+      "objectiveIds": ["obj-workflow-vs-research"]
+    },
+    {
+      "id": "assess-segregation",
+      "type": "quiz",
+      "prompt": "What is the purpose of segregation of duties in approval workflows?",
+      "expectedAnswer": "To prevent conflicts of interest by ensuring the requester cannot approve their own request and the approver cannot process the resulting action.",
+      "objectiveIds": ["obj-segregation-of-duties"]
+    },
+    {
+      "id": "assess-identity-model",
+      "type": "free-response",
+      "prompt": "When should you use a service account instead of user-impersonation for an enterprise agent?",
+      "expectedAnswer": "When the agent acts on behalf of the organization rather than individual users — e.g., scheduled batch jobs, cross-team workflows, or actions requiring consistent permissions independent of any individual user.",
+      "objectiveIds": ["obj-identity-models"]
+    },
+    {
+      "id": "assess-audit-design",
+      "type": "free-response",
+      "prompt": "What five questions must agent audit logs answer, and why is agent audit harder than traditional application audit?",
+      "expectedAnswer": "Who requested, what the agent did, why (reasoning chain), what changed (before/after), and when. Agent audit is harder because reasoning is probabilistic, tool calls may be exploratory, and capturing the 'why' requires structured trace logs.",
+      "objectiveIds": ["obj-audit-logging"]
+    },
+    {
+      "id": "assess-pii-framework",
+      "type": "quiz",
+      "prompt": "Name the four steps of the PII handling framework for enterprise agents.",
+      "expectedAnswer": "Detection (identify PII in inputs and outputs), masking (redaction or tokenization), retention (policy-driven storage duration), and right-to-deletion (GDPR Article 17 compliance).",
+      "objectiveIds": ["obj-pii-handling"]
+    },
+    {
+      "id": "assess-regulatory-mapping",
+      "type": "performance-task",
+      "prompt": "Map GDPR, HIPAA, and SOX requirements to specific agent governance controls.",
+      "expectedAnswer": "GDPR: PII detection, masking, consent tracking, right-to-deletion. HIPAA: minimum necessary access to PHI, encryption, breach notification. SOX: immutable audit trails, segregation of duties, 7-year log retention.",
+      "objectiveIds": ["obj-regulatory-compliance"]
+    },
+    {
+      "id": "assess-design-exercise",
+      "type": "performance-task",
+      "prompt": "Design a complete enterprise agent system for one vertical including tool definitions, governance model, evaluation strategy, and rollout plan.",
+      "objectiveIds": ["obj-end-to-end-design"]
+    },
+    {
+      "id": "assess-eval-harness",
+      "type": "performance-task",
+      "prompt": "Build an evaluation harness that tests query correctness, permission compliance, PII compliance, and evidence completeness, with regression detection.",
+      "objectiveIds": ["obj-evaluation-harness"]
+    },
+    {
+      "id": "assess-rollout-plan",
+      "type": "free-response",
+      "prompt": "Describe the four stages of enterprise agent rollout and the exit criteria for each stage.",
+      "expectedAnswer": "Shadow mode (90%+ output match, zero violations), Pilot with HITL (85%+ approval rate, <2% error), Staged rollout (95% completion, <1% error, zero incidents), Full deployment (sustained metrics, continuous monitoring).",
+      "objectiveIds": ["obj-staged-rollout"]
+    }
+  ],
+  "masteryCriteria": [
+    {
+      "id": "mastery-enterprise-context",
+      "description": "Can explain why enterprise agents require governance, identity, compliance, and workflow integration beyond what prototype agents need.",
+      "objectiveIds": ["obj-enterprise-landscape", "obj-maturity-model"],
+      "threshold": "Accurately describes at least four of the five enterprise differences and correctly places all three maturity stages."
+    },
+    {
+      "id": "mastery-data-agents",
+      "description": "Can design a data agent with semantic layer, autonomy tiers, and evaluation, and can critically assess reliability using benchmark data.",
+      "objectiveIds": ["obj-semantic-layer", "obj-autonomy-tiers", "obj-data-agent-limits"],
+      "threshold": "Correctly explains the semantic layer's role, classifies five actions into correct autonomy tiers, and cites the 38% benchmark with appropriate implications."
+    },
+    {
+      "id": "mastery-knowledge-support",
+      "description": "Can design source-grounded answer systems and implement multi-trigger escalation logic.",
+      "objectiveIds": ["obj-source-grounded-answers", "obj-escalation-design", "obj-flywheel-effect"],
+      "threshold": "Designs a system with all four source-grounding components, specifies rules for all three escalation triggers, and explains the flywheel mechanism."
+    },
+    {
+      "id": "mastery-devops-workflow",
+      "description": "Can categorize operations by safety tier and design approval chains with segregation of duties.",
+      "objectiveIds": ["obj-safety-tiers", "obj-workflow-vs-research", "obj-segregation-of-duties"],
+      "threshold": "Correctly classifies six DevOps actions into three safety tiers, distinguishes workflow from research agents, and identifies segregation violations."
+    },
+    {
+      "id": "mastery-grc",
+      "description": "Can select identity models, design audit systems, apply PII frameworks, and map regulatory requirements to agent controls.",
+      "objectiveIds": ["obj-identity-models", "obj-audit-logging", "obj-pii-handling", "obj-regulatory-compliance"],
+      "threshold": "Correctly selects identity models for three scenarios, designs audit logs answering all five questions, applies the four-step PII framework, and maps three regulatory frameworks to specific controls."
+    },
+    {
+      "id": "mastery-end-to-end",
+      "description": "Can design a complete enterprise agent system with tools, governance, evaluation, and rollout.",
+      "objectiveIds": ["obj-end-to-end-design", "obj-evaluation-harness", "obj-staged-rollout"],
+      "threshold": "Produces a design covering all four deliverables (tools, governance, evaluation, rollout) with specific metrics, thresholds, and exit criteria at each rollout stage."
+    }
+  ],
+  "recap": [
+    "Enterprise agents differ from prototypes in five critical dimensions: organizational data access, identity and permissions, compliance and audit trails, workflow integration, and change management.",
+    "The Enterprise Agent Maturity Model describes three stages — Copilot, Assistant, Autonomous Agent — with increasing autonomy earned through demonstrated reliability.",
+    "Data agents require a semantic layer to map business terminology to database reality; without it, queries are syntactically correct but semantically wrong.",
+    "Write-action autonomy tiers (1-5) match agent capabilities to organizational risk tolerance, from read-only observation to structural changes requiring executive approval.",
+    "Knowledge and support agents use source-grounded answers, three-trigger escalation design, and the flywheel effect to improve over time.",
+    "DevOps safety tiers (read-only, reversible, irreversible) ensure agents operate within blast-radius boundaries.",
+    "Workflow agents deliver value through reliable, auditable execution of structured processes with segregation of duties.",
+    "The unified GRC framework covers identity models, audit logging, PII handling, regulatory compliance, policy enforcement, and compliance scoring.",
+    "Enterprise deployment follows staged rollout: shadow mode, pilot with HITL, staged expansion, full deployment — with rollback paths for regression or safety incidents."
+  ],
+  "nextSteps": [
+    "Apply the four-layer domain-specific agent template (Module 13) to a new enterprise vertical not covered in this module.",
+    "Build a semantic layer for your organization's most frequently asked data questions.",
+    "Implement a proof-of-concept enterprise agent with the evaluation harness from Lesson 07.",
+    "Conduct a governance readiness assessment for your organization using the enterprise readiness checklist.",
+    "Design a compliance scoring dashboard for monitoring agent policy violations and PII exposure."
+  ],
+  "accessibility": {
+    "altTextRequired": true,
+    "captionsRequired": true,
+    "transcriptRequired": true,
+    "colorIndependent": true,
+    "keyboardNavigable": true,
+    "readingOrderChecked": true
+  },
+  "localization": {
+    "sourceLocale": "en-US",
+    "targetLocales": [],
+    "glossaryTerms": [
+      "data agent",
+      "semantic layer",
+      "autonomy tier",
+      "safety tier",
+      "blast radius",
+      "escalation design",
+      "flywheel effect",
+      "source-grounded answer",
+      "segregation of duties",
+      "approval chain",
+      "policy engine",
+      "compliance scoring",
+      "evidence trail",
+      "maturity model",
+      "PII handling"
+    ],
+    "culturalAssumptions": [
+      "Examples assume familiarity with Western business practices (purchase orders, approval chains, SOX compliance).",
+      "Regulatory frameworks cited are primarily US and EU; other jurisdictions have equivalent but different frameworks.",
+      "Currency examples use USD; organizations in other regions should substitute local currency."
+    ]
+  },
+  "contentStyle": {
+    "voice": "systematic",
+    "approaches": ["problem-based", "hands-on", "visual-first"],
+    "generationMode": "sequential"
+  },
+  "gamification": {
+    "enabled": true,
+    "badges": [
+      {
+        "id": "badge-landscape-explorer",
+        "title": "Landscape Explorer",
+        "description": "Complete the Enterprise Agent Landscape lesson and pass the quiz.",
+        "criteria": "Complete lesson-enterprise-landscape with 75%+ quiz score.",
+        "iconHint": "compass"
+      },
+      {
+        "id": "badge-data-analyst",
+        "title": "Data Agent Architect",
+        "description": "Complete the Data Agents lesson and correctly classify all five autonomy tier examples.",
+        "criteria": "Complete lesson-data-agents and score 100% on autonomy tier exercise.",
+        "iconHint": "database"
+      },
+      {
+        "id": "badge-safety-first",
+        "title": "Safety First",
+        "description": "Correctly classify all DevOps safety tier actions in the exercise.",
+        "criteria": "Score 100% on exercise-safety-tier-audit.",
+        "iconHint": "shield"
+      },
+      {
+        "id": "badge-grc-master",
+        "title": "GRC Master",
+        "description": "Complete the Governance lesson and map all regulatory frameworks to agent controls.",
+        "criteria": "Complete lesson-grc and pass assess-regulatory-mapping.",
+        "iconHint": "scale"
+      },
+      {
+        "id": "badge-enterprise-architect",
+        "title": "Enterprise Architect",
+        "description": "Complete the adoption lab with a full end-to-end enterprise agent design.",
+        "criteria": "Complete lesson-adoption-lab with all four design deliverables.",
+        "iconHint": "trophy"
+      }
+    ],
+    "pointRules": [
+      { "action": "lesson-complete", "points": 100, "description": "Points for completing a lesson." },
+      { "action": "quiz-perfect", "points": 50, "description": "Bonus for perfect quiz score." },
+      { "action": "exercise-complete", "points": 75, "description": "Points for completing a design exercise." },
+      { "action": "lab-complete", "points": 200, "description": "Points for completing the adoption lab." }
+    ],
+    "streakTracking": true,
+    "achievements": [
+      {
+        "id": "ach-vertical-sweep",
+        "title": "Vertical Sweep",
+        "description": "Complete all four vertical lessons (data, knowledge, DevOps, workflow).",
+        "unlocksLessonIds": ["lesson-grc"]
+      },
+      {
+        "id": "ach-full-module",
+        "title": "Enterprise Ready",
+        "description": "Complete all seven lessons in Module 14.",
+        "unlocksLessonIds": []
+      }
+    ]
+  },
+  "adaptivePaths": [
+    {
+      "id": "path-data-focus",
+      "title": "Data Agent Deep Dive",
+      "description": "Fast path for learners focused on data and analytics agents.",
+      "entryCondition": "Learner has strong database/SQL background and wants to focus on data agent patterns.",
+      "lessonSequence": ["lesson-enterprise-landscape", "lesson-data-agents", "lesson-grc", "lesson-adoption-lab"],
+      "difficulty": "advanced"
+    },
+    {
+      "id": "path-comprehensive",
+      "title": "Full Enterprise Survey",
+      "description": "Complete path covering all verticals and governance.",
+      "entryCondition": "Learner wants comprehensive coverage of all enterprise agent applications.",
+      "lessonSequence": ["lesson-enterprise-landscape", "lesson-data-agents", "lesson-knowledge-support", "lesson-devops-agents", "lesson-workflow-agents", "lesson-grc", "lesson-adoption-lab"],
+      "difficulty": "intermediate"
+    },
+    {
+      "id": "path-governance-first",
+      "title": "Governance and Compliance Focus",
+      "description": "Path for learners primarily interested in enterprise governance, risk, and compliance for agents.",
+      "entryCondition": "Learner is in a compliance, security, or risk management role.",
+      "lessonSequence": ["lesson-enterprise-landscape", "lesson-grc", "lesson-adoption-lab"],
+      "difficulty": "intermediate"
+    }
+  ],
+  "spacedRepetition": {
+    "enabled": true,
+    "intervals": [1, 3, 7, 14, 30],
+    "reviewCardCount": 15
+  },
+  "microlearning": {
+    "enabled": false,
+    "maxMinutesPerModule": 10,
+    "digestFormat": "flashcard"
+  },
+  "projectCapstones": [
+    {
+      "id": "capstone-enterprise-agent-design",
+      "title": "Enterprise Agent System Design",
+      "description": "Design and implement a complete enterprise agent system for a chosen vertical, including tool definitions, governance model, evaluation harness, and staged rollout plan.",
+      "deliverables": [
+        "Tool definitions with parameters, integrations, and failure modes",
+        "Permission matrix and identity model selection with justification",
+        "Evaluation harness code with compliance checks and regression detection",
+        "Staged rollout plan with entry/exit criteria for each phase",
+        "ROI projection based on pilot measurement methodology"
+      ],
+      "rubric": [
+        "Tools cover the core domain workflows with appropriate error handling",
+        "Governance model selects the correct identity model and enforces autonomy tiers",
+        "Evaluation harness tests correctness, permission compliance, PII compliance, and evidence completeness",
+        "Rollout plan includes all four stages with specific, measurable exit criteria",
+        "ROI framework uses controlled measurement, not generalized benchmarks"
+      ],
+      "estimatedHours": 4,
+      "prerequisiteLessonIds": ["lesson-enterprise-landscape", "lesson-data-agents", "lesson-knowledge-support", "lesson-devops-agents", "lesson-workflow-agents", "lesson-grc", "lesson-adoption-lab"],
+      "conceptIds": ["concept-enterprise-readiness", "concept-autonomy-tiers", "concept-identity-models", "concept-compliance-scoring", "concept-evidence-trail"]
+    }
+  ],
+  "udlFramework": {
+    "multipleRepresentations": [
+      "Text explanations with structured sections and key takeaways",
+      "Mermaid diagrams for architectures, workflows, and decision trees",
+      "DataTable comparisons for contrasting concepts (chatbot vs agent, autonomy tiers, identity models)",
+      "Worked examples with step-by-step walkthroughs",
+      "Code examples demonstrating agent implementations with commentary"
+    ],
+    "multipleActions": [
+      "Multiple-choice quizzes testing conceptual understanding",
+      "Short-answer exercises requiring classification and design",
+      "Scenario-based exercises requiring judgment and tradeoff analysis",
+      "Hands-on coding with the evaluation harness",
+      "End-to-end design exercise in the adoption lab"
+    ],
+    "multipleEngagement": [
+      "Real-world enterprise scenarios grounding abstract concepts",
+      "Gamified badges tied to measurable skill milestones",
+      "Adaptive paths for different learning goals (data focus, governance focus, comprehensive)",
+      "Self-assessment and reflection prompts for metacognition",
+      "Progressive complexity from landscape overview to full system design"
+    ]
+  },
+  "collaborativeLearning": {
+    "enabled": false
+  }
+}
